@@ -340,6 +340,20 @@ runs/
 
 `command.json` 不保存 auth token 值。
 
+## 环境变量转发
+
+Runner 不把 MCP server 的完整环境原样传给目标 CLI。`src/env.js` 维护默认 allowlist，
+覆盖 Claude auth、云厂商 auth、终端行为、`PATH`、用户目录和 XDG 目录等运行所需键。
+
+调用方可以通过 `AGENT_HUB_FORWARD_ENV` 追加转发键名，格式为逗号分隔：
+
+```text
+AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE
+```
+
+这些变量值会传给目标 CLI，但 `command.json` 只记录经过敏感关键字过滤后的 env key，
+不记录 env value。
+
 ### stdout.log / stderr.log
 
 Runner 分别捕获 CLI stdout 和 stderr。
@@ -399,6 +413,7 @@ claude -p --input-format text --output-format json
 - `metadata.claude.agent` 映射到 `--agent`。
 - `metadata.claude.add_dirs` 映射到重复的 `--add-dir`。
 - `metadata.claude.permission_mode` 映射到 `--permission-mode`。
+- 未设置 `metadata.claude.permission_mode` 时，Agent Hub 默认传入 `--permission-mode auto`。
 
 `dispatch_to_agent` 返回的 `cli_session_ref.native_session_id` 是本次传给 Claude 的
 session UUID。Runner 完成后，终态 `cli_session_ref.native_session_id` 使用 Claude
@@ -436,3 +451,18 @@ Cleanup 在 `list_agents`、`dispatch_to_agent`、`query_agent_run`、`wait_agen
 - `AGENT_HUB_CWD_ALLOWLIST` 设置后，`cwd` 和 `metadata.*.add_dirs` 必须位于 allowlist 内。
 - cancel 只作用于对应 run 的进程组。
 - command metadata 记录环境变量名，不记录敏感环境变量值。
+
+## Runner 进程组约定
+
+`dispatch_to_agent` 通过 detached runner 启动一次 run。Runner 在启动 CLI 前记录自己的
+`runner_pid` 和 `runner_pgid`，用于诊断和启动早期取消。当前 POSIX 实现中 detached
+runner 是进程组 leader，因此 `runner_pgid === runner_pid`；该值以 `runner_pgid` 字段
+保存，调用方不得把任意 `runner_pid` 当作进程组使用。
+
+进入 `running` 后，runner 将目标 CLI 作为独立进程组启动，并把 `state.json` 中的
+`pid`/`pgid` 更新为目标 CLI 的 pid/pgid。`cancel_agent_run` 优先向该 CLI 进程组发送
+SIGTERM/SIGKILL；runner 观察 CLI 退出并在看到 `cancelled` 状态时停止写入其它终态。
+
+当前实现面向 macOS/Linux。Node.js 在 POSIX 平台上用 `detached: true` 启动子进程时会
+创建新的 session/process group，因此目标 CLI 的 pgid 等于该 child pid；runner 在公开
+该 pgid 前用 `kill(-pgid, 0)` 验证进程组存在。

@@ -1,0 +1,27 @@
+{
+  "name": "agent-hub-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agent-hub-mcp": "src/server.js",
+    "agent-hub-mcp-canceller": "src/canceller.js",
+    "agent-hub-mcp-runner": "src/runner.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "vitest run",
+    "selftest:mcp": "node scripts/mcp-client.js",
+    "review:self": "node scripts/review-self.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
