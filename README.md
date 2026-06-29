@@ -28,10 +28,10 @@ List available adapters through the local MCP client:
 node scripts/mcp-client.js list_agents
 ```
 
-Run a smoke prompt:
+Dispatch a smoke prompt:
 
 ```sh
-node scripts/mcp-client.js run_agent --json '{
+node scripts/mcp-client.js dispatch_to_agent --json '{
   "agent_id": "claude-code",
   "prompt": "Reply with OK.",
   "cwd": "/absolute/path/to/project",
@@ -41,11 +41,11 @@ node scripts/mcp-client.js run_agent --json '{
       "model": "sonnet",
       "effort": "medium"
     }
-  },
-  "timeout_ms": 600000,
-  "poll_interval_ms": 1000
+  }
 }'
 ```
+
+Use the returned `run_ref` with `query_agent_run` or short `wait_agent_run` calls until the run reaches a terminal state. `run_agent` is still available for short tasks, but long agent work should use dispatch plus polling so the MCP client does not hold one tool call open for minutes.
 
 `cwd` must be an existing absolute directory. If `metadata.claude.permission_mode` is omitted, Agent Hub passes `--permission-mode auto` to Claude Code.
 

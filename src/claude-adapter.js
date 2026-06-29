@@ -14,6 +14,8 @@ const PERMISSION_MODES = new Set([
   "plan",
 ]);
 const DEFAULT_PERMISSION_MODE = "auto";
+const OUTPUT_FORMATS = new Set(["json", "stream-json"]);
+const DEFAULT_OUTPUT_FORMAT = "stream-json";
 
 let availabilityCache = null;
 
@@ -86,7 +88,21 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef }) {
   }
   const usingResolvedMetadata = Boolean(request.resolved_metadata);
   const claude = (request.resolved_metadata ?? request.metadata)?.claude ?? {};
-  const argv = ["claude", "-p", "--input-format", "text", "--output-format", "json"];
+  const outputFormat =
+    assertMetadataString(claude.output_format, "metadata.claude.output_format") ??
+    DEFAULT_OUTPUT_FORMAT;
+  if (!OUTPUT_FORMATS.has(outputFormat)) {
+    throw new Error(
+      `metadata.claude.output_format must be one of: ${Array.from(OUTPUT_FORMATS).join(
+        ", ",
+      )}`,
+    );
+  }
+
+  const argv = ["claude", "-p", "--input-format", "text", "--output-format", outputFormat];
+  if (outputFormat === "stream-json") {
+    argv.push("--verbose");
+  }
 
   if (effectiveCliSessionRef?.resumed) {
     argv.push("--resume", effectiveCliSessionRef.native_session_id);
@@ -140,6 +156,7 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef }) {
     command: argv[0],
     args: argv.slice(1),
     argv,
+    output_format: outputFormat,
   };
 }
 
@@ -170,6 +187,85 @@ export function parseClaudeStdout(stdout) {
   };
 }
 
+export function parseClaudeOutput(stdout, outputFormat = DEFAULT_OUTPUT_FORMAT) {
+  if (outputFormat === "stream-json") {
+    return parseClaudeStreamJson(stdout);
+  }
+  const raw = parseClaudeJson(stdout);
+  const parsed = parseClaudeStdout(raw);
+  return {
+    outputFormat: "json",
+    raw,
+    resultJson: raw,
+    resultText: parsed.resultText,
+    cliSessionRef: parsed.cliSessionRef,
+    isError: raw?.is_error === true,
+  };
+}
+
+export function parseClaudeStreamJson(stdout) {
+  const events = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => parseClaudeJsonLine(line))
+    .filter(Boolean);
+  const resultEvent =
+    events.findLast?.((event) => event?.type === "result") ?? findLastResult(events);
+  if (!resultEvent) {
+    throw new Error("Claude stream-json stdout did not include a result event");
+  }
+  const sessionId = findSessionId(resultEvent, events);
+  if (!sessionId) {
+    throw new Error("Claude stream-json result did not include a session_id");
+  }
+  if (typeof resultEvent.result !== "string") {
+    throw new Error("Claude stream-json result field must be a string");
+  }
+  const resultText = resultEvent.result.trimEnd();
+  return {
+    outputFormat: "stream-json",
+    raw: events,
+    resultJson: resultEvent,
+    resultText,
+    cliSessionRef: {
+      agent_id: CLAUDE_AGENT_ID,
+      native_session_id: sessionId,
+    },
+    isError: resultEvent.is_error === true,
+  };
+}
+
+function parseClaudeJsonLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function findLastResult(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.type === "result") {
+      return events[index];
+    }
+  }
+  return null;
+}
+
+function findSessionId(resultEvent, events) {
+  if (typeof resultEvent?.session_id === "string" && resultEvent.session_id.trim() !== "") {
+    return resultEvent.session_id;
+  }
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const sessionId = events[index]?.session_id;
+    if (typeof sessionId === "string" && sessionId.trim() !== "") {
+      return sessionId;
+    }
+  }
+  return null;
+}
+
 export async function listClaudeAgent() {
   const availability = await getClaudeAvailability();
   return {
@@ -181,7 +277,7 @@ export async function listClaudeAgent() {
     capabilities: {
       non_interactive: true,
       session_resume: true,
-      command: "claude -p --input-format text --output-format json",
+      command: "claude -p --input-format text --output-format stream-json --verbose",
     },
   };
 }

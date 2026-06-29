@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildClaudeCommand,
   parseClaudeJson,
+  parseClaudeOutput,
   parseClaudeStdout,
 } from "../src/claude-adapter.js";
 
@@ -41,7 +42,8 @@ describe("claude adapter", () => {
       "--input-format",
       "text",
       "--output-format",
-      "json",
+      "stream-json",
+      "--verbose",
       "--session-id",
       "550e8400-e29b-41d4-a716-446655440000",
       "--model",
@@ -99,5 +101,68 @@ describe("claude adapter", () => {
 
     expect(parsed.is_error).toBe(true);
     expect(parseClaudeStdout(JSON.stringify(parsed)).resultText).toBe("error");
+  });
+
+  it("parses stream-json output into result text and session ref", () => {
+    const parsed = parseClaudeOutput(
+      [
+        "non-json startup line",
+        JSON.stringify({
+          type: "system",
+          subtype: "init",
+          session_id: "550e8400-e29b-41d4-a716-446655440000",
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "hello\n" }] },
+          session_id: "550e8400-e29b-41d4-a716-446655440000",
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "hello\n",
+          session_id: "550e8400-e29b-41d4-a716-446655440000",
+        }),
+      ].join("\n"),
+      "stream-json",
+    );
+
+    expect(parsed.resultText).toBe("hello");
+    expect(parsed.cliSessionRef.native_session_id).toBe(
+      "550e8400-e29b-41d4-a716-446655440000",
+    );
+    expect(parsed.isError).toBe(false);
+  });
+
+  it("maps legacy json output without stream flags", () => {
+    const command = buildClaudeCommand({
+      request: {
+        metadata: {
+          claude: {
+            output_format: "json",
+          },
+        },
+      },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+    });
+
+    expect(command.output_format).toBe("json");
+    expect(command.argv).toContain("json");
+    expect(command.argv).not.toContain("--verbose");
+
+    const parsed = parseClaudeOutput(
+      JSON.stringify({
+        result: "legacy",
+        session_id: "550e8400-e29b-41d4-a716-446655440000",
+        is_error: false,
+      }),
+      "json",
+    );
+    expect(parsed.resultText).toBe("legacy");
   });
 });

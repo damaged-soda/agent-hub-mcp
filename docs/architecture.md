@@ -31,7 +31,7 @@ Prompt 处理规则：
 
 CLI 参数处理规则：
 
-- MCP 为非交互执行设置必要参数，例如 Claude Code 的 `-p` 和 `--output-format json`。
+- MCP 为非交互执行设置必要参数，例如 Claude Code 的 `-p` 和 `--output-format stream-json`。
 - 其他 CLI 行为参数来自 adapter metadata 或 CLI 默认配置。
 - `command.json` 记录实际 argv，便于复现。
 
@@ -185,18 +185,19 @@ Adapter 出现在列表中的条件：
   "run_ref": {
     "run_id": "01J..."
   },
-  "timeout_ms": 600000,
+  "timeout_ms": 30000,
   "poll_interval_ms": 1000
 }
 ```
 
 规则：
 
-- 默认 `timeout_ms` 为 600000。
+- 默认 `timeout_ms` 为 30000。
 - 最大 `timeout_ms` 为 3600000。
 - 默认 `poll_interval_ms` 为 1000。
 - 终态包括 `completed`、`failed`、`cancelled`、`unknown`。
-- 超时仍在运行时返回 `status: "running"` 和 `timed_out: true`。
+- 超时仍在运行时返回 `status: "running"` 和 `timed_out: true`，调用方应继续轮询，
+  不应仅因为一次等待超时而取消 run。
 
 ### cancel_agent_run
 
@@ -212,9 +213,10 @@ Adapter 出现在列表中的条件：
 
 ### run_agent
 
-便捷工具，等价于 `dispatch_to_agent` 后立刻 `wait_agent_run`。
+短任务便捷工具，等价于 `dispatch_to_agent` 后立刻 `wait_agent_run`。
 
-默认等待 10 分钟。超时时返回 running 快照，调用方可以继续调用 `wait_agent_run`。
+默认等待 30 秒。超时时返回 running 快照，调用方可以继续调用 `wait_agent_run`。
+长任务应直接使用 `dispatch_to_agent` 加轮询，避免 MCP client 长时间持有单个 tool call。
 
 ## Run 生命周期
 
@@ -354,18 +356,20 @@ AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE
 这些变量值会传给目标 CLI，但 `command.json` 只记录经过敏感关键字过滤后的 env key，
 不记录 env value。
 
-### stdout.log / stderr.log
+### stdout.log / stderr.log / events.jsonl
 
 Runner 分别捕获 CLI stdout 和 stderr。
 
-stdout 是 result 的来源。stderr 是诊断日志来源。
+stdout 是 result 的来源。stderr 是诊断日志来源。对 Claude Code `stream-json`
+输出，runner 还会把同一事件流写入 `events.jsonl`，供 running snapshot 生成
+`progress_events`。
 
 ### result.txt / result.json
 
 `result.txt` 是 MCP `content[0].text` 的来源。
 
-`result.json` 保存 adapter 解析后的结构化输出。对 Claude Code 第一版，它保存
-`claude -p --output-format json` 的完整 JSON。
+`result.json` 保存 adapter 解析后的结构化输出。对 Claude Code 默认
+`stream-json` 输出，它保存最终 `result` event；完整事件流保存在 `events.jsonl`。
 
 ## 文件写入规则
 
@@ -390,8 +394,9 @@ Agent Hub 返回 CLI 的最终输出，不通过 prompt 建立额外结果通道
 
 对纯文本 CLI，`result.txt` 等于 stdout 去掉末尾空白后的文本。
 
-对 Claude Code 第一版，stdout 必须是 JSON；adapter 从 JSON 的 `result` 字段写入
-`result.txt`，并把完整 JSON 写入 `result.json`。
+对 Claude Code adapter，stdout 默认为 JSONL 事件流；adapter 从最终 `result` event
+写入 `result.txt` 和 `result.json`。兼容模式下可以通过
+`metadata.claude.output_format: "json"` 使用旧的单 JSON 输出。
 
 ## Claude Code Adapter
 
@@ -400,7 +405,7 @@ Agent Hub 返回 CLI 的最终输出，不通过 prompt 建立额外结果通道
 基础命令：
 
 ```text
-claude -p --input-format text --output-format json
+claude -p --input-format text --output-format stream-json --verbose
 ```
 
 执行规则：
@@ -412,22 +417,24 @@ claude -p --input-format text --output-format json
 - `metadata.claude.effort` 映射到 `--effort`。
 - `metadata.claude.agent` 映射到 `--agent`。
 - `metadata.claude.add_dirs` 映射到重复的 `--add-dir`。
+- `metadata.claude.output_format` 映射到 `--output-format`，默认 `stream-json`。
 - `metadata.claude.permission_mode` 映射到 `--permission-mode`。
 - 未设置 `metadata.claude.permission_mode` 时，Agent Hub 默认传入 `--permission-mode auto`。
 
 `dispatch_to_agent` 返回的 `cli_session_ref.native_session_id` 是本次传给 Claude 的
 session UUID。Runner 完成后，终态 `cli_session_ref.native_session_id` 使用 Claude
-JSON 的 `session_id` 字段。
+result event 或 JSON 的 `session_id` 字段。
 
-Claude stdout JSON 处理规则：
+Claude stdout 处理规则：
 
 - 完整 stdout 写入 `stdout.log`。
-- JSON 对象写入 `result.json`。
-- JSON `result` 字段写入 `result.txt`。
-- JSON `session_id` 字段写回终态 `state.json`。
-- JSON `is_error` 为 true 时状态为 `failed`。
-- JSON 缺少字符串类型的 `result` 或 `session_id` 时状态为 `failed`。
-- JSON 解析失败时状态为 `failed`。
+- 默认 `stream-json` 输出同时写入 `events.jsonl`。
+- 最终 result event 或 JSON 对象写入 `result.json`。
+- `result` 字段写入 `result.txt`。
+- `session_id` 字段写回终态 `state.json`。
+- `is_error` 为 true 时状态为 `failed`。
+- 缺少字符串类型的 `result` 或 `session_id` 时状态为 `failed`。
+- JSON/JSONL 解析失败时状态为 `failed`。
 
 ## 清理策略
 

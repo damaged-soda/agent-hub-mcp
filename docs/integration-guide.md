@@ -17,12 +17,23 @@ This guide is for MCP clients that want to call local agent CLIs through Agent H
 
 The server currently exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code.
 
+For Codex clients, set the MCP server's `tool_timeout_sec` above the short wait window you intend to use. The recommended flow still avoids long single tool calls, but the host timeout should leave room for `wait_agent_run` to return a running snapshot:
+
+```toml
+[mcp_servers.agent_hub]
+command = "node"
+args = ["/absolute/path/to/agent-hub-mcp/src/server.js"]
+startup_timeout_sec = 30
+tool_timeout_sec = 90
+```
+
 ## Typical Flow
 
 1. Call `list_agents`.
-2. Call `run_agent` for simple blocking execution, or call `dispatch_to_agent` and then poll with `query_agent_run` / `wait_agent_run`.
+2. For long-running or agentic work, call `dispatch_to_agent` and then poll with `query_agent_run` / short `wait_agent_run` calls.
 3. Keep the returned `cli_session_ref` if the next request should resume the same Claude Code session.
-4. Use `cancel_agent_run` with `run_ref` to stop a still-running local process group.
+4. Use `run_agent` only for short tasks that should finish inside the MCP client's tool timeout.
+5. Use `cancel_agent_run` with `run_ref` to stop a still-running local process group only when the user explicitly asks to stop or the run is no longer needed.
 
 ## Tools
 
@@ -32,7 +43,7 @@ No input. Returns available and unavailable local adapters.
 
 ### run_agent
 
-Dispatches a run and waits until it reaches a terminal state or the timeout expires.
+Dispatches a run and waits until it reaches a terminal state or the timeout expires. This is a convenience wrapper for short work; long-running tasks should use `dispatch_to_agent` plus polling.
 
 ```json
 {
@@ -46,7 +57,7 @@ Dispatches a run and waits until it reaches a terminal state or the timeout expi
       "effort": "medium"
     }
   },
-  "timeout_ms": 600000,
+  "timeout_ms": 30000,
   "poll_interval_ms": 1000
 }
 ```
@@ -56,10 +67,10 @@ Important request rules:
 - `agent_id` must be `claude-code`.
 - `prompt` is passed to Claude Code through stdin without wrapper text.
 - `cwd` must be an existing absolute directory.
-- `timeout_ms` defaults to `600000` and is capped at `3600000`.
+- `timeout_ms` defaults to `30000` and is capped at `3600000`.
 - `poll_interval_ms` defaults to `1000`.
 
-If the wait times out while the run is still active, the response has `status: "running"` and `timed_out: true`; keep the `run_ref` and call `wait_agent_run` again.
+If the wait times out while the run is still active, the response has `status: "running"` and `timed_out: true`; keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. Do not treat this as failure and do not cancel solely because a wait timed out.
 
 ### dispatch_to_agent
 
@@ -91,7 +102,7 @@ Reads the latest snapshot:
 }
 ```
 
-Running snapshots can include `log_tail`. Terminal snapshots include `content`, `artifacts`, and possibly `error`.
+Running snapshots include a `content` reminder to keep polling and can include `progress_events` and `log_tail`. Terminal snapshots include final `content`, `artifacts`, and possibly `error`.
 
 ### wait_agent_run
 
@@ -102,10 +113,12 @@ Blocks on an existing run:
   "run_ref": {
     "run_id": "550e8400-e29b-41d4-a716-446655440000"
   },
-  "timeout_ms": 600000,
+  "timeout_ms": 30000,
   "poll_interval_ms": 1000
 }
 ```
+
+`timeout_ms` defaults to `30000`. A timed-out wait returns a running snapshot and leaves the run active.
 
 ### cancel_agent_run
 
@@ -115,7 +128,9 @@ Requests cancellation of the run process group:
 {
   "run_ref": {
     "run_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
+  },
+  "reason": "user requested stop",
+  "actor": "mcp-client"
 }
 ```
 
@@ -128,6 +143,7 @@ Requests cancellation of the run process group:
 | `model` | `--model` | Optional non-empty string. |
 | `effort` | `--effort` | Optional non-empty string. |
 | `agent` | `--agent` | Optional non-empty string. |
+| `output_format` | `--output-format` | Defaults to `stream-json`; set to `json` for legacy single-result output. |
 | `permission_mode` | `--permission-mode` | Defaults to `auto`. |
 | `add_dirs` | `--add-dir` | Array of directories resolved and allowlist-checked before execution. |
 
@@ -156,6 +172,7 @@ Responses can include artifacts stored inside the run directory:
 - `command.json`
 - `stdout.log`
 - `stderr.log`
+- `events.jsonl`
 - `runner.log`
 - `result.json`
 - `result.txt`

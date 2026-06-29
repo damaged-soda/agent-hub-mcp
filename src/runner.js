@@ -19,7 +19,7 @@ import {
   withStateLock,
   writeState,
 } from "./fs-store.js";
-import { buildClaudeCommand, parseClaudeJson, parseClaudeStdout } from "./claude-adapter.js";
+import { buildClaudeCommand, parseClaudeOutput } from "./claude-adapter.js";
 import { buildAgentEnv } from "./env.js";
 
 async function main() {
@@ -55,6 +55,7 @@ async function main() {
     schema_version: 1,
     adapter_id: command.adapter_id,
     argv: command.argv,
+    output_format: command.output_format,
     cwd: request.cwd,
     env_keys: currentEnvKeys(agentEnv),
     runner_pid: process.pid,
@@ -74,6 +75,13 @@ async function runCommand(runDir, request, command, agentEnv) {
     flags: "a",
     mode: 0o600,
   });
+  const eventsLog =
+    command.output_format === "stream-json"
+      ? fs.createWriteStream(path.join(runDir, "events.jsonl"), {
+          flags: "a",
+          mode: 0o600,
+        })
+      : null;
   const stdoutChunks = [];
   const stderrChunks = [];
   let logWriteError = null;
@@ -112,6 +120,7 @@ async function runCommand(runDir, request, command, agentEnv) {
   process.once("SIGINT", signalHandler);
   stdoutLog.on("error", onLogError);
   stderrLog.on("error", onLogError);
+  eventsLog?.on("error", onLogError);
 
   let runningState;
   try {
@@ -145,6 +154,7 @@ async function runCommand(runDir, request, command, agentEnv) {
   child.stdout.on("data", (chunk) => {
     stdoutChunks.push(chunk);
     stdoutLog.write(chunk);
+    eventsLog?.write(chunk);
   });
   child.stderr.on("data", (chunk) => {
     stderrChunks.push(chunk);
@@ -176,9 +186,11 @@ async function runCommand(runDir, request, command, agentEnv) {
     process.removeListener("SIGINT", signalHandler);
     stdoutLog.end();
     stderrLog.end();
+    eventsLog?.end();
     await Promise.all([
       waitForWritableDone(stdoutLog),
       waitForWritableDone(stderrLog),
+      eventsLog ? waitForWritableDone(eventsLog) : undefined,
     ]);
   }
 
@@ -235,34 +247,27 @@ async function runCommand(runDir, request, command, agentEnv) {
   }
 
   try {
-    const parsedJson = parseClaudeJson(stdout);
+    const parsed = parseClaudeOutput(stdout, command.output_format);
 
-    if (parsedJson?.is_error === true) {
-      const text =
-        typeof parsedJson.result === "string"
-          ? parsedJson.result.trimEnd()
-          : "Claude returned is_error=true";
+    if (parsed.isError) {
+      const text = parsed.resultText || "Claude returned is_error=true";
       await failRun(runDir, {
         code: "claude_is_error",
         message: "Claude returned is_error=true",
         result_text: text,
-        result_json: parsedJson,
+        result_json: parsed.resultJson,
         exit_code: code,
-        cli_session_ref:
-          typeof parsedJson.session_id === "string"
-            ? { agent_id: "claude-code", native_session_id: parsedJson.session_id }
-            : publicCliSessionRef(request.effective_cli_session_ref),
+        cli_session_ref: parsed.cliSessionRef,
       });
       return;
     }
 
-    const parsed = parseClaudeStdout(parsedJson);
     await withStateLock(runDir, async () => {
       const currentState = await readJsonIfExists(path.join(runDir, "state.json"));
       if (currentState?.status !== "running") {
         return;
       }
-      await atomicWriteJson(path.join(runDir, "result.json"), parsedJson);
+      await atomicWriteJson(path.join(runDir, "result.json"), parsed.resultJson);
       await atomicWriteFile(path.join(runDir, "result.txt"), parsed.resultText);
       await writeState(runDir, {
         ...currentState,

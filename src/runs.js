@@ -16,6 +16,7 @@ import {
   getRunnerPath,
   isProcessAlive,
   nowIso,
+  recentEventSummary,
   readState,
   readTextIfExists,
   runDirFor,
@@ -34,7 +35,7 @@ import { buildAgentEnv } from "./env.js";
 
 const POLL_AFTER_MS = 1000;
 const MAX_WAIT_MS = 3600000;
-const DEFAULT_WAIT_MS = 600000;
+const DEFAULT_WAIT_MS = 30000;
 const CANCEL_GRACE_MS = 10000;
 
 export async function listAgents() {
@@ -269,12 +270,16 @@ export async function cancelAgentRun(input) {
   if (FINAL_STATUSES.has(state.status)) {
     return snapshotFromState(runDir, state);
   }
+  const cancelReason = optionalNonEmptyString(input?.reason, "reason");
+  const cancelActor = optionalNonEmptyString(input?.actor, "actor") ?? "caller";
   const cancelledAt = nowIso();
   const cancellationState = await updateStateGuarded(
     runDir,
     {
       status: "cancelled",
       cancel_requested_at: cancelledAt,
+      cancel_reason: cancelReason,
+      cancel_actor: cancelActor,
       completed_at: cancelledAt,
       expires_at: expiresAt(),
     },
@@ -295,6 +300,8 @@ export async function cancelAgentRun(input) {
     runDir,
     {
       status: "cancelled",
+      cancel_reason: cancelReason,
+      cancel_actor: cancelActor,
       completed_at: nowIso(),
       expires_at: expiresAt(),
     },
@@ -345,16 +352,22 @@ export async function snapshotFromState(runDir, state) {
       run_ref: runRef,
       cli_session_ref: cliSessionRef,
       error: state.error,
+      cancel_reason: state.cancel_reason,
+      cancel_actor: state.cancel_actor,
+      cancel_requested_at: state.cancel_requested_at,
       artifacts,
     };
   }
 
   const tail = await combinedLogTail(runDir);
+  const recentEvents = await recentEventSummary(runDir);
   return {
     status: state.status,
+    content: [{ type: "text", text: activeStatusText(state.status) }],
     run_ref: runRef,
     cli_session_ref: cliSessionRef,
     log_tail: tail ? { type: "text", text: tail } : undefined,
+    progress_events: recentEvents.length > 0 ? recentEvents : undefined,
     poll_after_ms: POLL_AFTER_MS,
     artifacts,
   };
@@ -370,8 +383,32 @@ function terminalStatusText(status) {
   return "";
 }
 
+function activeStatusText(status) {
+  if (status === "queued") {
+    return "Run is queued. Keep the run_ref and poll again.";
+  }
+  if (status === "starting") {
+    return "Run is starting. Keep the run_ref and poll again.";
+  }
+  return "Run is still running. Keep the run_ref and poll again; do not cancel unless the user wants to stop it.";
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function optionalNonEmptyString(value, key) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${key} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function signalProcessGroup(pgid, signal) {

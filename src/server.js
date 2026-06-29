@@ -14,6 +14,14 @@ import {
 const server = new McpServer({
   name: "agent-hub-mcp",
   version: "0.1.0",
+}, {
+  instructions: [
+    "Agent Hub runs local agent CLIs as background jobs.",
+    "For agentic or long-running work, call dispatch_to_agent first, keep the run_ref, then poll with query_agent_run or short wait_agent_run calls.",
+    "A wait_agent_run response with timed_out: true means the run is still active; continue polling instead of treating it as failure.",
+    "Only call cancel_agent_run when the user explicitly asks to stop the run or the run is clearly no longer needed.",
+    "Use run_agent only for short tasks that should finish inside the MCP client's tool timeout.",
+  ].join(" "),
 });
 
 const CliSessionRefSchema = z
@@ -42,6 +50,12 @@ const WaitInputSchema = {
   poll_interval_ms: z.number().finite().int().positive().optional(),
 };
 
+const CancelInputSchema = {
+  run_ref: RunRefSchema,
+  reason: z.string().optional(),
+  actor: z.string().optional(),
+};
+
 server.registerTool(
   "list_agents",
   {
@@ -56,7 +70,8 @@ server.registerTool(
   "dispatch_to_agent",
   {
     title: "Dispatch To Agent",
-    description: "Start a non-interactive agent CLI run and return immediately.",
+    description:
+      "Start a non-interactive agent CLI run and return immediately. Prefer this for long-running or agentic work.",
     inputSchema: DispatchInputSchema,
   },
   async (input) => asToolResult(await dispatchToAgent(input)),
@@ -78,7 +93,8 @@ server.registerTool(
   "wait_agent_run",
   {
     title: "Wait Agent Run",
-    description: "Block until a run reaches a terminal state or the timeout expires.",
+    description:
+      "Wait briefly for a run. If timed_out is true, keep the run_ref and poll again instead of cancelling.",
     inputSchema: WaitInputSchema,
   },
   async (input) => asToolResult(await waitAgentRun(input)),
@@ -89,9 +105,7 @@ server.registerTool(
   {
     title: "Cancel Agent Run",
     description: "Cancel a local run created by Agent Hub.",
-    inputSchema: {
-      run_ref: RunRefSchema,
-    },
+    inputSchema: CancelInputSchema,
   },
   async (input) => asToolResult(await cancelAgentRun(input)),
 );
@@ -100,7 +114,8 @@ server.registerTool(
   "run_agent",
   {
     title: "Run Agent",
-    description: "Dispatch a run and wait for the result.",
+    description:
+      "Dispatch a run and wait for a short result window. Use dispatch_to_agent plus polling for long-running work.",
     inputSchema: {
       ...DispatchInputSchema,
       timeout_ms: z.number().finite().int().positive().max(3600000).optional(),
