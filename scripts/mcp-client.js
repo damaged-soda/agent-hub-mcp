@@ -4,10 +4,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  DEFAULT_RUN_AGENT_WAIT_MS,
+  WAIT_AGENT_RUN_REQUEST_TIMEOUT_MS,
+} from "../src/timing.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
-const defaultServerPath = path.join(repoRoot, "src", "server.js");
+export const repoRoot = path.resolve(__dirname, "..");
+export const defaultServerPath = path.join(repoRoot, "src", "server.js");
 
 export async function callAgentHubTool(name, args, options = {}) {
   const stderrChunks = [];
@@ -40,7 +44,7 @@ export async function callAgentHubTool(name, args, options = {}) {
       },
       undefined,
       {
-        timeout: options.requestTimeoutMs ?? defaultRequestTimeoutMs(args),
+        timeout: options.requestTimeoutMs ?? defaultRequestTimeoutMs(name, args),
       },
     );
   } catch (error) {
@@ -86,14 +90,19 @@ function expectValue(flag, value) {
   return value;
 }
 
-function cleanEnv(env) {
+export function cleanEnv(env) {
   return Object.fromEntries(
     Object.entries(env).filter(([, value]) => typeof value === "string"),
   );
 }
 
-function defaultRequestTimeoutMs(args) {
-  const agentTimeout = Number.isFinite(args?.timeout_ms) ? args.timeout_ms : 30000;
+export function defaultRequestTimeoutMs(toolName, args) {
+  if (toolName === "wait_agent_run") {
+    return WAIT_AGENT_RUN_REQUEST_TIMEOUT_MS;
+  }
+  const agentTimeout = Number.isFinite(args?.timeout_ms)
+    ? args.timeout_ms
+    : DEFAULT_RUN_AGENT_WAIT_MS;
   return agentTimeout + 30000;
 }
 

@@ -1,8 +1,16 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { callAgentHubTool } from "../scripts/mcp-client.js";
+import {
+  callAgentHubTool,
+  cleanEnv,
+  defaultServerPath,
+  repoRoot,
+} from "../scripts/mcp-client.js";
+import { waitAgentRun } from "../src/runs.js";
 
 describe("MCP flow", () => {
   let tempDir;
@@ -216,7 +224,45 @@ describe("MCP flow", () => {
     await waitForProcessGroupGone(pgid);
   });
 
-  it("returns a running snapshot when wait_agent_run times out", async () => {
+  it("exposes wait_agent_run with only run_ref input", async () => {
+    const listed = await listAgentHubTools({ env });
+    const waitTool = listed.tools.find((tool) => tool.name === "wait_agent_run");
+
+    expect(waitTool).toBeDefined();
+    expect(waitTool.inputSchema.required).toEqual(["run_ref"]);
+    expect(waitTool.inputSchema.properties).toHaveProperty("run_ref");
+    expect(waitTool.inputSchema.properties).not.toHaveProperty("timeout_ms");
+    expect(waitTool.inputSchema.properties).not.toHaveProperty("poll_interval_ms");
+  });
+
+  it("ignores legacy wait_agent_run timing fields over MCP stdio", async () => {
+    const accepted = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "claude-code",
+        prompt: "review this",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { claude: {} },
+      },
+      { env },
+    );
+
+    const result = await callAgentHubTool(
+      "wait_agent_run",
+      {
+        run_ref: accepted.structuredContent.run_ref,
+        timeout_ms: 100,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    expect(result.structuredContent.status).toBe("completed");
+    expect(result.content[0].text).toBe("fake result: review this");
+  });
+
+  it("returns a running snapshot when internal waitAgentRun times out", async () => {
     const accepted = await callAgentHubTool(
       "dispatch_to_agent",
       {
@@ -245,18 +291,16 @@ describe("MCP flow", () => {
       "fake progress",
     );
 
-    const waited = await callAgentHubTool(
-      "wait_agent_run",
-      {
+    const waited = await withRunDir(runDir, () =>
+      waitAgentRun({
         run_ref: accepted.structuredContent.run_ref,
         timeout_ms: 100,
         poll_interval_ms: 50,
-      },
-      { env },
+      }),
     );
-    expect(waited.structuredContent.status).toBe("running");
-    expect(waited.structuredContent.timed_out).toBe(true);
-    expect(waited.structuredContent.poll_after_ms).toBe(1000);
+    expect(waited.status).toBe("running");
+    expect(waited.timed_out).toBe(true);
+    expect(waited.poll_after_ms).toBe(1000);
 
     await callAgentHubTool(
       "cancel_agent_run",
@@ -331,6 +375,54 @@ describe("MCP flow", () => {
     expect(result.content[0].text).toMatch(/Unknown run_id/);
   });
 });
+
+async function listAgentHubTools(options = {}) {
+  const stderrChunks = [];
+  const env = cleanEnv(options.env ?? process.env);
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [defaultServerPath],
+    cwd: repoRoot,
+    env,
+    stderr: "pipe",
+  });
+  transport.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+  const client = new Client(
+    {
+      name: "agent-hub-mcp-test-client",
+      version: "0.1.0",
+    },
+    {
+      capabilities: {},
+    },
+  );
+  try {
+    await client.connect(transport);
+    return await client.listTools(undefined, { timeout: options.requestTimeoutMs ?? 30000 });
+  } catch (error) {
+    const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+    if (stderr) {
+      error.message = `${error.message}\nserver stderr:\n${stderr}`;
+    }
+    throw error;
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+async function withRunDir(runDir, fn) {
+  const previous = process.env.AGENT_HUB_RUN_DIR;
+  process.env.AGENT_HUB_RUN_DIR = runDir;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AGENT_HUB_RUN_DIR;
+    } else {
+      process.env.AGENT_HUB_RUN_DIR = previous;
+    }
+  }
+}
 
 async function writeFakeClaude(target) {
   await fsp.writeFile(

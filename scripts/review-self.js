@@ -2,6 +2,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { callAgentHubTool } from "./mcp-client.js";
+import {
+  POLL_AFTER_MS,
+  WAIT_AGENT_RUN_REQUEST_TIMEOUT_MS,
+} from "../src/timing.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -40,26 +44,55 @@ const accepted = await callAgentHubTool(
   },
 );
 
-const deadline = Date.now() + 900000;
+const REVIEW_DEADLINE_MS = 900000;
+const QUERY_REQUEST_TIMEOUT_MS = 5000;
+const WAIT_DEADLINE_MARGIN_MS = 5000;
+
+const deadline = Date.now() + REVIEW_DEADLINE_MS;
 const terminalStatuses = new Set(["completed", "failed", "cancelled", "unknown"]);
 let result = accepted;
 while (!terminalStatuses.has(result.structuredContent?.status)) {
-  if (Date.now() >= deadline) {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
     throw new Error(
       `Review did not finish before deadline: ${accepted.structuredContent.run_ref.run_id}`,
     );
   }
-  result = await callAgentHubTool(
-    "wait_agent_run",
-    {
-      run_ref: accepted.structuredContent.run_ref,
-      timeout_ms: 30000,
-      poll_interval_ms: 1000,
-    },
-    {
-      requestTimeoutMs: 60000,
-    },
-  );
+  if (remainingMs >= WAIT_AGENT_RUN_REQUEST_TIMEOUT_MS + WAIT_DEADLINE_MARGIN_MS) {
+    result = await callAgentHubTool(
+      "wait_agent_run",
+      {
+        run_ref: accepted.structuredContent.run_ref,
+      },
+    );
+  } else {
+    const sleepMs = Math.min(
+      POLL_AFTER_MS,
+      Math.max(0, remainingMs - QUERY_REQUEST_TIMEOUT_MS),
+    );
+    if (sleepMs > 0) {
+      await sleep(sleepMs);
+    }
+    const queryRemainingMs = deadline - Date.now();
+    if (queryRemainingMs <= 0) {
+      throw new Error(
+        `Review did not finish before deadline: ${accepted.structuredContent.run_ref.run_id}`,
+      );
+    }
+    result = await callAgentHubTool(
+      "query_agent_run",
+      {
+        run_ref: accepted.structuredContent.run_ref,
+      },
+      {
+        requestTimeoutMs: Math.max(1, Math.min(QUERY_REQUEST_TIMEOUT_MS, queryRemainingMs)),
+      },
+    );
+  }
 }
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

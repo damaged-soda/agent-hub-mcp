@@ -17,23 +17,24 @@ This guide is for MCP clients that want to call local agent CLIs through Agent H
 
 The server currently exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code.
 
-For Codex clients, set the MCP server's `tool_timeout_sec` above the short wait window you intend to use. The recommended flow still avoids long single tool calls, but the host timeout should leave room for `wait_agent_run` to return a running snapshot:
+For Codex clients, set the MCP server's `tool_timeout_sec` based on how long the host should allow a single `wait_agent_run` call to remain open. Agent Hub's server-side wait window is 10 minutes; a shorter host timeout only aborts that MCP tool call, not the background run. To let Agent Hub return its own `timed_out: true` snapshot, set the host timeout above 10 minutes:
 
 ```toml
 [mcp_servers.agent_hub]
 command = "node"
 args = ["/absolute/path/to/agent-hub-mcp/src/server.js"]
 startup_timeout_sec = 30
-tool_timeout_sec = 90
+tool_timeout_sec = 660
 ```
 
 ## Typical Flow
 
 1. Call `list_agents`.
-2. For long-running or agentic work, call `dispatch_to_agent` and then poll with `query_agent_run` / short `wait_agent_run` calls.
+2. For long-running or agentic work, call `dispatch_to_agent` and then `wait_agent_run`.
 3. Keep the returned `cli_session_ref` if the next request should resume the same Claude Code session.
 4. Use `run_agent` only for short tasks that should finish inside the MCP client's tool timeout.
-5. Use `cancel_agent_run` with `run_ref` to stop a still-running local process group only when the user explicitly asks to stop or the run is no longer needed.
+5. If the MCP client times out while waiting, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again.
+6. Use `cancel_agent_run` with `run_ref` to stop a still-running local process group only when the user explicitly asks to stop or the run is no longer needed.
 
 ## Tools
 
@@ -112,13 +113,11 @@ Blocks on an existing run:
 {
   "run_ref": {
     "run_id": "550e8400-e29b-41d4-a716-446655440000"
-  },
-  "timeout_ms": 30000,
-  "poll_interval_ms": 1000
+  }
 }
 ```
 
-`timeout_ms` defaults to `30000`. A timed-out wait returns a running snapshot and leaves the run active.
+MCP callers do not provide wait duration or poll interval. Agent Hub waits up to 10 minutes and polls once per second. A timed-out wait returns a running snapshot and leaves the run active. If the MCP host times out first, the run is still active; call `query_agent_run` or `wait_agent_run` again with the same `run_ref`.
 
 ### cancel_agent_run
 

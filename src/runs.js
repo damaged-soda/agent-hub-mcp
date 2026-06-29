@@ -32,10 +32,13 @@ import {
 } from "./claude-adapter.js";
 import { validateRequestPaths } from "./security.js";
 import { buildAgentEnv } from "./env.js";
+import {
+  DEFAULT_RUN_AGENT_WAIT_MS,
+  DEFAULT_WAIT_AGENT_RUN_MS,
+  MAX_WAIT_MS,
+  POLL_AFTER_MS,
+} from "./timing.js";
 
-const POLL_AFTER_MS = 1000;
-const MAX_WAIT_MS = 3600000;
-const DEFAULT_WAIT_MS = 30000;
 const CANCEL_GRACE_MS = 10000;
 
 export async function listAgents() {
@@ -240,7 +243,7 @@ export async function queryAgentRun(input) {
 
 export async function waitAgentRun(input) {
   await cleanupExpiredRuns();
-  const timeoutMs = Math.min(input?.timeout_ms ?? DEFAULT_WAIT_MS, MAX_WAIT_MS);
+  const timeoutMs = Math.min(input?.timeout_ms ?? DEFAULT_WAIT_AGENT_RUN_MS, MAX_WAIT_MS);
   const pollIntervalMs = input?.poll_interval_ms ?? POLL_AFTER_MS;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error("timeout_ms must be a positive number");
@@ -312,7 +315,7 @@ export async function cancelAgentRun(input) {
 
 export async function runAgent(input) {
   const startedAt = Date.now();
-  const timeoutMs = input?.timeout_ms ?? DEFAULT_WAIT_MS;
+  const timeoutMs = input?.timeout_ms ?? DEFAULT_RUN_AGENT_WAIT_MS;
   const accepted = await dispatchToAgent(input);
   const remainingTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
   return waitAgentRun({

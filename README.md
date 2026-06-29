@@ -45,7 +45,7 @@ node scripts/mcp-client.js dispatch_to_agent --json '{
 }'
 ```
 
-Use the returned `run_ref` with `query_agent_run` or short `wait_agent_run` calls until the run reaches a terminal state. `run_agent` is still available for short tasks, but long agent work should use dispatch plus polling so the MCP client does not hold one tool call open for minutes.
+Use the returned `run_ref` with `wait_agent_run` until the run reaches a terminal state. The server waits up to 10 minutes by default; if the MCP client times out first, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. `run_agent` is still available for short tasks that should finish inside the MCP client's tool timeout.
 
 `cwd` must be an existing absolute directory. If `metadata.claude.permission_mode` is omitted, Agent Hub passes `--permission-mode auto` to Claude Code.
 

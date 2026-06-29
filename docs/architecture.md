@@ -184,17 +184,16 @@ Adapter 出现在列表中的条件：
 {
   "run_ref": {
     "run_id": "01J..."
-  },
-  "timeout_ms": 30000,
-  "poll_interval_ms": 1000
+  }
 }
 ```
 
 规则：
 
-- 默认 `timeout_ms` 为 30000。
-- 最大 `timeout_ms` 为 3600000。
-- 默认 `poll_interval_ms` 为 1000。
+- MCP tool 输入只暴露 `run_ref`。
+- server 默认等待窗口为 600000 ms。
+- 默认内部轮询间隔为 1000 ms。
+- 内部 `waitAgentRun` 保留 `timeout_ms` / `poll_interval_ms` override，供 `run_agent` 和测试复用。
 - 终态包括 `completed`、`failed`、`cancelled`、`unknown`。
 - 超时仍在运行时返回 `status: "running"` 和 `timed_out: true`，调用方应继续轮询，
   不应仅因为一次等待超时而取消 run。
@@ -216,7 +215,8 @@ Adapter 出现在列表中的条件：
 短任务便捷工具，等价于 `dispatch_to_agent` 后立刻 `wait_agent_run`。
 
 默认等待 30 秒。超时时返回 running 快照，调用方可以继续调用 `wait_agent_run`。
-长任务应直接使用 `dispatch_to_agent` 加轮询，避免 MCP client 长时间持有单个 tool call。
+长任务应直接使用 `dispatch_to_agent` 后调用 `wait_agent_run`。如果 MCP client 的
+tool timeout 先到期，后台 run 仍然继续，调用方应保留 `run_ref` 后续查询或等待。
 
 ## Run 生命周期
 
