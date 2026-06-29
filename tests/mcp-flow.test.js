@@ -81,10 +81,15 @@ describe("MCP flow", () => {
       "text",
       "--output-format",
     ]);
+    expect(command.argv).toContain("stream-json");
+    expect(command.argv).toContain("--verbose");
     expect(command.argv).toContain("--permission-mode");
     expect(command.argv).toContain("auto");
     expect(command.argv).toContain(await fsp.realpath(path.join(workspaceDir, "subdir")));
     expect(command.env_keys).toContain("PATH");
+    expect(result.structuredContent.artifacts.map((artifact) => artifact.path)).toContain(
+      "events.jsonl",
+    );
   });
 
   it("returns failed run content directly instead of JSON-wrapping it", async () => {
@@ -127,12 +132,16 @@ describe("MCP flow", () => {
       "cancel_agent_run",
       {
         run_ref: accepted.structuredContent.run_ref,
+        reason: "test cleanup",
+        actor: "vitest",
       },
       { env },
     );
 
     expect(cancelled.structuredContent.status).toBe("cancelled");
     expect(cancelled.content[0].text).toBe("Run cancelled.");
+    expect(cancelled.structuredContent.cancel_reason).toBe("test cleanup");
+    expect(cancelled.structuredContent.cancel_actor).toBe("vitest");
 
     const queried = await callAgentHubTool(
       "query_agent_run",
@@ -142,6 +151,7 @@ describe("MCP flow", () => {
       { env },
     );
     expect(queried.structuredContent.status).toBe("cancelled");
+    expect(queried.structuredContent.cancel_reason).toBe("test cleanup");
   });
 
   it("reconciles stale active runs before cancel", async () => {
@@ -219,6 +229,7 @@ describe("MCP flow", () => {
       { env },
     );
     await waitForRunPgid(runDir, accepted.structuredContent.run_ref.run_id);
+    await waitForEventLog(runDir, accepted.structuredContent.run_ref.run_id);
 
     const queried = await callAgentHubTool(
       "query_agent_run",
@@ -228,7 +239,11 @@ describe("MCP flow", () => {
       { env },
     );
     expect(queried.structuredContent.status).toBe("running");
+    expect(queried.content[0].text).toContain("poll again");
     expect(queried.structuredContent.poll_after_ms).toBe(1000);
+    expect(queried.structuredContent.progress_events.at(-1).message).toContain(
+      "fake progress",
+    );
 
     const waited = await callAgentHubTool(
       "wait_agent_run",
@@ -326,6 +341,9 @@ if (args.includes("--version")) {
   process.stdout.write("2.1.193 (Claude Code)\\n");
   process.exit(0);
 }
+const outputIndex = args.indexOf("--output-format");
+const outputFormat = outputIndex >= 0 ? args[outputIndex + 1] : "json";
+const streamJson = outputFormat === "stream-json";
 let input = "";
 process.stdin.on("data", (chunk) => {
   input += chunk;
@@ -337,34 +355,84 @@ process.stdin.on("end", () => {
     sessionIndex >= 0 ? args[sessionIndex + 1] :
     resumeIndex >= 0 ? args[resumeIndex + 1] :
     "550e8400-e29b-41d4-a716-446655440000";
-  if (input.trim() === "sleep") {
-    setTimeout(() => {
-      process.stdout.write(JSON.stringify({
-        result: "late result",
+  const writeJson = (value) => {
+    process.stdout.write(JSON.stringify(value));
+    if (streamJson) {
+      process.stdout.write("\\n");
+    }
+  };
+  const writeInit = () => {
+    if (!streamJson) {
+      return;
+    }
+    writeJson({
+      type: "system",
+      subtype: "init",
+      session_id: sessionId,
+      model: "fake-model"
+    });
+  };
+  const writeAssistant = (text) => {
+    if (!streamJson) {
+      return;
+    }
+    writeJson({
+      type: "assistant",
+      message: { content: [{ type: "text", text }] },
+      session_id: sessionId
+    });
+  };
+  const writeResult = (result, isError = false) => {
+    if (streamJson) {
+      writeJson({
+        type: "result",
+        subtype: isError ? "error" : "success",
+        result,
         session_id: sessionId,
-        is_error: false
-      }));
+        is_error: isError
+      });
+      return;
+    }
+    writeJson({
+      result,
+      session_id: sessionId,
+      is_error: isError
+    });
+  };
+  if (input.trim() === "sleep") {
+    writeInit();
+    writeAssistant("fake progress");
+    setTimeout(() => {
+      writeResult("late result");
     }, 30000);
     return;
   }
+  writeInit();
   if (input.trim() === "error") {
-    process.stdout.write(JSON.stringify({
-      result: "fake failure",
-      session_id: sessionId,
-      is_error: true
-    }));
+    writeAssistant("fake failure");
+    writeResult("fake failure", true);
     return;
   }
-  process.stdout.write(JSON.stringify({
-    result: "fake result: " + input,
-    session_id: sessionId,
-    is_error: false
-  }));
+  writeAssistant("fake result: " + input);
+  writeResult("fake result: " + input);
 });
 `,
     { mode: 0o755 },
   );
   await fsp.chmod(target, 0o755);
+}
+
+async function waitForEventLog(root, runId) {
+  const eventsPath = path.join(root, runId, "events.jsonl");
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const text = await fsp.readFile(eventsPath, "utf8").catch(() => "");
+    if (text.includes("fake progress")) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("run did not write progress events");
 }
 
 async function waitForRunPgid(root, runId) {

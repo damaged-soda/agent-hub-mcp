@@ -93,7 +93,7 @@ function cleanEnv(env) {
 }
 
 function defaultRequestTimeoutMs(args) {
-  const agentTimeout = Number.isFinite(args?.timeout_ms) ? args.timeout_ms : 600000;
+  const agentTimeout = Number.isFinite(args?.timeout_ms) ? args.timeout_ms : 30000;
   return agentTimeout + 30000;
 }
 

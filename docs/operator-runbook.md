@@ -67,7 +67,7 @@ Terminal runs are removed after `expires_at`. Cleanup runs at the start of `list
 Use a temporary run directory when verifying behavior:
 
 ```sh
-AGENT_HUB_RUN_DIR=/tmp/agent-hub-runs node scripts/mcp-client.js run_agent --json '{
+AGENT_HUB_RUN_DIR=/tmp/agent-hub-runs node scripts/mcp-client.js dispatch_to_agent --json '{
   "agent_id": "claude-code",
   "prompt": "Reply with OK.",
   "cwd": "/absolute/path/to/project",
@@ -77,13 +77,11 @@ AGENT_HUB_RUN_DIR=/tmp/agent-hub-runs node scripts/mcp-client.js run_agent --jso
       "model": "sonnet",
       "effort": "medium"
     }
-  },
-  "timeout_ms": 600000,
-  "poll_interval_ms": 1000
+  }
 }'
 ```
 
-Inspect `structuredContent.status`, `structuredContent.content`, and the run's `command.json` if the result is unexpected.
+Use the returned `run_ref` with `query_agent_run` or a short `wait_agent_run` call. Inspect `structuredContent.status`, `structuredContent.content`, `progress_events`, and the run's `command.json` if the result is unexpected.
 
 ## Troubleshooting
 
@@ -92,11 +90,11 @@ Inspect `structuredContent.status`, `structuredContent.content`, and the run's `
 | `claude-code` appears under `unavailable_agents` | `claude --version` failed or did not report Claude Code. | Fix PATH or Claude Code installation. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |
-| `status: "running"` with `timed_out: true` | Wait timeout expired while the CLI was still running. | Call `wait_agent_run` again with the same `run_ref`, or cancel. |
+| `status: "running"` with `timed_out: true` | Wait timeout expired while the CLI was still running. | Call `query_agent_run` or `wait_agent_run` again with the same `run_ref`; cancel only if the user wants to stop it. |
 | `process_missing` | Active state existed but the runner or CLI process was gone. | Inspect `runner.log`, `stderr.log`, and `command.json`. |
 | `stdout_parse_failed` | Claude stdout was not valid JSON for print mode. | Inspect `stdout.log` and `stderr.log`; verify the adapter command in `command.json`. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |
 
 ## Cancellation
 
-`cancel_agent_run` marks the run cancelled and starts a detached canceller. The canceller sends SIGTERM to the stored process group, waits 10 seconds, then sends SIGKILL if the group is still alive. This process-group behavior targets macOS/Linux.
+`cancel_agent_run` marks the run cancelled, records optional `reason` and `actor` fields, and starts a detached canceller. The canceller sends SIGTERM to the stored process group, waits 10 seconds, then sends SIGKILL if the group is still alive. This process-group behavior targets macOS/Linux.

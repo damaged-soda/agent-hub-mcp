@@ -237,6 +237,7 @@ export async function artifactList(runDir) {
     ["command.json", "command", "command"],
     ["stdout.log", "log", "stdout"],
     ["stderr.log", "log", "stderr"],
+    ["events.jsonl", "log", "events"],
     ["runner.log", "log", "runner"],
     ["result.json", "result", "result.json"],
     ["result.txt", "result", "result.txt"],
@@ -257,6 +258,106 @@ export async function combinedLogTail(runDir) {
     pieces.push(`[stderr]\n${stderr.trimEnd()}`);
   }
   return pieces.join("\n\n");
+}
+
+export async function recentEventSummary(runDir, maxEvents = 5) {
+  const text = await tailText(path.join(runDir, "events.jsonl"), 65536);
+  if (!text.trim()) {
+    return [];
+  }
+  const summaries = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let event;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const summary = summarizeClaudeEvent(event);
+    if (summary) {
+      summaries.push(summary);
+    }
+  }
+  return summaries.slice(-maxEvents);
+}
+
+function summarizeClaudeEvent(event) {
+  if (event?.type === "system" && event.subtype === "init") {
+    return {
+      type: "system",
+      message: `Claude session initialized${event.model ? ` with ${event.model}` : ""}.`,
+      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
+    };
+  }
+  if (event?.type === "assistant") {
+    const text = collectContentText(event.message?.content);
+    if (text) {
+      return {
+        type: "assistant",
+        message: truncate(text, 1000),
+        session_id: typeof event.session_id === "string" ? event.session_id : undefined,
+      };
+    }
+    const toolNames = collectToolNames(event.message?.content);
+    if (toolNames.length > 0) {
+      return {
+        type: "assistant",
+        message: `Using tools: ${toolNames.join(", ")}.`,
+        session_id: typeof event.session_id === "string" ? event.session_id : undefined,
+      };
+    }
+  }
+  if (event?.type === "result") {
+    const resultText =
+      typeof event.result === "string" && event.result.trim()
+        ? ` ${truncate(event.result.trim(), 1000)}`
+        : "";
+    return {
+      type: "result",
+      message: `${event.is_error ? "Failed" : "Completed"}${resultText}`,
+      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
+    };
+  }
+  if (event?.type === "rate_limit_event") {
+    const status = event.rate_limit_info?.status;
+    return {
+      type: "rate_limit",
+      message: status ? `Rate limit status: ${status}.` : "Rate limit event.",
+      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
+    };
+  }
+  return null;
+}
+
+function collectContentText(content) {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter((block) => block?.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("")
+    .trim();
+}
+
+function collectToolNames(content) {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .filter((block) => block?.type === "tool_use" && typeof block.name === "string")
+    .map((block) => block.name);
+}
+
+function truncate(value, maxLength) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 3)}...`;
 }
 
 export function currentEnvKeys(env = process.env) {
