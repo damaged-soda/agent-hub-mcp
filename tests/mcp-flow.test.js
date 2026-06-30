@@ -1,11 +1,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   callAgentHubTool,
+  callAgentHubToolHttp,
   cleanEnv,
   defaultServerPath,
   repoRoot,
@@ -98,6 +101,49 @@ describe("MCP flow", () => {
     expect(result.structuredContent.artifacts.map((artifact) => artifact.path)).toContain(
       "events.jsonl",
     );
+  });
+
+  it("runs list_agents over MCP streamable HTTP", async () => {
+    await withAgentHubHttpServer(env, async (url) => {
+      const listed = await callAgentHubToolHttp("list_agents", {}, url, {
+        requestTimeoutMs: 30000,
+      });
+
+      expect(listed.structuredContent.agents).toHaveLength(1);
+      expect(listed.structuredContent.agents[0].agent_id).toBe("claude-code");
+    });
+  });
+
+  it("returns HTTP errors for wrong streamable HTTP routes", async () => {
+    await withAgentHubHttpServer(env, async (url) => {
+      const wrongPath = await fetch(url.replace("/mcp", "/not-mcp"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(wrongPath.status).toBe(404);
+
+      const wrongMethod = await fetch(url);
+      expect(wrongMethod.status).toBe(405);
+    });
+  });
+
+  it("rejects non-loopback streamable HTTP hosts", async () => {
+    const port = await getFreePort();
+    const result = await runAgentHubServerExpectFailure(
+      [
+        "--transport",
+        "streamable-http",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        String(port),
+      ],
+      env,
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/--host must be a loopback host/);
   });
 
   it("returns failed run content directly instead of JSON-wrapping it", async () => {
@@ -408,6 +454,126 @@ async function listAgentHubTools(options = {}) {
   } finally {
     await client.close().catch(() => undefined);
   }
+}
+
+async function withAgentHubHttpServer(env, fn) {
+  const port = await getFreePort();
+  const stderrChunks = [];
+  const child = spawn(
+    process.execPath,
+    [
+      defaultServerPath,
+      "--transport",
+      "streamable-http",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--path",
+      "/mcp",
+    ],
+    {
+      cwd: repoRoot,
+      env: cleanEnv(env),
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+
+  try {
+    await waitForTcpPort(port, child, stderrChunks);
+    return await fn(`http://127.0.0.1:${port}/mcp`);
+  } finally {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await waitForExit(child, 2000).catch(() => child.kill("SIGKILL"));
+    }
+  }
+}
+
+async function runAgentHubServerExpectFailure(args, env) {
+  const stderrChunks = [];
+  const child = spawn(process.execPath, [defaultServerPath, ...args], {
+    cwd: repoRoot,
+    env: cleanEnv(env),
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+
+  const [code, signal] = await waitForClose(child, 3000);
+  return {
+    code,
+    signal,
+    stderr: Buffer.concat(stderrChunks).toString("utf8"),
+  };
+}
+
+async function getFreePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => {
+        if (address && typeof address === "object") {
+          resolve(address.port);
+        } else {
+          reject(new Error("could not allocate a TCP port"));
+        }
+      });
+    });
+  });
+}
+
+async function waitForTcpPort(port, child, stderrChunks) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+      throw new Error(`HTTP MCP server exited early\n${stderr}`);
+    }
+    if (await canConnect(port)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+  throw new Error(`HTTP MCP server did not start\n${stderr}`);
+}
+
+async function canConnect(port) {
+  return await new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    const finish = (value) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(value);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(500, () => finish(false));
+  });
+}
+
+async function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null) {
+    return;
+  }
+  await waitForClose(child, timeoutMs);
+}
+
+async function waitForClose(child, timeoutMs) {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.removeListener("close", onClose);
+      reject(new Error("process did not exit"));
+    }, timeoutMs);
+    const onClose = (code, signal) => {
+      clearTimeout(timer);
+      resolve([code, signal]);
+    };
+    child.once("close", onClose);
+  });
 }
 
 async function withRunDir(runDir, fn) {

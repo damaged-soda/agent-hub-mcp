@@ -57,6 +57,14 @@ The server runs on stdio:
 npm start
 ```
 
+It can also run as a long-lived local streamable HTTP daemon:
+
+```sh
+node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
+```
+
+The HTTP transport is intended for local loopback use only. The server rejects non-loopback hosts and does not implement remote authentication.
+
 MCP clients should launch the server process, for example:
 
 ```json

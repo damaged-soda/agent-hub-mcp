@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -53,6 +54,35 @@ export async function callAgentHubTool(name, args, options = {}) {
       error.message = `${error.message}\nserver stderr:\n${stderr}`;
     }
     throw error;
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+export async function callAgentHubToolHttp(name, args, url, options = {}) {
+  const transport = new StreamableHTTPClientTransport(new URL(url));
+  const client = new Client(
+    {
+      name: "agent-hub-mcp-http-client",
+      version: "0.1.0",
+    },
+    {
+      capabilities: {},
+    },
+  );
+
+  try {
+    await client.connect(transport);
+    return await client.callTool(
+      {
+        name,
+        arguments: args,
+      },
+      undefined,
+      {
+        timeout: options.requestTimeoutMs ?? defaultRequestTimeoutMs(name, args),
+      },
+    );
   } finally {
     await client.close().catch(() => undefined);
   }
