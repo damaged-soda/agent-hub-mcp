@@ -16,6 +16,7 @@ const PERMISSION_MODES = new Set([
 const DEFAULT_PERMISSION_MODE = "auto";
 const OUTPUT_FORMATS = new Set(["json", "stream-json"]);
 const DEFAULT_OUTPUT_FORMAT = "stream-json";
+const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CLAUDE_MODEL";
 
 let availabilityCache = null;
 
@@ -78,7 +79,15 @@ function assertMetadataString(value, key) {
   return value;
 }
 
-export function buildClaudeCommand({ request, effectiveCliSessionRef }) {
+function defaultModelFromEnv(env) {
+  const value = env?.[DEFAULT_MODEL_ENV_KEY];
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+  return value.trim();
+}
+
+export function buildClaudeCommand({ request, effectiveCliSessionRef, env = process.env }) {
   if (
     !effectiveCliSessionRef ||
     typeof effectiveCliSessionRef.native_session_id !== "string" ||
@@ -110,7 +119,8 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef }) {
     argv.push("--session-id", effectiveCliSessionRef.native_session_id);
   }
 
-  const model = assertMetadataString(claude.model, "metadata.claude.model");
+  const model =
+    assertMetadataString(claude.model, "metadata.claude.model") ?? defaultModelFromEnv(env);
   if (model) {
     argv.push("--model", model);
   }

@@ -35,6 +35,7 @@ node scripts/mcp-client.js list_agents
 | `AGENT_HUB_RUN_TTL_SECONDS` | `604800` | Retention for terminal runs. Must be a non-negative number. |
 | `AGENT_HUB_CWD_ALLOWLIST` | unset | Path-delimited allowlist for request `cwd` and Claude `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | unset | Comma-separated extra environment variable names to forward to the agent CLI. |
+| `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
 
 The runner forwards a small default environment allowlist for Claude auth, cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. Add project-specific keys by setting `AGENT_HUB_FORWARD_ENV` on the MCP server process, for example:
 

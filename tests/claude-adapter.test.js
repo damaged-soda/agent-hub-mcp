@@ -59,6 +59,51 @@ describe("claude adapter", () => {
     ]);
   });
 
+  it("falls back to AGENT_HUB_CLAUDE_MODEL when metadata omits the model", () => {
+    const command = buildClaudeCommand({
+      request: { metadata: {} },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+      env: { AGENT_HUB_CLAUDE_MODEL: "claude-opus-4-8" },
+    });
+
+    const modelIndex = command.argv.indexOf("--model");
+    expect(modelIndex).toBeGreaterThan(-1);
+    expect(command.argv[modelIndex + 1]).toBe("claude-opus-4-8");
+  });
+
+  it("prefers metadata.claude.model over AGENT_HUB_CLAUDE_MODEL", () => {
+    const command = buildClaudeCommand({
+      request: { metadata: { claude: { model: "sonnet" } } },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+      env: { AGENT_HUB_CLAUDE_MODEL: "claude-opus-4-8" },
+    });
+
+    const modelIndex = command.argv.indexOf("--model");
+    expect(command.argv[modelIndex + 1]).toBe("sonnet");
+  });
+
+  it("ignores a blank AGENT_HUB_CLAUDE_MODEL", () => {
+    const command = buildClaudeCommand({
+      request: { metadata: {} },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+      env: { AGENT_HUB_CLAUDE_MODEL: "   " },
+    });
+
+    expect(command.argv).not.toContain("--model");
+  });
+
   it("maps continuation sessions into --resume", () => {
     const command = buildClaudeCommand({
       request: { metadata: {} },

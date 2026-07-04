@@ -413,7 +413,7 @@ claude -p --input-format text --output-format stream-json --verbose
 - prompt 通过 stdin 传入，内容来自 `input.txt`。
 - 新会话时 Agent Hub 生成 UUID，并传入 `--session-id <uuid>`。
 - continuation 时传入 `--resume <native_session_id>`。
-- `metadata.claude.model` 映射到 `--model`。
+- `metadata.claude.model` 映射到 `--model`；未提供时回退到服务端环境变量 `AGENT_HUB_CLAUDE_MODEL`，两者都未设置时不传 `--model`（此时 Claude CLI 使用本地保存的默认模型）。
 - `metadata.claude.effort` 映射到 `--effort`。
 - `metadata.claude.agent` 映射到 `--agent`。
 - `metadata.claude.add_dirs` 映射到重复的 `--add-dir`。
