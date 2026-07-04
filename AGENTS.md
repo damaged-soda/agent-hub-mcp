@@ -51,6 +51,15 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 | `AGENT_HUB_RUN_TTL_SECONDS` | Terminal run retention; default is `604800`. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to Claude Code. |
+| `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
+
+## Workspace Namespace Forwarding
+
+Runs inherit the workspace namespace (`NS`, `GH_CONFIG_DIR`, `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`; see `~/work/charter/NAMESPACE.md`). If the server env already has `NS`,
+those keys are forwarded as-is. If `NS` is absent, the runner derives them from the
+run's `cwd` via `direnv export json` before spawning Claude Code; stale `DIRENV_*`
+bookkeeping without `NS` is ignored. Derivation failures fall back to no namespace.
 
 ## Documentation Map
 
