@@ -48,13 +48,11 @@ const DIRENV_CANDIDATES = [
   "/usr/bin/direnv",
 ];
 
-// Namespace rule (~/work/charter/NAMESPACE.md): respect an inherited NS; only when it
-// is absent, derive the workspace namespace from the run's cwd via direnv. NS is the
-// sentinel — if it is missing, stale DIRENV_* bookkeeping must not suppress re-export.
+// Namespace rule (~/work/charter/NAMESPACE.md): the environment always follows
+// position — derive the workspace namespace from the run's cwd via direnv, regardless
+// of what the server process inherited. Stale DIRENV_* bookkeeping is stripped so the
+// probe evaluates cleanly for this cwd.
 export function resolveNamespaceEnv(cwd, source = process.env) {
-  if (typeof source.NS === "string" && source.NS !== "") {
-    return {};
-  }
   const probeEnv = {};
   for (const [key, value] of Object.entries(source)) {
     if (!key.startsWith("DIRENV_")) {

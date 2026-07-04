@@ -50,9 +50,10 @@ async function main() {
   if ((await readState(runDir).catch(() => null))?.status === "cancelled") {
     return;
   }
+  // Position wins: namespace derived from the run cwd overrides inherited env.
   const agentEnv = {
-    ...resolveNamespaceEnv(request.cwd),
     ...buildAgentEnv(process.env),
+    ...resolveNamespaceEnv(request.cwd),
   };
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,

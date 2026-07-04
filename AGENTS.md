@@ -53,13 +53,14 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to Claude Code. |
 | `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
 
-## Workspace Namespace Forwarding
+## Workspace Namespace Resolution
 
-Runs inherit the workspace namespace (`NS`, `GH_CONFIG_DIR`, `CLAUDE_CONFIG_DIR`,
-`CODEX_HOME`; see `~/work/charter/NAMESPACE.md`). If the server env already has `NS`,
-those keys are forwarded as-is. If `NS` is absent, the runner derives them from the
-run's `cwd` via `direnv export json` before spawning Claude Code; stale `DIRENV_*`
-bookkeeping without `NS` is ignored. Derivation failures fall back to no namespace.
+The environment always follows position (`~/work/charter/NAMESPACE.md`): before
+spawning Claude Code, the runner derives the workspace namespace (`NS`,
+`GH_CONFIG_DIR`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) from the run's `cwd` via
+`direnv export json`. Values derived from `cwd` take precedence over anything the
+server process inherited; `DIRENV_*` bookkeeping is never forwarded. If the `cwd`
+is outside any workspace or direnv is unavailable, no namespace keys are injected.
 
 ## Documentation Map
 

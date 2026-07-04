@@ -50,12 +50,16 @@ echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"b
     fs.rmSync(stubDir, { recursive: true, force: true });
   });
 
-  it("respects an inherited NS and skips derivation", () => {
-    const env = resolveNamespaceEnv("/anywhere", {
+  it("derives from cwd even when the server env carries another namespace", () => {
+    const env = resolveNamespaceEnv(stubDir, {
       NS: "company",
+      GH_CONFIG_DIR: "/home/u/ns/company/gh",
       AGENT_HUB_DIRENV_BIN: stubBin,
     });
-    expect(env).toEqual({});
+    expect(env).toEqual({
+      NS: "personal",
+      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+    });
   });
 
   it("derives namespace keys and drops direnv bookkeeping", () => {
