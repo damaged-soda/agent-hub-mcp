@@ -20,7 +20,7 @@ import {
   writeState,
 } from "./fs-store.js";
 import { buildClaudeCommand, parseClaudeOutput } from "./claude-adapter.js";
-import { buildAgentEnv } from "./env.js";
+import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
 
 async function main() {
   const runDir = process.argv[2];
@@ -50,7 +50,11 @@ async function main() {
   if ((await readState(runDir).catch(() => null))?.status === "cancelled") {
     return;
   }
-  const agentEnv = buildAgentEnv(process.env);
+  // Position wins: namespace derived from the run cwd overrides inherited env.
+  const agentEnv = {
+    ...buildAgentEnv(process.env),
+    ...resolveNamespaceEnv(request.cwd),
+  };
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,
     adapter_id: command.adapter_id,

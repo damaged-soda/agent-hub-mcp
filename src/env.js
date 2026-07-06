@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+
 const DEFAULT_AGENT_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
@@ -10,9 +12,12 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "AWS_SESSION_TOKEN",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
   "COLORTERM",
   "DISABLE_AUTO_UPDATE",
   "FORCE_COLOR",
+  "GH_CONFIG_DIR",
   "HOME",
   "LANG",
   "LC_ALL",
@@ -21,6 +26,7 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "GOOGLE_APPLICATION_CREDENTIALS",
   "GOOGLE_CLOUD_PROJECT",
   "NO_COLOR",
+  "NS",
   "PATH",
   "SHELL",
   "TEMP",
@@ -32,6 +38,65 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "XDG_CONFIG_HOME",
   "XDG_DATA_HOME",
 ]);
+
+const NAMESPACE_ENV_KEYS = ["NS", "GH_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+
+const DIRENV_CANDIDATES = [
+  "direnv",
+  "/opt/homebrew/bin/direnv",
+  "/usr/local/bin/direnv",
+  "/usr/bin/direnv",
+];
+
+// Namespace rule (~/work/charter/NAMESPACE.md): the environment always follows
+// position — derive the workspace namespace from the run's cwd via direnv, regardless
+// of what the server process inherited. Stale DIRENV_* bookkeeping is stripped so the
+// probe evaluates cleanly for this cwd.
+export function resolveNamespaceEnv(cwd, source = process.env) {
+  const probeEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (!key.startsWith("DIRENV_")) {
+      probeEnv[key] = value;
+    }
+  }
+  probeEnv.DIRENV_LOG_FORMAT = "";
+  const candidates = source.AGENT_HUB_DIRENV_BIN
+    ? [source.AGENT_HUB_DIRENV_BIN]
+    : DIRENV_CANDIDATES;
+  for (const bin of candidates) {
+    let stdout;
+    try {
+      stdout = execFileSync(bin, ["export", "json"], {
+        cwd,
+        env: probeEnv,
+        timeout: 2000,
+        encoding: "utf8",
+      });
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        continue;
+      }
+      return {};
+    }
+    if (!stdout || !stdout.trim()) {
+      return {};
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch {
+      return {};
+    }
+    const env = {};
+    for (const key of NAMESPACE_ENV_KEYS) {
+      if (typeof parsed[key] === "string") {
+        env[key] = parsed[key];
+      }
+    }
+    return env;
+  }
+  return {};
+}
 
 export function buildAgentEnv(source = process.env) {
   const env = {};
