@@ -47,10 +47,11 @@ CLI 参数处理规则：
 | `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` |
 | `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` |
 
-effort 不在统一层：各 CLI 的取值集合不同（Claude 是 `low`/`medium`/`high`，Codex 是
-`minimal`…`xhigh`），值必须原样传给目标 CLI。它只出现在 adapter 命名空间
-（`metadata.claude.effort` / `metadata.codex.effort`），未提供时回退服务端环境变量
-`AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`。
+effort 不在统一层：各 CLI 的取值集合不同且随版本演进，Agent Hub 不枚举合法值，
+一律原样透传，由目标 CLI 自行接受或报错（报错按正常失败路径透传）。它只出现在
+adapter 命名空间（`metadata.claude.effort` / `metadata.codex.effort`），未提供时回退
+服务端环境变量 `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`。codex 侧仅有
+`[A-Za-z0-9_-]+` 字符集校验——这是 `-c` TOML 值的注入防护，不是取值假设。
 
 错误码同样统一：模型侧失败（Claude `is_error`、Codex `turn.failed`）一律记为
 `agent_error`；`cli_exit_nonzero`、`stdout_parse_failed` 等 hub 层错误码本就与

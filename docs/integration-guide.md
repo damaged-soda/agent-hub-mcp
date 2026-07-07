@@ -143,7 +143,7 @@ Top-level `metadata` fields work for every adapter; the adapter translates them 
 | `permission` | `read-only`, `auto` (default), or `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write` + network / `danger-full-access` |
 | `add_dirs` | Extra writable directories (resolved and allowlist-checked) | `--add-dir` | `--add-dir` |
 
-Effort is deliberately not unified: each CLI has its own value vocabulary, so the value is passed through natively. Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`.
+Effort is deliberately not unified: each CLI has its own evolving value vocabulary, so Agent Hub does not enumerate valid values — it passes the string through and lets the target CLI accept or reject it (rejections surface through the normal failure path). Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`. The codex-side `[A-Za-z0-9_-]+` check is TOML-injection hygiene for the `-c` override, not a value assumption.
 
 With the default `permission: "auto"`, both adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
 
