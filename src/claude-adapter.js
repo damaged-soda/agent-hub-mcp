@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import {
   assertMetadataString,
-  defaultModelFromEnv,
+  defaultFromEnv,
   resolveUnifiedPermission,
   runVersionCommand,
 } from "./adapter-utils.js";
@@ -25,6 +25,7 @@ const UNIFIED_PERMISSION_TO_MODE = {
 const OUTPUT_FORMATS = new Set(["json", "stream-json"]);
 const DEFAULT_OUTPUT_FORMAT = "stream-json";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CLAUDE_MODEL";
+const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_CLAUDE_EFFORT";
 
 let availabilityCache = null;
 
@@ -113,14 +114,16 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
   const model =
     assertMetadataString(claude.model, "metadata.claude.model") ??
     assertMetadataString(meta.model, "metadata.model") ??
-    defaultModelFromEnv(env, DEFAULT_MODEL_ENV_KEY);
+    defaultFromEnv(env, DEFAULT_MODEL_ENV_KEY);
   if (model) {
     argv.push("--model", model);
   }
 
+  // Effort vocabularies are CLI-specific, so the value stays in the adapter
+  // namespace and falls back to a server-side default instead of a unified field.
   const effort =
     assertMetadataString(claude.effort, "metadata.claude.effort") ??
-    assertMetadataString(meta.effort, "metadata.effort");
+    defaultFromEnv(env, DEFAULT_EFFORT_ENV_KEY);
   if (effort) {
     argv.push("--effort", effort);
   }

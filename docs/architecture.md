@@ -44,9 +44,13 @@ CLI 参数处理规则：
 | 统一字段 | 含义 | claude-code 映射 | codex 映射 |
 |---|---|---|---|
 | `model` | 模型名（按目标 CLI 的命名） | `--model` | `--model` |
-| `effort` | 推理强度（`low`/`medium`/`high` 两边通用） | `--effort` | `-c model_reasoning_effort` |
 | `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` |
 | `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` |
+
+effort 不在统一层：各 CLI 的取值集合不同（Claude 是 `low`/`medium`/`high`，Codex 是
+`minimal`…`xhigh`），值必须原样传给目标 CLI。它只出现在 adapter 命名空间
+（`metadata.claude.effort` / `metadata.codex.effort`），未提供时回退服务端环境变量
+`AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`。
 
 错误码同样统一：模型侧失败（Claude `is_error`、Codex `turn.failed`）一律记为
 `agent_error`；`cli_exit_nonzero`、`stdout_parse_failed` 等 hub 层错误码本就与
@@ -442,7 +446,8 @@ claude -p --input-format text --output-format stream-json --verbose
 - 新会话时 Agent Hub 生成 UUID，并传入 `--session-id <uuid>`。
 - continuation 时传入 `--resume <native_session_id>`。
 - `metadata.claude.model`（或统一的 `metadata.model`）映射到 `--model`；未提供时回退到服务端环境变量 `AGENT_HUB_CLAUDE_MODEL`，都未设置时不传 `--model`（此时 Claude CLI 使用本地保存的默认模型）。
-- `metadata.claude.effort`（或统一的 `metadata.effort`）映射到 `--effort`。
+- `metadata.claude.effort` 映射到 `--effort`；未提供时回退到服务端环境变量
+  `AGENT_HUB_CLAUDE_EFFORT`，都未设置时不传 `--effort`。
 - `metadata.claude.agent` 映射到 `--agent`。
 - `metadata.claude.add_dirs`（或统一的 `metadata.add_dirs`）映射到重复的 `--add-dir`。
 - `metadata.claude.output_format` 映射到 `--output-format`，默认 `stream-json`。
@@ -486,8 +491,8 @@ codex exec --json --skip-git-repo-check --sandbox workspace-write \
   `--last` 之类的值被解析成 codex 选项）。
 - `metadata.codex.model`（或统一的 `metadata.model`）映射到 `--model`；未提供时回退到
   服务端环境变量 `AGENT_HUB_CODEX_MODEL`，都未设置时不传 `--model`。
-- `metadata.codex.effort`（或统一的 `metadata.effort`）映射到
-  `-c model_reasoning_effort="<effort>"`。
+- `metadata.codex.effort` 映射到 `-c model_reasoning_effort="<effort>"`；未提供时回退
+  到服务端环境变量 `AGENT_HUB_CODEX_EFFORT`，都未设置时不传。
 - 统一的 `metadata.permission` 映射到 sandbox：`read-only` → `read-only`，`auto`（默认）
   → `workspace-write` 加 `-c sandbox_workspace_write.network_access=true`（对齐 Claude
   auto 的联网能力），`full` → `danger-full-access`。

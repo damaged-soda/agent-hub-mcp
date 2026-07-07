@@ -1,7 +1,7 @@
 import path from "node:path";
 import {
   assertMetadataString,
-  defaultModelFromEnv,
+  defaultFromEnv,
   resolveUnifiedPermission,
   runVersionCommand,
 } from "./adapter-utils.js";
@@ -19,6 +19,7 @@ const UNIFIED_PERMISSION_TO_SANDBOX = {
 };
 const NETWORK_ACCESS_OVERRIDE = "sandbox_workspace_write.network_access=true";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CODEX_MODEL";
+const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_CODEX_EFFORT";
 const EFFORT_PATTERN = /^[A-Za-z0-9_-]+$/;
 // Codex thread ids are UUIDs. The resume session id is a positional argv value,
 // so anything else (for example "--last") would be parsed as a codex option and
@@ -101,14 +102,16 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
   const model =
     assertMetadataString(codex.model, "metadata.codex.model") ??
     assertMetadataString(meta.model, "metadata.model") ??
-    defaultModelFromEnv(env, DEFAULT_MODEL_ENV_KEY);
+    defaultFromEnv(env, DEFAULT_MODEL_ENV_KEY);
   if (model) {
     argv.push("--model", model);
   }
 
+  // Effort vocabularies are CLI-specific, so the value stays in the adapter
+  // namespace and falls back to a server-side default instead of a unified field.
   const effort =
     assertMetadataString(codex.effort, "metadata.codex.effort") ??
-    assertMetadataString(meta.effort, "metadata.effort");
+    defaultFromEnv(env, DEFAULT_EFFORT_ENV_KEY);
   if (effort) {
     if (!EFFORT_PATTERN.test(effort)) {
       throw new Error(

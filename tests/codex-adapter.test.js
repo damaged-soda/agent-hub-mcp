@@ -128,13 +128,12 @@ describe("codex adapter", () => {
     expect(command.argv).not.toContain("sandbox_workspace_write.network_access=true");
   });
 
-  it("maps unified model and effort when the codex namespace omits them", () => {
+  it("maps unified model when the codex namespace omits it", () => {
     const command = buildCodexCommand({
-      request: { metadata: { model: "gpt-5.2-codex", effort: "medium" } },
+      request: { metadata: { model: "gpt-5.2-codex" } },
       effectiveCliSessionRef: createCodexSessionRef(null),
     });
     expect(command.argv).toContain("gpt-5.2-codex");
-    expect(command.argv).toContain('model_reasoning_effort="medium"');
 
     const overridden = buildCodexCommand({
       request: {
@@ -144,6 +143,23 @@ describe("codex adapter", () => {
     });
     const modelIndex = overridden.argv.indexOf("--model");
     expect(overridden.argv[modelIndex + 1]).toBe("o4-mini");
+  });
+
+  it("falls back to AGENT_HUB_CODEX_EFFORT when metadata omits the effort", () => {
+    const command = buildCodexCommand({
+      request: { metadata: {} },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: { AGENT_HUB_CODEX_EFFORT: "xhigh" },
+    });
+    expect(command.argv).toContain('model_reasoning_effort="xhigh"');
+
+    const overridden = buildCodexCommand({
+      request: { metadata: { codex: { effort: "minimal" } } },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: { AGENT_HUB_CODEX_EFFORT: "xhigh" },
+    });
+    expect(overridden.argv).toContain('model_reasoning_effort="minimal"');
+    expect(overridden.argv).not.toContain('model_reasoning_effort="xhigh"');
   });
 
   it("rejects unknown unified permissions", () => {

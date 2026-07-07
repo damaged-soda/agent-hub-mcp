@@ -33,6 +33,17 @@ describe("agent environment", () => {
     expect(currentEnvKeys(env)).not.toContain("OPENAI_API_KEY");
   });
 
+  it("forwards server-side default effort vars", () => {
+    const env = buildAgentEnv({
+      PATH: "/bin",
+      AGENT_HUB_CLAUDE_EFFORT: "high",
+      AGENT_HUB_CODEX_EFFORT: "xhigh",
+    });
+
+    expect(env.AGENT_HUB_CLAUDE_EFFORT).toBe("high");
+    expect(env.AGENT_HUB_CODEX_EFFORT).toBe("xhigh");
+  });
+
   it("forwards namespace redirect vars when present in the server env", () => {
     const env = buildAgentEnv({
       PATH: "/bin",

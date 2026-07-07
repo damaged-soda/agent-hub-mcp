@@ -90,6 +90,34 @@ describe("claude adapter", () => {
     expect(command.argv[modelIndex + 1]).toBe("sonnet");
   });
 
+  it("falls back to AGENT_HUB_CLAUDE_EFFORT when metadata omits the effort", () => {
+    const command = buildClaudeCommand({
+      request: { metadata: {} },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+      env: { AGENT_HUB_CLAUDE_EFFORT: "high" },
+    });
+
+    const effortIndex = command.argv.indexOf("--effort");
+    expect(effortIndex).toBeGreaterThan(-1);
+    expect(command.argv[effortIndex + 1]).toBe("high");
+
+    const overridden = buildClaudeCommand({
+      request: { metadata: { claude: { effort: "low" } } },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+      env: { AGENT_HUB_CLAUDE_EFFORT: "high" },
+    });
+    const overriddenIndex = overridden.argv.indexOf("--effort");
+    expect(overridden.argv[overriddenIndex + 1]).toBe("low");
+  });
+
   it("ignores a blank AGENT_HUB_CLAUDE_MODEL", () => {
     const command = buildClaudeCommand({
       request: { metadata: {} },
@@ -107,7 +135,7 @@ describe("claude adapter", () => {
   it("maps unified metadata onto Claude flags with namespace precedence", () => {
     const unified = buildClaudeCommand({
       request: {
-        metadata: { model: "sonnet", effort: "low", permission: "read-only" },
+        metadata: { model: "sonnet", permission: "read-only" },
       },
       effectiveCliSessionRef: {
         agent_id: "claude-code",
@@ -116,7 +144,6 @@ describe("claude adapter", () => {
       },
     });
     expect(unified.argv).toContain("sonnet");
-    expect(unified.argv).toContain("low");
     const modeIndex = unified.argv.indexOf("--permission-mode");
     expect(unified.argv[modeIndex + 1]).toBe("plan");
 

@@ -140,9 +140,10 @@ Top-level `metadata` fields work for every adapter; the adapter translates them 
 | Field | Meaning | claude-code | codex |
 |---|---|---|---|
 | `model` | Model name in the target CLI's naming | `--model` | `--model` |
-| `effort` | Reasoning effort; `low`/`medium`/`high` work on both | `--effort` | `-c model_reasoning_effort` |
 | `permission` | `read-only`, `auto` (default), or `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write` + network / `danger-full-access` |
 | `add_dirs` | Extra writable directories (resolved and allowlist-checked) | `--add-dir` | `--add-dir` |
+
+Effort is deliberately not unified: each CLI has its own value vocabulary, so the value is passed through natively. Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`.
 
 With the default `permission: "auto"`, both adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
 
@@ -155,7 +156,7 @@ Model-side failures are reported with the unified error code `agent_error` regar
 | Field | CLI flag | Notes |
 |---|---|---|
 | `model` | `--model` | Optional non-empty string. |
-| `effort` | `--effort` | Optional non-empty string. |
+| `effort` | `--effort` | Optional non-empty string; falls back to `AGENT_HUB_CLAUDE_EFFORT`. |
 | `agent` | `--agent` | Optional non-empty string. |
 | `output_format` | `--output-format` | Defaults to `stream-json`; set to `json` for legacy single-result output. |
 | `permission_mode` | `--permission-mode` | Defaults to `auto`. |
@@ -170,7 +171,7 @@ Supported `permission_mode` values are `acceptEdits`, `auto`, `bypassPermissions
 | Field | CLI flag | Notes |
 |---|---|---|
 | `model` | `--model` | Optional non-empty string. |
-| `effort` | `-c model_reasoning_effort="…"` | Optional; letters, digits, hyphens, underscores only. |
+| `effort` | `-c model_reasoning_effort="…"` | Optional; letters, digits, hyphens, underscores only; falls back to `AGENT_HUB_CODEX_EFFORT`. |
 | `sandbox` | `--sandbox` | Native escape hatch; overrides unified `permission` and keeps codex-native semantics (`workspace-write` without network). One of `read-only`, `workspace-write`, `danger-full-access`. |
 | `add_dirs` | `--add-dir` | Array of directories resolved and allowlist-checked before execution. |
 

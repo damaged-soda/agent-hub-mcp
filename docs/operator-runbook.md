@@ -38,6 +38,8 @@ node scripts/mcp-client.js list_agents
 | `AGENT_HUB_FORWARD_ENV` | unset | Comma-separated extra environment variable names to forward to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
 | `AGENT_HUB_CODEX_MODEL` | unset | Default `--model` for Codex runs when the request omits `metadata.codex.model`. |
+| `AGENT_HUB_CLAUDE_EFFORT` | unset | Default `--effort` for Claude runs when the request omits `metadata.claude.effort`. |
+| `AGENT_HUB_CODEX_EFFORT` | unset | Default `model_reasoning_effort` for Codex runs when the request omits `metadata.codex.effort`. |
 
 The runner forwards a small default environment allowlist for Claude and Codex auth (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. Add project-specific keys by setting `AGENT_HUB_FORWARD_ENV` on the MCP server process, for example:
 

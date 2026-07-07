@@ -29,7 +29,7 @@ export function resolveUnifiedPermission(metadata) {
   return value;
 }
 
-export function defaultModelFromEnv(env, envKey) {
+export function defaultFromEnv(env, envKey) {
   const value = env?.[envKey];
   if (typeof value !== "string" || value.trim() === "") {
     return null;

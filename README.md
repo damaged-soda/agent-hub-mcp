@@ -49,7 +49,7 @@ The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex` (s
 
 Use the returned `run_ref` with `wait_agent_run` until the run reaches a terminal state. The server waits up to 10 minutes by default; if the MCP client times out first, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. `run_agent` is still available for short tasks that should finish inside the MCP client's tool timeout.
 
-`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `effort`, `permission`, `add_dirs`) work for both adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code and `--sandbox workspace-write` with network access for Codex. Adapter namespaces (`metadata.claude`, `metadata.codex`) override the unified fields.
+`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for both adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code and `--sandbox workspace-write` with network access for Codex. Adapter namespaces (`metadata.claude`, `metadata.codex`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` server defaults).
 
 ## MCP Server
 
@@ -99,6 +99,8 @@ The exposed tools are:
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra environment variable names forwarded to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |
 | `AGENT_HUB_CODEX_MODEL` | Default `--model` for Codex runs when `metadata.codex.model` is not provided. |
+| `AGENT_HUB_CLAUDE_EFFORT` | Default `--effort` for Claude runs when `metadata.claude.effort` is not provided. |
+| `AGENT_HUB_CODEX_EFFORT` | Default `model_reasoning_effort` for Codex runs when `metadata.codex.effort` is not provided. |
 
 Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions.
 
