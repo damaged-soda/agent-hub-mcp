@@ -8,7 +8,7 @@
 
 ## Project Shape
 
-This repository implements a local MCP stdio bridge. It maps MCP tool calls to non-interactive Claude Code CLI runs and stores run state, logs, and artifacts on the local filesystem.
+This repository implements a local MCP stdio bridge. It maps MCP tool calls to non-interactive agent CLI runs (Claude Code and Codex) and stores run state, logs, and artifacts on the local filesystem.
 
 Key files:
 
@@ -16,8 +16,11 @@ Key files:
 |---|---|
 | `src/server.js` | MCP stdio server and tool schemas. |
 | `src/runs.js` | Tool behavior, run lifecycle, waiting, cancellation, snapshots. |
-| `src/runner.js` | Detached runner that launches Claude Code and writes terminal results. |
+| `src/runner.js` | Detached runner that launches the agent CLI and writes terminal results. |
+| `src/adapters.js` | Adapter registry keyed by `agent_id`. |
 | `src/claude-adapter.js` | Claude Code argv/session/result mapping. |
+| `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
+| `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/security.js` | `cwd` and `add_dirs` validation. |
 | `src/env.js` | Environment allowlist and forwarding. |
@@ -37,8 +40,10 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 
 - Preserve prompt pass-through: do not prepend wrapper prompts, system prompts, or result-file instructions to user input.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
-- `cwd` must remain an explicit absolute directory from the request; `metadata.claude.add_dirs` must resolve through `src/security.js`.
+- Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
+- `cwd` must remain an explicit absolute directory from the request; `metadata.claude.add_dirs` and `metadata.codex.add_dirs` must resolve through `src/security.js`.
 - Leave the default Claude permission behavior as `--permission-mode auto`. Do not use `bypassPermissions` in examples, defaults, or self-review paths unless the user explicitly asks.
+- Leave the default Codex sandbox as `--sandbox workspace-write`. Do not use `danger-full-access` or `--dangerously-bypass-approvals-and-sandbox` in examples, defaults, or self-review paths unless the user explicitly asks.
 - Keep process cancellation scoped to the recorded process group for the run.
 - Keep run directories and state/log artifacts private (`0700` directories, `0600` files where applicable).
 - Do not record environment variable values in command metadata.
@@ -50,7 +55,9 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 | `AGENT_HUB_RUN_DIR` | Override run storage root. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | Terminal run retention; default is `604800`. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and `add_dirs`. |
-| `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to Claude Code. |
+| `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to the agent CLI. |
+| `AGENT_HUB_CLAUDE_MODEL` | Server-side default model for Claude runs. |
+| `AGENT_HUB_CODEX_MODEL` | Server-side default model for Codex runs. |
 | `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
 
 ## Workspace Namespace Resolution

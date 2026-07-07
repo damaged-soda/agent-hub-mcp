@@ -61,26 +61,27 @@ export async function validateAllowlist(targets) {
   }
 }
 
-export async function validateRequestPaths(cwd, metadata = {}) {
+export async function validateRequestPaths(cwd, metadata = {}, options = {}) {
+  const metadataKey = options.metadataKey ?? "claude";
   if (typeof cwd !== "string" || !path.isAbsolute(cwd)) {
     throw new Error("cwd must be an absolute path");
   }
   const realCwd = await validateDirectory(cwd, "cwd");
-  const addDirs = metadata?.claude?.add_dirs ?? [];
+  const addDirs = metadata?.[metadataKey]?.add_dirs ?? [];
   if (addDirs !== undefined && !Array.isArray(addDirs)) {
-    throw new Error("metadata.claude.add_dirs must be an array");
+    throw new Error(`metadata.${metadataKey}.add_dirs must be an array`);
   }
   const realAddDirs = [];
   for (const [index, addDir] of addDirs.entries()) {
     realAddDirs.push(
-      await validateDirectory(addDir, `metadata.claude.add_dirs[${index}]`, realCwd),
+      await validateDirectory(addDir, `metadata.${metadataKey}.add_dirs[${index}]`, realCwd),
     );
   }
   await validateAllowlist([
     { path: realCwd, label: "cwd" },
     ...realAddDirs.map((item, index) => ({
       path: item,
-      label: `metadata.claude.add_dirs[${index}]`,
+      label: `metadata.${metadataKey}.add_dirs[${index}]`,
     })),
   ]);
   return { cwd: realCwd, addDirs: realAddDirs };

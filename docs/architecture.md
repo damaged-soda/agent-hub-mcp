@@ -77,6 +77,14 @@ Agent Hub 保存 opaque `cli_session_ref`，并在 continuation 时传回目标 
 新 run 和 CLI session 是两个独立 ID。一次追问会创建新的 `run_id`，同时复用已有
 `native_session_id`。
 
+Session ID 的产生方式由 adapter 决定：
+
+- Claude Code：Agent Hub 生成 UUID 并通过 `--session-id` 传入，dispatch 响应立即返回
+  `cli_session_ref`。
+- Codex：thread id 由 Codex 自己分配并通过第一条 `thread.started` 事件上报。新会话的
+  dispatch 响应 `cli_session_ref` 为 `null`；runner 观察到 `thread.started` 后写回
+  `state.json`，终态快照携带可用于 continuation 的 `cli_session_ref`。
+
 ## MCP Tools
 
 ### list_agents
@@ -398,6 +406,9 @@ Agent Hub 返回 CLI 的最终输出，不通过 prompt 建立额外结果通道
 写入 `result.txt` 和 `result.json`。兼容模式下可以通过
 `metadata.claude.output_format: "json"` 使用旧的单 JSON 输出。
 
+对 Codex adapter，stdout 是 `codex exec --json` 的 JSONL 事件流；adapter 从最后一条
+`agent_message` item 写入 `result.txt` 和 `result.json`。
+
 ## Claude Code Adapter
 
 第一版 Claude Code adapter 使用 direct print mode。
@@ -435,6 +446,51 @@ Claude stdout 处理规则：
 - `is_error` 为 true 时状态为 `failed`。
 - 缺少字符串类型的 `result` 或 `session_id` 时状态为 `failed`。
 - JSON/JSONL 解析失败时状态为 `failed`。
+
+## Codex Adapter
+
+Codex adapter 使用 `codex exec` 非交互模式。
+
+基础命令：
+
+```text
+codex exec --json --skip-git-repo-check --sandbox workspace-write -
+```
+
+执行规则：
+
+- prompt 通过 stdin 传入（argv 末尾的 `-`），内容来自 `input.txt`。
+- 新会话不预设 session id；Codex 在第一条 `thread.started` 事件里上报 thread id。
+- continuation 使用 `codex exec resume <native_session_id>`；session id 是位置参数，
+  必须是 thread UUID，其他字符串在 dispatch 和命令构建两处都会被拒绝（防止
+  `--last` 之类的值被解析成 codex 选项）。
+- `metadata.codex.model` 映射到 `--model`；未提供时回退到服务端环境变量
+  `AGENT_HUB_CODEX_MODEL`，两者都未设置时不传 `--model`。
+- `metadata.codex.effort` 映射到 `-c model_reasoning_effort="<effort>"`。
+- `metadata.codex.sandbox` 映射到 `--sandbox`，默认 `workspace-write`；允许值为
+  `read-only`、`workspace-write`、`danger-full-access`。
+- `metadata.codex.add_dirs` 映射到重复的 `--add-dir`。
+- `codex exec resume` 的 flag 集合比 `codex exec` 窄：sandbox 通过
+  `-c sandbox_mode="<mode>"` 传递，add_dirs 通过
+  `-c sandbox_workspace_write.writable_roots=[...]` 传递。
+- 始终传 `--skip-git-repo-check`：`cwd` 已经过显式校验和 allowlist 检查。
+- 不暴露 `--dangerously-bypass-approvals-and-sandbox`。
+
+Codex stdout 处理规则：
+
+- 完整 stdout 写入 `stdout.log`，事件流同时写入 `events.jsonl`。
+- 最后一条 `item.completed` 且 `item.type` 为 `agent_message` 的事件写入
+  `result.json`，其 `text` 写入 `result.txt`。
+- 最后一条 `thread.started` 的 `thread_id` 写回终态 `state.json` 的
+  `cli_session_ref`。
+- runner 在运行中一旦观察到 `thread.started` 就把 `cli_session_ref` 写入
+  `state.json`，因此取消的 run 仍保留可 resume 的 thread id。
+- 出现 `turn.failed`（或 turn 未完成且有 `error` 事件）时状态为 `failed`，错误码为
+  `codex_turn_failed`，错误消息取自事件。`turn.completed` 之前被重试掉的 `error`
+  事件不视为失败。
+- exit code 非 0 且没有失败事件时状态为 `failed`，错误码为 `cli_exit_nonzero`。
+- 缺少 `agent_message` 或 `thread_id` 时状态为 `failed`，错误码为
+  `stdout_parse_failed`。
 
 ## 清理策略
 

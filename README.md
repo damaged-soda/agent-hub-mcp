@@ -1,14 +1,14 @@
 # Agent Hub MCP
 
-Agent Hub MCP is a local MCP stdio bridge for running agent CLIs from MCP tools. The first adapter targets Claude Code and runs it in non-interactive print mode while Agent Hub owns run state, logs, waiting, cancellation, and local artifact storage.
+Agent Hub MCP is a local MCP stdio bridge for running agent CLIs from MCP tools. It ships two adapters — Claude Code (`claude-code`) and Codex CLI (`codex`) — and runs them in non-interactive mode while Agent Hub owns run state, logs, waiting, cancellation, and local artifact storage.
 
 ## Quick Start
 
 Prerequisites:
 
 - Node.js 20 or newer.
-- Claude Code CLI available as `claude`.
-- Claude Code authentication configured through its normal CLI environment.
+- Claude Code CLI available as `claude` and/or Codex CLI available as `codex`.
+- CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`).
 
 Install dependencies:
 
@@ -45,9 +45,11 @@ node scripts/mcp-client.js dispatch_to_agent --json '{
 }'
 ```
 
+The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex` (see the [integration guide](docs/integration-guide.md)). For a new Codex session the dispatch response has `cli_session_ref: null`; the thread id appears on the terminal snapshot once Codex reports it.
+
 Use the returned `run_ref` with `wait_agent_run` until the run reaches a terminal state. The server waits up to 10 minutes by default; if the MCP client times out first, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. `run_agent` is still available for short tasks that should finish inside the MCP client's tool timeout.
 
-`cwd` must be an existing absolute directory. If `metadata.claude.permission_mode` is omitted, Agent Hub passes `--permission-mode auto` to Claude Code.
+`cwd` must be an existing absolute directory. If `metadata.claude.permission_mode` is omitted, Agent Hub passes `--permission-mode auto` to Claude Code. If `metadata.codex.sandbox` is omitted, Agent Hub passes `--sandbox workspace-write` to Codex.
 
 ## MCP Server
 
@@ -93,9 +95,10 @@ The exposed tools are:
 |---|---|
 | `AGENT_HUB_RUN_DIR` | Override the run storage root. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | Override terminal run retention; default is `604800`. |
-| `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and Claude `add_dirs`. |
+| `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra environment variable names forwarded to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |
+| `AGENT_HUB_CODEX_MODEL` | Default `--model` for Codex runs when `metadata.codex.model` is not provided. |
 
 Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions.
 

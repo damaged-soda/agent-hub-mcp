@@ -15,7 +15,7 @@ This guide is for MCP clients that want to call local agent CLIs through Agent H
 }
 ```
 
-The server currently exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code.
+The server exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code, and the `codex` adapter when `codex --version` succeeds.
 
 For Codex clients, set the MCP server's `tool_timeout_sec` based on how long the host should allow a single `wait_agent_run` call to remain open. Agent Hub's server-side wait window is 10 minutes; a shorter host timeout only aborts that MCP tool call, not the background run. To let Agent Hub return its own `timed_out: true` snapshot, set the host timeout above 10 minutes:
 
@@ -65,8 +65,8 @@ Dispatches a run and waits until it reaches a terminal state or the timeout expi
 
 Important request rules:
 
-- `agent_id` must be `claude-code`.
-- `prompt` is passed to Claude Code through stdin without wrapper text.
+- `agent_id` must be `claude-code` or `codex`.
+- `prompt` is passed to the agent CLI through stdin without wrapper text.
 - `cwd` must be an existing absolute directory.
 - `timeout_ms` defaults to `30000` and is capped at `3600000`.
 - `poll_interval_ms` defaults to `1000`.
@@ -148,9 +148,25 @@ Requests cancellation of the run process group:
 
 Supported `permission_mode` values are `acceptEdits`, `auto`, `bypassPermissions`, `default`, `dontAsk`, and `plan`. Normal integrations should omit the field and let Agent Hub pass `auto`.
 
+## Codex Metadata
+
+`metadata.codex` maps to Codex CLI flags:
+
+| Field | CLI flag | Notes |
+|---|---|---|
+| `model` | `--model` | Optional non-empty string. |
+| `effort` | `-c model_reasoning_effort="…"` | Optional; letters, digits, hyphens, underscores only. |
+| `sandbox` | `--sandbox` | Defaults to `workspace-write`; one of `read-only`, `workspace-write`, `danger-full-access`. |
+| `add_dirs` | `--add-dir` | Array of directories resolved and allowlist-checked before execution. |
+
+On continuations (`codex exec resume`) the sandbox and writable roots are passed as `-c sandbox_mode="…"` and `-c sandbox_workspace_write.writable_roots=[…]` config overrides because the resume subcommand accepts a narrower flag set.
+
 ## Session Continuation
 
-For a new session, pass `cli_session_ref: null`. Agent Hub creates a UUID and passes it to Claude Code as `--session-id`.
+For a new session, pass `cli_session_ref: null`.
+
+- `claude-code`: Agent Hub creates a UUID and passes it as `--session-id`; the dispatch response already contains the `cli_session_ref`.
+- `codex`: Codex assigns the thread id itself, so the dispatch response has `cli_session_ref: null`. The id appears on running/terminal snapshots once Codex reports it (usually within the first second).
 
 To continue, pass back the previous terminal response's `cli_session_ref`:
 
@@ -161,7 +177,7 @@ To continue, pass back the previous terminal response's `cli_session_ref`:
 }
 ```
 
-Agent Hub then calls Claude Code with `--resume <native_session_id>`.
+Agent Hub then calls Claude Code with `--resume <native_session_id>`, or Codex with `codex exec resume <native_session_id>`. The `agent_id` inside `cli_session_ref` must match the request's `agent_id`, and a Codex `native_session_id` must be a thread UUID (it is a positional CLI argument, so other strings are rejected).
 
 ## Artifacts
 

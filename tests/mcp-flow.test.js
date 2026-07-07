@@ -15,6 +15,8 @@ import {
 } from "../scripts/mcp-client.js";
 import { waitAgentRun } from "../src/runs.js";
 
+const FAKE_CODEX_THREAD_ID = "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000";
+
 describe("MCP flow", () => {
   let tempDir;
   let binDir;
@@ -32,6 +34,7 @@ describe("MCP flow", () => {
     await fsp.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
     await fsp.writeFile(path.join(workspaceDir, "README.md"), "# Fixture\n");
     await writeFakeClaude(path.join(binDir, "claude"));
+    await writeFakeCodex(path.join(binDir, "codex"));
     env = {
       ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
@@ -46,8 +49,10 @@ describe("MCP flow", () => {
 
   it("runs list_agents and run_agent end to end over MCP stdio", async () => {
     const listed = await callAgentHubTool("list_agents", {}, { env });
-    expect(listed.structuredContent.agents).toHaveLength(1);
-    expect(listed.structuredContent.agents[0].agent_id).toBe("claude-code");
+    expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
 
     const result = await callAgentHubTool(
       "run_agent",
@@ -109,8 +114,10 @@ describe("MCP flow", () => {
         requestTimeoutMs: 30000,
       });
 
-      expect(listed.structuredContent.agents).toHaveLength(1);
-      expect(listed.structuredContent.agents[0].agent_id).toBe("claude-code");
+      expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
+        "claude-code",
+        "codex",
+      ]);
     });
   });
 
@@ -389,6 +396,170 @@ describe("MCP flow", () => {
     expect(command.argv).toContain("--resume");
     expect(command.argv).toContain(sessionId);
     expect(command.argv).not.toContain("--session-id");
+  });
+
+  it("runs a codex agent end to end and discovers the thread id", async () => {
+    const accepted = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "codex",
+        prompt: "review this",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: {
+          codex: {
+            model: "gpt-5.2-codex",
+            effort: "high",
+            add_dirs: ["subdir"],
+          },
+        },
+      },
+      { env },
+    );
+    expect(accepted.structuredContent.cli_session_ref).toBeNull();
+
+    const result = await withRunDir(runDir, () =>
+      waitAgentRun({
+        run_ref: accepted.structuredContent.run_ref,
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.content[0].text).toBe("fake codex result: review this");
+    expect(result.cli_session_ref).toEqual({
+      agent_id: "codex",
+      native_session_id: FAKE_CODEX_THREAD_ID,
+    });
+
+    const command = JSON.parse(
+      await fsp.readFile(
+        path.join(runDir, accepted.structuredContent.run_ref.run_id, "command.json"),
+        "utf8",
+      ),
+    );
+    expect(command.argv.slice(0, 4)).toEqual([
+      "codex",
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+    ]);
+    expect(command.argv).toContain("--model");
+    expect(command.argv).toContain("gpt-5.2-codex");
+    expect(command.argv).toContain('model_reasoning_effort="high"');
+    expect(command.argv).toContain("--sandbox");
+    expect(command.argv).toContain("workspace-write");
+    expect(command.argv).toContain(await fsp.realpath(path.join(workspaceDir, "subdir")));
+    expect(command.argv.at(-1)).toBe("-");
+    expect(command.output_format).toBe("jsonl");
+  });
+
+  it("passes codex cli_session_ref through to codex exec resume", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "codex",
+        prompt: "continue",
+        cwd: workspaceDir,
+        cli_session_ref: {
+          agent_id: "codex",
+          native_session_id: FAKE_CODEX_THREAD_ID,
+        },
+        metadata: { codex: {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    expect(result.structuredContent.status).toBe("completed");
+    expect(result.structuredContent.cli_session_ref.native_session_id).toBe(
+      FAKE_CODEX_THREAD_ID,
+    );
+
+    const command = JSON.parse(
+      await fsp.readFile(
+        path.join(runDir, result.structuredContent.run_ref.run_id, "command.json"),
+        "utf8",
+      ),
+    );
+    expect(command.argv.slice(0, 4)).toEqual(["codex", "exec", "resume", FAKE_CODEX_THREAD_ID]);
+    expect(command.argv).toContain('sandbox_mode="workspace-write"');
+    expect(command.argv).not.toContain("--sandbox");
+  });
+
+  it("rejects a cli_session_ref whose agent_id does not match", async () => {
+    const result = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "codex",
+        prompt: "continue",
+        cwd: workspaceDir,
+        cli_session_ref: {
+          agent_id: "claude-code",
+          native_session_id: FAKE_CODEX_THREAD_ID,
+        },
+        metadata: { codex: {} },
+      },
+      { env },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/does not match agent_id/);
+  });
+
+  it("maps codex turn.failed onto a failed run with the turn error", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "codex",
+        prompt: "error",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { codex: {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    expect(result.structuredContent.status).toBe("failed");
+    expect(result.structuredContent.error.code).toBe("codex_turn_failed");
+    expect(result.content[0].text).toBe("fake codex failure");
+    expect(result.structuredContent.cli_session_ref.native_session_id).toBe(
+      FAKE_CODEX_THREAD_ID,
+    );
+  });
+
+  it("keeps the codex thread id when a run is cancelled mid-flight", async () => {
+    const accepted = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "codex",
+        prompt: "sleep",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { codex: {} },
+      },
+      { env },
+    );
+    const runId = accepted.structuredContent.run_ref.run_id;
+    await waitForSessionRef(runDir, runId);
+
+    const cancelled = await callAgentHubTool(
+      "cancel_agent_run",
+      {
+        run_ref: { run_id: runId },
+      },
+      { env },
+    );
+
+    expect(cancelled.structuredContent.status).toBe("cancelled");
+    expect(cancelled.structuredContent.cli_session_ref).toEqual({
+      agent_id: "codex",
+      native_session_id: FAKE_CODEX_THREAD_ID,
+    });
   });
 
   it("rejects cwd outside AGENT_HUB_CWD_ALLOWLIST", async () => {
@@ -678,6 +849,70 @@ process.stdin.on("end", () => {
     { mode: 0o755 },
   );
   await fsp.chmod(target, 0o755);
+}
+
+async function writeFakeCodex(target) {
+  await fsp.writeFile(
+    target,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  process.stdout.write("codex-cli 0.0.0-test\\n");
+  process.exit(0);
+}
+const resumeIndex = args.indexOf("resume");
+const threadId = resumeIndex >= 0 ? args[resumeIndex + 1] : "${FAKE_CODEX_THREAD_ID}";
+let input = "";
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const writeEvent = (value) => {
+    process.stdout.write(JSON.stringify(value) + "\\n");
+  };
+  writeEvent({ type: "thread.started", thread_id: threadId });
+  writeEvent({ type: "turn.started" });
+  const prompt = input.trim();
+  if (prompt === "sleep") {
+    setTimeout(() => {
+      writeEvent({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "late codex result" }
+      });
+      writeEvent({ type: "turn.completed", usage: {} });
+    }, 30000);
+    return;
+  }
+  if (prompt === "error") {
+    writeEvent({ type: "error", message: "fake codex failure" });
+    writeEvent({ type: "turn.failed", error: { message: "fake codex failure" } });
+    process.exitCode = 1;
+    return;
+  }
+  writeEvent({
+    type: "item.completed",
+    item: { id: "item_0", type: "agent_message", text: "fake codex result: " + prompt }
+  });
+  writeEvent({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } });
+});
+`,
+    { mode: 0o755 },
+  );
+  await fsp.chmod(target, 0o755);
+}
+
+async function waitForSessionRef(root, runId) {
+  const statePath = path.join(root, runId, "state.json");
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const text = await fsp.readFile(statePath, "utf8").catch(() => "{}");
+    const state = JSON.parse(text);
+    if (state.cli_session_ref?.native_session_id) {
+      return state.cli_session_ref;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("run did not record a cli_session_ref");
 }
 
 async function waitForEventLog(root, runId) {

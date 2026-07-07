@@ -1,7 +1,10 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  assertMetadataString,
+  defaultModelFromEnv,
+  runVersionCommand,
+} from "./adapter-utils.js";
 
 export const CLAUDE_AGENT_ID = "claude-code";
 const AVAILABILITY_CACHE_MS = 30000;
@@ -42,7 +45,7 @@ export async function getClaudeAvailability() {
   ) {
     return availabilityCache.value;
   }
-  const result = await runCommand("claude", ["--version"], 5000);
+  const result = await runVersionCommand("claude", ["--version"], 5000);
   const value =
     result.error || result.code !== 0 || !isClaudeVersionOutput(result.stdout, result.stderr)
       ? {
@@ -67,24 +70,6 @@ export async function getClaudeAvailability() {
 function isClaudeVersionOutput(stdout, stderr) {
   const text = `${stdout}\n${stderr}`.trim();
   return text.includes("Claude Code");
-}
-
-function assertMetadataString(value, key) {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${key} must be a non-empty string`);
-  }
-  return value;
-}
-
-function defaultModelFromEnv(env) {
-  const value = env?.[DEFAULT_MODEL_ENV_KEY];
-  if (typeof value !== "string" || value.trim() === "") {
-    return null;
-  }
-  return value.trim();
 }
 
 export function buildClaudeCommand({ request, effectiveCliSessionRef, env = process.env }) {
@@ -120,7 +105,8 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
   }
 
   const model =
-    assertMetadataString(claude.model, "metadata.claude.model") ?? defaultModelFromEnv(env);
+    assertMetadataString(claude.model, "metadata.claude.model") ??
+    defaultModelFromEnv(env, DEFAULT_MODEL_ENV_KEY);
   if (model) {
     argv.push("--model", model);
   }
@@ -276,6 +262,54 @@ function findSessionId(resultEvent, events) {
   return null;
 }
 
+export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat }) {
+  if (code !== 0) {
+    return {
+      status: "failed",
+      error: {
+        code: "cli_exit_nonzero",
+        message: `Claude exited with code ${code}${signal ? ` and signal ${signal}` : ""}`,
+        exit_code: code,
+        signal,
+        stderr_tail: String(stderr ?? "").trimEnd().slice(-4000),
+      },
+    };
+  }
+  let parsed;
+  try {
+    parsed = parseClaudeOutput(stdout, outputFormat);
+  } catch (error) {
+    return {
+      status: "failed",
+      error: {
+        code: "stdout_parse_failed",
+        message: error instanceof Error ? error.message : String(error),
+        exit_code: code,
+        stdout_tail: String(stdout ?? "").trimEnd().slice(-4000),
+      },
+    };
+  }
+  if (parsed.isError) {
+    return {
+      status: "failed",
+      error: {
+        code: "claude_is_error",
+        message: "Claude returned is_error=true",
+        result_text: parsed.resultText || "Claude returned is_error=true",
+        result_json: parsed.resultJson,
+        exit_code: code,
+        cli_session_ref: parsed.cliSessionRef,
+      },
+    };
+  }
+  return {
+    status: "completed",
+    resultText: parsed.resultText,
+    resultJson: parsed.resultJson,
+    cliSessionRef: parsed.cliSessionRef,
+  };
+}
+
 export async function listClaudeAgent() {
   const availability = await getClaudeAvailability();
   return {
@@ -290,37 +324,4 @@ export async function listClaudeAgent() {
       command: "claude -p --input-format text --output-format stream-json --verbose",
     },
   };
-}
-
-async function runCommand(command, args, timeoutMs) {
-  const child = spawn(command, args, {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const stdout = [];
-  const stderr = [];
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, timeoutMs);
-
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-
-  try {
-    const result = await Promise.race([
-      once(child, "close").then(([code, signal]) => ({ code, signal })),
-      once(child, "error").then(([error]) => ({ code: null, signal: null, error })),
-    ]);
-    if (timedOut && !result.error) {
-      result.error = new Error(`Timed out after ${timeoutMs}ms`);
-    }
-    return {
-      ...result,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8"),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
 }

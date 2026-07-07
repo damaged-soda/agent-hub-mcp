@@ -5,4 +5,14 @@ describe("request path validation", () => {
   it("rejects relative cwd values", async () => {
     await expect(validateRequestPaths(".", {})).rejects.toThrow(/cwd must be an absolute path/);
   });
+
+  it("validates add_dirs under the adapter metadata key", async () => {
+    await expect(
+      validateRequestPaths(
+        process.cwd(),
+        { codex: { add_dirs: "not-an-array" } },
+        { metadataKey: "codex" },
+      ),
+    ).rejects.toThrow(/metadata.codex.add_dirs must be an array/);
+  });
 });
