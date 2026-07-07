@@ -35,6 +35,23 @@ CLI 参数处理规则：
 - 其他 CLI 行为参数来自 adapter metadata 或 CLI 默认配置。
 - `command.json` 记录实际 argv，便于复现。
 
+### 统一 metadata 层
+
+`metadata` 顶层提供一组跨 adapter 的统一字段，adapter 负责翻译成各自 CLI 的原生参数；
+`metadata.claude.*` / `metadata.codex.*` 命名空间是原生逃生通道，同名语义字段以命名空
+间为准：
+
+| 统一字段 | 含义 | claude-code 映射 | codex 映射 |
+|---|---|---|---|
+| `model` | 模型名（按目标 CLI 的命名） | `--model` | `--model` |
+| `effort` | 推理强度（`low`/`medium`/`high` 两边通用） | `--effort` | `-c model_reasoning_effort` |
+| `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` |
+| `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` |
+
+错误码同样统一：模型侧失败（Claude `is_error`、Codex `turn.failed`）一律记为
+`agent_error`；`cli_exit_nonzero`、`stdout_parse_failed` 等 hub 层错误码本就与
+adapter 无关。原生细节保留在 `error.message` 与 `result.txt`。
+
 ### Run 归 Agent Hub
 
 Run 是 Agent Hub 管理的一次 CLI 执行。每次 `dispatch_to_agent` 都创建一个新的
@@ -424,13 +441,15 @@ claude -p --input-format text --output-format stream-json --verbose
 - prompt 通过 stdin 传入，内容来自 `input.txt`。
 - 新会话时 Agent Hub 生成 UUID，并传入 `--session-id <uuid>`。
 - continuation 时传入 `--resume <native_session_id>`。
-- `metadata.claude.model` 映射到 `--model`；未提供时回退到服务端环境变量 `AGENT_HUB_CLAUDE_MODEL`，两者都未设置时不传 `--model`（此时 Claude CLI 使用本地保存的默认模型）。
-- `metadata.claude.effort` 映射到 `--effort`。
+- `metadata.claude.model`（或统一的 `metadata.model`）映射到 `--model`；未提供时回退到服务端环境变量 `AGENT_HUB_CLAUDE_MODEL`，都未设置时不传 `--model`（此时 Claude CLI 使用本地保存的默认模型）。
+- `metadata.claude.effort`（或统一的 `metadata.effort`）映射到 `--effort`。
 - `metadata.claude.agent` 映射到 `--agent`。
-- `metadata.claude.add_dirs` 映射到重复的 `--add-dir`。
+- `metadata.claude.add_dirs`（或统一的 `metadata.add_dirs`）映射到重复的 `--add-dir`。
 - `metadata.claude.output_format` 映射到 `--output-format`，默认 `stream-json`。
-- `metadata.claude.permission_mode` 映射到 `--permission-mode`。
-- 未设置 `metadata.claude.permission_mode` 时，Agent Hub 默认传入 `--permission-mode auto`。
+- `metadata.claude.permission_mode` 映射到 `--permission-mode`，优先于统一的
+  `metadata.permission`（映射：`read-only` → `plan`，`auto` → `auto`，`full` →
+  `bypassPermissions`）。
+- 两者都未设置时，Agent Hub 默认传入 `--permission-mode auto`。
 
 `dispatch_to_agent` 返回的 `cli_session_ref.native_session_id` 是本次传给 Claude 的
 session UUID。Runner 完成后，终态 `cli_session_ref.native_session_id` 使用 Claude
@@ -451,10 +470,11 @@ Claude stdout 处理规则：
 
 Codex adapter 使用 `codex exec` 非交互模式。
 
-基础命令：
+基础命令（默认统一权限 `auto`）：
 
 ```text
-codex exec --json --skip-git-repo-check --sandbox workspace-write -
+codex exec --json --skip-git-repo-check --sandbox workspace-write \
+  -c sandbox_workspace_write.network_access=true -
 ```
 
 执行规则：
@@ -464,12 +484,17 @@ codex exec --json --skip-git-repo-check --sandbox workspace-write -
 - continuation 使用 `codex exec resume <native_session_id>`；session id 是位置参数，
   必须是 thread UUID，其他字符串在 dispatch 和命令构建两处都会被拒绝（防止
   `--last` 之类的值被解析成 codex 选项）。
-- `metadata.codex.model` 映射到 `--model`；未提供时回退到服务端环境变量
-  `AGENT_HUB_CODEX_MODEL`，两者都未设置时不传 `--model`。
-- `metadata.codex.effort` 映射到 `-c model_reasoning_effort="<effort>"`。
-- `metadata.codex.sandbox` 映射到 `--sandbox`，默认 `workspace-write`；允许值为
+- `metadata.codex.model`（或统一的 `metadata.model`）映射到 `--model`；未提供时回退到
+  服务端环境变量 `AGENT_HUB_CODEX_MODEL`，都未设置时不传 `--model`。
+- `metadata.codex.effort`（或统一的 `metadata.effort`）映射到
+  `-c model_reasoning_effort="<effort>"`。
+- 统一的 `metadata.permission` 映射到 sandbox：`read-only` → `read-only`，`auto`（默认）
+  → `workspace-write` 加 `-c sandbox_workspace_write.network_access=true`（对齐 Claude
+  auto 的联网能力），`full` → `danger-full-access`。
+- `metadata.codex.sandbox` 是原生逃生通道，设置后优先于 `metadata.permission`，
+  并保留 codex 原生语义（`workspace-write` 默认禁网）；允许值为
   `read-only`、`workspace-write`、`danger-full-access`。
-- `metadata.codex.add_dirs` 映射到重复的 `--add-dir`。
+- `metadata.codex.add_dirs`（或统一的 `metadata.add_dirs`）映射到重复的 `--add-dir`。
 - `codex exec resume` 的 flag 集合比 `codex exec` 窄：sandbox 通过
   `-c sandbox_mode="<mode>"` 传递，add_dirs 通过
   `-c sandbox_workspace_write.writable_roots=[...]` 传递。
@@ -486,7 +511,7 @@ Codex stdout 处理规则：
 - runner 在运行中一旦观察到 `thread.started` 就把 `cli_session_ref` 写入
   `state.json`，因此取消的 run 仍保留可 resume 的 thread id。
 - 出现 `turn.failed`（或 turn 未完成且有 `error` 事件）时状态为 `failed`，错误码为
-  `codex_turn_failed`，错误消息取自事件。`turn.completed` 之前被重试掉的 `error`
+  `agent_error`，错误消息取自事件。`turn.completed` 之前被重试掉的 `error`
   事件不视为失败。
 - exit code 非 0 且没有失败事件时状态为 `failed`，错误码为 `cli_exit_nonzero`。
 - 缺少 `agent_message` 或 `thread_id` 时状态为 `failed`，错误码为

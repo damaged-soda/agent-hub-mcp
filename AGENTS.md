@@ -42,8 +42,8 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - `cwd` must remain an explicit absolute directory from the request; `metadata.claude.add_dirs` and `metadata.codex.add_dirs` must resolve through `src/security.js`.
-- Leave the default Claude permission behavior as `--permission-mode auto`. Do not use `bypassPermissions` in examples, defaults, or self-review paths unless the user explicitly asks.
-- Leave the default Codex sandbox as `--sandbox workspace-write`. Do not use `danger-full-access` or `--dangerously-bypass-approvals-and-sandbox` in examples, defaults, or self-review paths unless the user explicitly asks.
+- Unified metadata (`metadata.model` / `effort` / `permission` / `add_dirs`) maps to native flags per adapter; the adapter namespaces (`metadata.claude.*`, `metadata.codex.*`) take precedence. Model-side failures use the unified error code `agent_error`.
+- The default unified permission is `auto`: `--permission-mode auto` for Claude, `--sandbox workspace-write` plus `network_access=true` for Codex. Do not use `permission: "full"`, `bypassPermissions`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox` in examples, defaults, or self-review paths unless the user explicitly asks.
 - Keep process cancellation scoped to the recorded process group for the run.
 - Keep run directories and state/log artifacts private (`0700` directories, `0600` files where applicable).
 - Do not record environment variable values in command metadata.

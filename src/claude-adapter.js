@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   assertMetadataString,
   defaultModelFromEnv,
+  resolveUnifiedPermission,
   runVersionCommand,
 } from "./adapter-utils.js";
 
@@ -16,7 +17,11 @@ const PERMISSION_MODES = new Set([
   "dontAsk",
   "plan",
 ]);
-const DEFAULT_PERMISSION_MODE = "auto";
+const UNIFIED_PERMISSION_TO_MODE = {
+  "read-only": "plan",
+  auto: "auto",
+  full: "bypassPermissions",
+};
 const OUTPUT_FORMATS = new Set(["json", "stream-json"]);
 const DEFAULT_OUTPUT_FORMAT = "stream-json";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CLAUDE_MODEL";
@@ -81,7 +86,8 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
     throw new Error("effective_cli_session_ref.native_session_id must be a non-empty string");
   }
   const usingResolvedMetadata = Boolean(request.resolved_metadata);
-  const claude = (request.resolved_metadata ?? request.metadata)?.claude ?? {};
+  const meta = request.resolved_metadata ?? request.metadata ?? {};
+  const claude = meta.claude ?? {};
   const outputFormat =
     assertMetadataString(claude.output_format, "metadata.claude.output_format") ??
     DEFAULT_OUTPUT_FORMAT;
@@ -106,12 +112,15 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
 
   const model =
     assertMetadataString(claude.model, "metadata.claude.model") ??
+    assertMetadataString(meta.model, "metadata.model") ??
     defaultModelFromEnv(env, DEFAULT_MODEL_ENV_KEY);
   if (model) {
     argv.push("--model", model);
   }
 
-  const effort = assertMetadataString(claude.effort, "metadata.claude.effort");
+  const effort =
+    assertMetadataString(claude.effort, "metadata.claude.effort") ??
+    assertMetadataString(meta.effort, "metadata.effort");
   if (effort) {
     argv.push("--effort", effort);
   }
@@ -123,7 +132,7 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
 
   const permissionMode =
     assertMetadataString(claude.permission_mode, "metadata.claude.permission_mode") ??
-    DEFAULT_PERMISSION_MODE;
+    UNIFIED_PERMISSION_TO_MODE[resolveUnifiedPermission(meta)];
   if (!PERMISSION_MODES.has(permissionMode)) {
     throw new Error(
       `metadata.claude.permission_mode must be one of: ${Array.from(PERMISSION_MODES).join(
@@ -293,7 +302,7 @@ export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat
     return {
       status: "failed",
       error: {
-        code: "claude_is_error",
+        code: "agent_error",
         message: "Claude returned is_error=true",
         result_text: parsed.resultText || "Claude returned is_error=true",
         result_json: parsed.resultJson,

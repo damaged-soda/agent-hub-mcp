@@ -11,6 +11,24 @@ export function assertMetadataString(value, key) {
   return value;
 }
 
+// Unified permission surface shared by all adapters. Each adapter maps these
+// onto its CLI's native access control; the adapter's own metadata namespace
+// (metadata.claude.permission_mode / metadata.codex.sandbox) takes precedence.
+const UNIFIED_PERMISSIONS = new Set(["read-only", "auto", "full"]);
+
+export function resolveUnifiedPermission(metadata) {
+  const value = assertMetadataString(metadata?.permission, "metadata.permission");
+  if (value === null) {
+    return "auto";
+  }
+  if (!UNIFIED_PERMISSIONS.has(value)) {
+    throw new Error(
+      `metadata.permission must be one of: ${Array.from(UNIFIED_PERMISSIONS).join(", ")}`,
+    );
+  }
+  return value;
+}
+
 export function defaultModelFromEnv(env, envKey) {
   const value = env?.[envKey];
   if (typeof value !== "string" || value.trim() === "") {

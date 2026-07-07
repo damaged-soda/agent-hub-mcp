@@ -450,6 +450,7 @@ describe("MCP flow", () => {
     expect(command.argv).toContain('model_reasoning_effort="high"');
     expect(command.argv).toContain("--sandbox");
     expect(command.argv).toContain("workspace-write");
+    expect(command.argv).toContain("sandbox_workspace_write.network_access=true");
     expect(command.argv).toContain(await fsp.realpath(path.join(workspaceDir, "subdir")));
     expect(command.argv.at(-1)).toBe("-");
     expect(command.output_format).toBe("jsonl");
@@ -525,7 +526,7 @@ describe("MCP flow", () => {
     );
 
     expect(result.structuredContent.status).toBe("failed");
-    expect(result.structuredContent.error.code).toBe("codex_turn_failed");
+    expect(result.structuredContent.error.code).toBe("agent_error");
     expect(result.content[0].text).toBe("fake codex failure");
     expect(result.structuredContent.cli_session_ref.native_session_id).toBe(
       FAKE_CODEX_THREAD_ID,

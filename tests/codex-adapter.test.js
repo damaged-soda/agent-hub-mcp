@@ -84,7 +84,7 @@ describe("codex adapter", () => {
     expect(command.output_format).toBe("jsonl");
   });
 
-  it("defaults to workspace-write sandbox and stdin prompt", () => {
+  it("defaults to auto permission: workspace-write with network access", () => {
     const command = buildCodexCommand({
       request: { metadata: {} },
       effectiveCliSessionRef: createCodexSessionRef(null),
@@ -97,8 +97,62 @@ describe("codex adapter", () => {
       "--skip-git-repo-check",
       "--sandbox",
       "workspace-write",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
       "-",
     ]);
+  });
+
+  it("maps unified permission read-only and full onto sandbox modes", () => {
+    const readOnly = buildCodexCommand({
+      request: { metadata: { permission: "read-only" } },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+    });
+    expect(readOnly.argv).toContain("read-only");
+    expect(readOnly.argv).not.toContain("sandbox_workspace_write.network_access=true");
+
+    const full = buildCodexCommand({
+      request: { metadata: { permission: "full" } },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+    });
+    expect(full.argv).toContain("danger-full-access");
+    expect(full.argv).not.toContain("sandbox_workspace_write.network_access=true");
+  });
+
+  it("lets native metadata.codex.sandbox opt out of the auto network override", () => {
+    const command = buildCodexCommand({
+      request: { metadata: { codex: { sandbox: "workspace-write" } } },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+    });
+    expect(command.argv).toContain("workspace-write");
+    expect(command.argv).not.toContain("sandbox_workspace_write.network_access=true");
+  });
+
+  it("maps unified model and effort when the codex namespace omits them", () => {
+    const command = buildCodexCommand({
+      request: { metadata: { model: "gpt-5.2-codex", effort: "medium" } },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+    });
+    expect(command.argv).toContain("gpt-5.2-codex");
+    expect(command.argv).toContain('model_reasoning_effort="medium"');
+
+    const overridden = buildCodexCommand({
+      request: {
+        metadata: { model: "gpt-5.2-codex", codex: { model: "o4-mini" } },
+      },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+    });
+    const modelIndex = overridden.argv.indexOf("--model");
+    expect(overridden.argv[modelIndex + 1]).toBe("o4-mini");
+  });
+
+  it("rejects unknown unified permissions", () => {
+    expect(() =>
+      buildCodexCommand({
+        request: { metadata: { permission: "yolo" } },
+        effectiveCliSessionRef: createCodexSessionRef(null),
+      }),
+    ).toThrow(/metadata.permission must be one of/);
   });
 
   it("rejects resume session ids that are not thread UUIDs", () => {
@@ -190,6 +244,19 @@ describe("codex adapter", () => {
     expect(command.argv).not.toContain("--add-dir");
   });
 
+  it("keeps the auto network override on resume", () => {
+    const command = buildCodexCommand({
+      request: { metadata: {} },
+      effectiveCliSessionRef: createCodexSessionRef({
+        agent_id: "codex",
+        native_session_id: THREAD_ID,
+      }),
+    });
+
+    expect(command.argv).toContain('sandbox_mode="workspace-write"');
+    expect(command.argv).toContain("sandbox_workspace_write.network_access=true");
+  });
+
   it("parses the event stream into result text and session ref", () => {
     const parsed = parseCodexStdout(successStdout());
     expect(parsed.resultText).toBe("hello");
@@ -213,7 +280,7 @@ describe("codex adapter", () => {
     expect(outcome.cliSessionRef.native_session_id).toBe(THREAD_ID);
   });
 
-  it("interprets turn.failed as codex_turn_failed with session ref", () => {
+  it("interprets turn.failed as agent_error with session ref", () => {
     const stdout = [
       JSON.stringify({ type: "thread.started", thread_id: THREAD_ID }),
       JSON.stringify({ type: "turn.started" }),
@@ -223,7 +290,7 @@ describe("codex adapter", () => {
     const outcome = interpretCodexExit({ code: 1, signal: null, stdout, stderr: "" });
 
     expect(outcome.status).toBe("failed");
-    expect(outcome.error.code).toBe("codex_turn_failed");
+    expect(outcome.error.code).toBe("agent_error");
     expect(outcome.error.message).toBe("boom");
     expect(outcome.error.result_text).toBe("boom");
     expect(outcome.error.cli_session_ref.native_session_id).toBe(THREAD_ID);

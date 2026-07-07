@@ -94,7 +94,7 @@ Use the returned `run_ref` with `wait_agent_run`, or with `query_agent_run` when
 |---|---|---|
 | `claude-code` appears under `unavailable_agents` | `claude --version` failed or did not report Claude Code. | Fix PATH or Claude Code installation. |
 | `codex` appears under `unavailable_agents` | `codex --version` failed. | Fix PATH or Codex CLI installation. |
-| `codex_turn_failed` | Codex reported `turn.failed` (auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check `codex login` status and the requested model. |
+| `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |
 | `status: "running"` with `timed_out: true` | Agent Hub's wait window expired while the CLI was still running. | Call `query_agent_run` or `wait_agent_run` again with the same `run_ref`; cancel only if the user wants to stop it. |

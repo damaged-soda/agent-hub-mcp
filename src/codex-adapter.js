@@ -2,13 +2,22 @@ import path from "node:path";
 import {
   assertMetadataString,
   defaultModelFromEnv,
+  resolveUnifiedPermission,
   runVersionCommand,
 } from "./adapter-utils.js";
 
 export const CODEX_AGENT_ID = "codex";
 const AVAILABILITY_CACHE_MS = 30000;
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
-const DEFAULT_SANDBOX_MODE = "workspace-write";
+// Unified permission "auto" matches Claude's auto mode: writable workspace plus
+// network access. Setting metadata.codex.sandbox opts into codex-native
+// semantics instead (workspace-write keeps codex's network-off default).
+const UNIFIED_PERMISSION_TO_SANDBOX = {
+  "read-only": "read-only",
+  auto: "workspace-write",
+  full: "danger-full-access",
+};
+const NETWORK_ACCESS_OVERRIDE = "sandbox_workspace_write.network_access=true";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CODEX_MODEL";
 const EFFORT_PATTERN = /^[A-Za-z0-9_-]+$/;
 // Codex thread ids are UUIDs. The resume session id is a positional argv value,
@@ -80,7 +89,8 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     assertCodexSessionId(effectiveCliSessionRef.native_session_id);
   }
   const usingResolvedMetadata = Boolean(request.resolved_metadata);
-  const codex = (request.resolved_metadata ?? request.metadata)?.codex ?? {};
+  const meta = request.resolved_metadata ?? request.metadata ?? {};
+  const codex = meta.codex ?? {};
 
   const argv = ["codex", "exec"];
   if (resumed) {
@@ -90,12 +100,15 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
 
   const model =
     assertMetadataString(codex.model, "metadata.codex.model") ??
+    assertMetadataString(meta.model, "metadata.model") ??
     defaultModelFromEnv(env, DEFAULT_MODEL_ENV_KEY);
   if (model) {
     argv.push("--model", model);
   }
 
-  const effort = assertMetadataString(codex.effort, "metadata.codex.effort");
+  const effort =
+    assertMetadataString(codex.effort, "metadata.codex.effort") ??
+    assertMetadataString(meta.effort, "metadata.effort");
   if (effort) {
     if (!EFFORT_PATTERN.test(effort)) {
       throw new Error(
@@ -105,12 +118,20 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     argv.push("-c", `model_reasoning_effort="${effort}"`);
   }
 
-  const sandbox =
-    assertMetadataString(codex.sandbox, "metadata.codex.sandbox") ?? DEFAULT_SANDBOX_MODE;
-  if (!SANDBOX_MODES.has(sandbox)) {
-    throw new Error(
-      `metadata.codex.sandbox must be one of: ${Array.from(SANDBOX_MODES).join(", ")}`,
-    );
+  const nativeSandbox = assertMetadataString(codex.sandbox, "metadata.codex.sandbox");
+  let sandbox;
+  let networkAccess = false;
+  if (nativeSandbox) {
+    if (!SANDBOX_MODES.has(nativeSandbox)) {
+      throw new Error(
+        `metadata.codex.sandbox must be one of: ${Array.from(SANDBOX_MODES).join(", ")}`,
+      );
+    }
+    sandbox = nativeSandbox;
+  } else {
+    const permission = resolveUnifiedPermission(meta);
+    sandbox = UNIFIED_PERMISSION_TO_SANDBOX[permission];
+    networkAccess = permission === "auto";
   }
 
   const addDirs = codex.add_dirs ?? [];
@@ -131,6 +152,9 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
   // and writable roots go through -c config overrides on continuations.
   if (resumed) {
     argv.push("-c", `sandbox_mode="${sandbox}"`);
+    if (networkAccess) {
+      argv.push("-c", NETWORK_ACCESS_OVERRIDE);
+    }
     if (resolvedAddDirs.length > 0) {
       argv.push(
         "-c",
@@ -139,6 +163,9 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     }
   } else {
     argv.push("--sandbox", sandbox);
+    if (networkAccess) {
+      argv.push("-c", NETWORK_ACCESS_OVERRIDE);
+    }
     for (const addDir of resolvedAddDirs) {
       argv.push("--add-dir", addDir);
     }
@@ -217,7 +244,7 @@ export function interpretCodexExit({ code, signal, stdout, stderr }) {
     return {
       status: "failed",
       error: {
-        code: "codex_turn_failed",
+        code: "agent_error",
         message: detail.slice(0, TAIL_LIMIT),
         result_text: detail,
         result_json: failureEvent,

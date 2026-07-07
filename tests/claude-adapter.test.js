@@ -104,6 +104,46 @@ describe("claude adapter", () => {
     expect(command.argv).not.toContain("--model");
   });
 
+  it("maps unified metadata onto Claude flags with namespace precedence", () => {
+    const unified = buildClaudeCommand({
+      request: {
+        metadata: { model: "sonnet", effort: "low", permission: "read-only" },
+      },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+    });
+    expect(unified.argv).toContain("sonnet");
+    expect(unified.argv).toContain("low");
+    const modeIndex = unified.argv.indexOf("--permission-mode");
+    expect(unified.argv[modeIndex + 1]).toBe("plan");
+
+    const full = buildClaudeCommand({
+      request: { metadata: { permission: "full" } },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+    });
+    expect(full.argv).toContain("bypassPermissions");
+
+    const overridden = buildClaudeCommand({
+      request: {
+        metadata: { permission: "read-only", claude: { permission_mode: "acceptEdits" } },
+      },
+      effectiveCliSessionRef: {
+        agent_id: "claude-code",
+        native_session_id: "550e8400-e29b-41d4-a716-446655440000",
+        resumed: false,
+      },
+    });
+    expect(overridden.argv).toContain("acceptEdits");
+    expect(overridden.argv).not.toContain("plan");
+  });
+
   it("maps continuation sessions into --resume", () => {
     const command = buildClaudeCommand({
       request: { metadata: {} },

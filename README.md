@@ -49,7 +49,7 @@ The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex` (s
 
 Use the returned `run_ref` with `wait_agent_run` until the run reaches a terminal state. The server waits up to 10 minutes by default; if the MCP client times out first, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. `run_agent` is still available for short tasks that should finish inside the MCP client's tool timeout.
 
-`cwd` must be an existing absolute directory. If `metadata.claude.permission_mode` is omitted, Agent Hub passes `--permission-mode auto` to Claude Code. If `metadata.codex.sandbox` is omitted, Agent Hub passes `--sandbox workspace-write` to Codex.
+`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `effort`, `permission`, `add_dirs`) work for both adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code and `--sandbox workspace-write` with network access for Codex. Adapter namespaces (`metadata.claude`, `metadata.codex`) override the unified fields.
 
 ## MCP Server
 
