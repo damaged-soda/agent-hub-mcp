@@ -277,7 +277,7 @@ export async function recentEventSummary(runDir, maxEvents = 5) {
     } catch {
       continue;
     }
-    const summary = summarizeClaudeEvent(event);
+    const summary = summarizeClaudeEvent(event) ?? summarizeCodexEvent(event);
     if (summary) {
       summaries.push(summary);
     }
@@ -328,6 +328,67 @@ function summarizeClaudeEvent(event) {
       type: "rate_limit",
       message: status ? `Rate limit status: ${status}.` : "Rate limit event.",
       session_id: typeof event.session_id === "string" ? event.session_id : undefined,
+    };
+  }
+  return null;
+}
+
+function summarizeCodexEvent(event) {
+  if (event?.type === "thread.started" && typeof event.thread_id === "string") {
+    return {
+      type: "system",
+      message: "Codex session started.",
+      session_id: event.thread_id,
+    };
+  }
+  if (event?.type === "item.started" && event.item?.type === "command_execution") {
+    const command = typeof event.item.command === "string" ? event.item.command.trim() : "";
+    return {
+      type: "assistant",
+      message: command ? `Running command: ${truncate(command, 200)}` : "Running a command.",
+    };
+  }
+  if (event?.type === "item.completed") {
+    const item = event.item;
+    if (item?.type === "agent_message" && typeof item.text === "string" && item.text.trim()) {
+      return {
+        type: "assistant",
+        message: truncate(item.text.trim(), 1000),
+      };
+    }
+    if (item?.type === "file_change" && Array.isArray(item.changes) && item.changes.length > 0) {
+      const paths = item.changes
+        .map((change) => change?.path)
+        .filter((value) => typeof value === "string")
+        .slice(0, 3);
+      if (paths.length > 0) {
+        return {
+          type: "assistant",
+          message: `Edited files: ${paths.join(", ")}${item.changes.length > 3 ? ", ..." : ""}`,
+        };
+      }
+    }
+  }
+  if (event?.type === "turn.completed") {
+    return {
+      type: "result",
+      message: "Completed",
+    };
+  }
+  if (event?.type === "turn.failed") {
+    const message =
+      typeof event.error?.message === "string" && event.error.message.trim()
+        ? ` ${truncate(event.error.message.trim(), 1000)}`
+        : "";
+    return {
+      type: "result",
+      message: `Failed${message}`,
+    };
+  }
+  if (event?.type === "error" && typeof event.message === "string" && event.message.trim()) {
+    return {
+      type: "error",
+      message: truncate(event.message.trim(), 1000),
     };
   }
   return null;

@@ -19,6 +19,31 @@ describe("agent environment", () => {
     expect(currentEnvKeys(env)).not.toContain("ANTHROPIC_API_KEY");
   });
 
+  it("forwards Codex auth and default-model vars", () => {
+    const env = buildAgentEnv({
+      PATH: "/bin",
+      OPENAI_API_KEY: "secret",
+      OPENAI_BASE_URL: "https://example.invalid/v1",
+      AGENT_HUB_CODEX_MODEL: "gpt-5.2-codex",
+    });
+
+    expect(env.OPENAI_API_KEY).toBe("secret");
+    expect(env.OPENAI_BASE_URL).toBe("https://example.invalid/v1");
+    expect(env.AGENT_HUB_CODEX_MODEL).toBe("gpt-5.2-codex");
+    expect(currentEnvKeys(env)).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("forwards server-side default effort vars", () => {
+    const env = buildAgentEnv({
+      PATH: "/bin",
+      AGENT_HUB_CLAUDE_EFFORT: "high",
+      AGENT_HUB_CODEX_EFFORT: "xhigh",
+    });
+
+    expect(env.AGENT_HUB_CLAUDE_EFFORT).toBe("high");
+    expect(env.AGENT_HUB_CODEX_EFFORT).toBe("xhigh");
+  });
+
   it("forwards namespace redirect vars when present in the server env", () => {
     const env = buildAgentEnv({
       PATH: "/bin",

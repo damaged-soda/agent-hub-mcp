@@ -15,7 +15,7 @@ This guide is for MCP clients that want to call local agent CLIs through Agent H
 }
 ```
 
-The server currently exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code.
+The server exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code, and the `codex` adapter when `codex --version` succeeds.
 
 For Codex clients, set the MCP server's `tool_timeout_sec` based on how long the host should allow a single `wait_agent_run` call to remain open. Agent Hub's server-side wait window is 10 minutes; a shorter host timeout only aborts that MCP tool call, not the background run. To let Agent Hub return its own `timed_out: true` snapshot, set the host timeout above 10 minutes:
 
@@ -65,8 +65,8 @@ Dispatches a run and waits until it reaches a terminal state or the timeout expi
 
 Important request rules:
 
-- `agent_id` must be `claude-code`.
-- `prompt` is passed to Claude Code through stdin without wrapper text.
+- `agent_id` must be `claude-code` or `codex`.
+- `prompt` is passed to the agent CLI through stdin without wrapper text.
 - `cwd` must be an existing absolute directory.
 - `timeout_ms` defaults to `30000` and is capped at `3600000`.
 - `poll_interval_ms` defaults to `1000`.
@@ -133,6 +133,22 @@ Requests cancellation of the run process group:
 }
 ```
 
+## Unified Metadata
+
+Top-level `metadata` fields work for every adapter; the adapter translates them to native CLI flags. The adapter namespaces below (`metadata.claude`, `metadata.codex`) remain available as native escape hatches and take precedence over the unified fields.
+
+| Field | Meaning | claude-code | codex |
+|---|---|---|---|
+| `model` | Model name in the target CLI's naming | `--model` | `--model` |
+| `permission` | `read-only`, `auto` (default), or `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write` + network / `danger-full-access` |
+| `add_dirs` | Extra writable directories (resolved and allowlist-checked) | `--add-dir` | `--add-dir` |
+
+Effort is deliberately not unified: each CLI has its own evolving value vocabulary, so Agent Hub does not enumerate valid values — it passes the string through and lets the target CLI accept or reject it (rejections surface through the normal failure path). Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`. The codex-side `[A-Za-z0-9_-]+` check is TOML-injection hygiene for the `-c` override, not a value assumption.
+
+With the default `permission: "auto"`, both adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
+
+Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`); the native detail stays in `error.message` and `result.txt`. `cli_exit_nonzero` and `stdout_parse_failed` are adapter-independent as before.
+
 ## Claude Metadata
 
 `metadata.claude` maps to Claude Code CLI flags:
@@ -140,7 +156,7 @@ Requests cancellation of the run process group:
 | Field | CLI flag | Notes |
 |---|---|---|
 | `model` | `--model` | Optional non-empty string. |
-| `effort` | `--effort` | Optional non-empty string. |
+| `effort` | `--effort` | Optional non-empty string; falls back to `AGENT_HUB_CLAUDE_EFFORT`. |
 | `agent` | `--agent` | Optional non-empty string. |
 | `output_format` | `--output-format` | Defaults to `stream-json`; set to `json` for legacy single-result output. |
 | `permission_mode` | `--permission-mode` | Defaults to `auto`. |
@@ -148,9 +164,25 @@ Requests cancellation of the run process group:
 
 Supported `permission_mode` values are `acceptEdits`, `auto`, `bypassPermissions`, `default`, `dontAsk`, and `plan`. Normal integrations should omit the field and let Agent Hub pass `auto`.
 
+## Codex Metadata
+
+`metadata.codex` maps to Codex CLI flags:
+
+| Field | CLI flag | Notes |
+|---|---|---|
+| `model` | `--model` | Optional non-empty string. |
+| `effort` | `-c model_reasoning_effort="…"` | Optional; letters, digits, hyphens, underscores only; falls back to `AGENT_HUB_CODEX_EFFORT`. |
+| `sandbox` | `--sandbox` | Native escape hatch; overrides unified `permission` and keeps codex-native semantics (`workspace-write` without network). One of `read-only`, `workspace-write`, `danger-full-access`. |
+| `add_dirs` | `--add-dir` | Array of directories resolved and allowlist-checked before execution. |
+
+On continuations (`codex exec resume`) the sandbox and writable roots are passed as `-c sandbox_mode="…"` and `-c sandbox_workspace_write.writable_roots=[…]` config overrides because the resume subcommand accepts a narrower flag set.
+
 ## Session Continuation
 
-For a new session, pass `cli_session_ref: null`. Agent Hub creates a UUID and passes it to Claude Code as `--session-id`.
+For a new session, pass `cli_session_ref: null`.
+
+- `claude-code`: Agent Hub creates a UUID and passes it as `--session-id`; the dispatch response already contains the `cli_session_ref`.
+- `codex`: Codex assigns the thread id itself, so the dispatch response has `cli_session_ref: null`. The id appears on running/terminal snapshots once Codex reports it (usually within the first second).
 
 To continue, pass back the previous terminal response's `cli_session_ref`:
 
@@ -161,7 +193,7 @@ To continue, pass back the previous terminal response's `cli_session_ref`:
 }
 ```
 
-Agent Hub then calls Claude Code with `--resume <native_session_id>`.
+Agent Hub then calls Claude Code with `--resume <native_session_id>`, or Codex with `codex exec resume <native_session_id>`. The `agent_id` inside `cli_session_ref` must match the request's `agent_id`, and a Codex `native_session_id` must be a thread UUID (it is a positional CLI argument, so other strings are rejected).
 
 ## Artifacts
 

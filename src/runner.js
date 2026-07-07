@@ -19,8 +19,11 @@ import {
   withStateLock,
   writeState,
 } from "./fs-store.js";
-import { buildClaudeCommand, parseClaudeOutput } from "./claude-adapter.js";
+import { getAdapter } from "./adapters.js";
 import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
+
+const EVENT_STREAM_FORMATS = new Set(["stream-json", "jsonl"]);
+const EARLY_SESSION_BUFFER_LIMIT = 65536;
 
 async function main() {
   const runDir = process.argv[2];
@@ -43,7 +46,8 @@ async function main() {
     return;
   }
 
-  const command = buildClaudeCommand({
+  const adapter = getAdapter(request.agent_id);
+  const command = adapter.buildCommand({
     request,
     effectiveCliSessionRef: request.effective_cli_session_ref,
   });
@@ -66,10 +70,10 @@ async function main() {
     created_at: nowIso(),
   });
 
-  await runCommand(runDir, request, command, agentEnv);
+  await runCommand(runDir, request, adapter, command, agentEnv);
 }
 
-async function runCommand(runDir, request, command, agentEnv) {
+async function runCommand(runDir, request, adapter, command, agentEnv) {
   const input = await fsp.readFile(path.join(runDir, "input.txt"));
   const stdoutLog = fs.createWriteStream(path.join(runDir, "stdout.log"), {
     flags: "a",
@@ -79,13 +83,12 @@ async function runCommand(runDir, request, command, agentEnv) {
     flags: "a",
     mode: 0o600,
   });
-  const eventsLog =
-    command.output_format === "stream-json"
-      ? fs.createWriteStream(path.join(runDir, "events.jsonl"), {
-          flags: "a",
-          mode: 0o600,
-        })
-      : null;
+  const eventsLog = EVENT_STREAM_FORMATS.has(command.output_format)
+    ? fs.createWriteStream(path.join(runDir, "events.jsonl"), {
+        flags: "a",
+        mode: 0o600,
+      })
+    : null;
   const stdoutChunks = [];
   const stderrChunks = [];
   let logWriteError = null;
@@ -108,7 +111,7 @@ async function runCommand(runDir, request, command, agentEnv) {
   // verifyProcessGroup confirms that group exists before state exposes it.
   childPgid = child.pid;
   if (!Number.isInteger(childPgid) || childPgid <= 0) {
-    throw new Error("Claude child process did not expose a pid");
+    throw new Error("Agent CLI child process did not expose a pid");
   }
   try {
     verifyProcessGroup(childPgid);
@@ -155,10 +158,54 @@ async function runCommand(runDir, request, command, agentEnv) {
     return;
   }
 
+  // For adapters whose CLI assigns the session id itself (Codex thread_id),
+  // capture it from the event stream as soon as it appears so cancelled runs
+  // still expose a resumable cli_session_ref.
+  let earlySessionDone =
+    typeof adapter.sessionRefFromEvent !== "function" ||
+    Boolean(publicCliSessionRef(request.effective_cli_session_ref));
+  let earlySessionBuffer = "";
+  const captureEarlySessionRef = (chunk) => {
+    earlySessionBuffer += chunk.toString("utf8");
+    let newlineIndex;
+    while (!earlySessionDone && (newlineIndex = earlySessionBuffer.indexOf("\n")) >= 0) {
+      const line = earlySessionBuffer.slice(0, newlineIndex).trim();
+      earlySessionBuffer = earlySessionBuffer.slice(newlineIndex + 1);
+      if (!line) {
+        continue;
+      }
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const sessionRef = adapter.sessionRefFromEvent(event);
+      if (sessionRef) {
+        earlySessionDone = true;
+        earlySessionBuffer = "";
+        // "cancelled" is included so a cancel that wins the state lock right
+        // after thread.started still ends up with a resumable session ref.
+        updateStateGuarded(
+          runDir,
+          { cli_session_ref: publicCliSessionRef(sessionRef) },
+          { ifStatus: ["running", "cancelled"] },
+        ).catch(() => undefined);
+      }
+    }
+    if (earlySessionBuffer.length > EARLY_SESSION_BUFFER_LIMIT) {
+      earlySessionDone = true;
+      earlySessionBuffer = "";
+    }
+  };
+
   child.stdout.on("data", (chunk) => {
     stdoutChunks.push(chunk);
     stdoutLog.write(chunk);
     eventsLog?.write(chunk);
+    if (!earlySessionDone) {
+      captureEarlySessionRef(chunk);
+    }
   });
   child.stderr.on("data", (chunk) => {
     stderrChunks.push(chunk);
@@ -239,61 +286,37 @@ async function runCommand(runDir, request, command, agentEnv) {
     });
     return;
   }
-  if (code !== 0) {
-    await failRun(runDir, {
-      code: "cli_exit_nonzero",
-      message: `Claude exited with code ${code}${signal ? ` and signal ${signal}` : ""}`,
-      exit_code: code,
-      signal,
-      stderr_tail: stderr.trimEnd().slice(-4000),
-    });
+  const outcome = adapter.interpretExit({
+    code,
+    signal,
+    stdout,
+    stderr,
+    outputFormat: command.output_format,
+  });
+  if (outcome.status !== "completed") {
+    await failRun(runDir, outcome.error);
     return;
   }
 
-  try {
-    const parsed = parseClaudeOutput(stdout, command.output_format);
-
-    if (parsed.isError) {
-      const text = parsed.resultText || "Claude returned is_error=true";
-      await failRun(runDir, {
-        code: "claude_is_error",
-        message: "Claude returned is_error=true",
-        result_text: text,
-        result_json: parsed.resultJson,
-        exit_code: code,
-        cli_session_ref: parsed.cliSessionRef,
-      });
+  await withStateLock(runDir, async () => {
+    const currentState = await readJsonIfExists(path.join(runDir, "state.json"));
+    if (currentState?.status !== "running") {
       return;
     }
-
-    await withStateLock(runDir, async () => {
-      const currentState = await readJsonIfExists(path.join(runDir, "state.json"));
-      if (currentState?.status !== "running") {
-        return;
-      }
-      await atomicWriteJson(path.join(runDir, "result.json"), parsed.resultJson);
-      await atomicWriteFile(path.join(runDir, "result.txt"), parsed.resultText);
-      await writeState(runDir, {
-        ...currentState,
-        status: "completed",
-        exit_code: code,
-        completed_at: nowIso(),
-        updated_at: nowIso(),
-        expires_at: expiresAt(),
-        result_path: "result.txt",
-        result_json_path: "result.json",
-        cli_session_ref: parsed.cliSessionRef,
-      });
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await failRun(runDir, {
-      code: "stdout_parse_failed",
-      message,
+    await atomicWriteJson(path.join(runDir, "result.json"), outcome.resultJson);
+    await atomicWriteFile(path.join(runDir, "result.txt"), outcome.resultText);
+    await writeState(runDir, {
+      ...currentState,
+      status: "completed",
       exit_code: code,
-      stdout_tail: stdout.trimEnd().slice(-4000),
+      completed_at: nowIso(),
+      updated_at: nowIso(),
+      expires_at: expiresAt(),
+      result_path: "result.txt",
+      result_json_path: "result.json",
+      cli_session_ref: outcome.cliSessionRef,
     });
-  }
+  });
 }
 
 async function failRun(runDir, error) {
@@ -334,7 +357,7 @@ function sanitizeStateError(error) {
 }
 
 function publicCliSessionRef(ref) {
-  if (!ref) {
+  if (!ref || typeof ref.native_session_id !== "string" || ref.native_session_id.trim() === "") {
     return null;
   }
   return {

@@ -24,12 +24,7 @@ import {
   withStateLock,
   writeState,
 } from "./fs-store.js";
-import {
-  CLAUDE_AGENT_ID,
-  createClaudeSessionRef,
-  getClaudeAvailability,
-  listClaudeAgent,
-} from "./claude-adapter.js";
+import { allAdapters, getAdapter } from "./adapters.js";
 import { validateRequestPaths } from "./security.js";
 import { buildAgentEnv } from "./env.js";
 import {
@@ -43,27 +38,21 @@ const CANCEL_GRACE_MS = 10000;
 
 export async function listAgents() {
   await cleanupExpiredRuns();
-  const claude = await listClaudeAgent();
+  const described = await Promise.all(allAdapters().map((adapter) => adapter.listAgent()));
   return {
-    agents: claude.available ? [claude] : [],
-    unavailable_agents: claude.available ? [] : [claude],
+    agents: described.filter((agent) => agent.available),
+    unavailable_agents: described.filter((agent) => !agent.available),
   };
 }
 
 function publicCliSessionRef(ref) {
-  if (!ref) {
+  if (!ref || typeof ref.native_session_id !== "string" || ref.native_session_id.trim() === "") {
     return null;
   }
   return {
     agent_id: ref.agent_id,
     native_session_id: ref.native_session_id,
   };
-}
-
-function assertAgent(agentId) {
-  if (agentId !== CLAUDE_AGENT_ID) {
-    throw new Error(`Unsupported agent_id: ${agentId}`);
-  }
 }
 
 function normalizeMetadata(metadata) {
@@ -78,25 +67,35 @@ function normalizeMetadata(metadata) {
 
 export async function dispatchToAgent(input) {
   await cleanupExpiredRuns();
-  assertAgent(input?.agent_id);
-  const availability = await getClaudeAvailability();
+  const adapter = getAdapter(input?.agent_id);
+  const availability = await adapter.getAvailability();
   if (!availability.available) {
-    throw new Error(`Claude Code CLI is not available: ${availability.reason}`);
+    throw new Error(`${adapter.displayName} CLI is not available: ${availability.reason}`);
   }
 
   if (typeof input.prompt !== "string") {
     throw new Error("prompt must be a string");
   }
+  if (
+    input.cli_session_ref?.agent_id &&
+    input.cli_session_ref.agent_id !== adapter.agentId
+  ) {
+    throw new Error(
+      `cli_session_ref.agent_id ${input.cli_session_ref.agent_id} does not match agent_id ${adapter.agentId}`,
+    );
+  }
   const metadata = normalizeMetadata(input.metadata);
-  const paths = await validateRequestPaths(input.cwd, metadata);
+  const paths = await validateRequestPaths(input.cwd, metadata, {
+    metadataKey: adapter.metadataKey,
+  });
   const resolvedMetadata = {
     ...metadata,
-    claude: {
-      ...(metadata.claude ?? {}),
+    [adapter.metadataKey]: {
+      ...(metadata[adapter.metadataKey] ?? {}),
       add_dirs: paths.addDirs,
     },
   };
-  const effectiveCliSessionRef = createClaudeSessionRef(input.cli_session_ref);
+  const effectiveCliSessionRef = adapter.createSessionRef(input.cli_session_ref);
   const runId = crypto.randomUUID();
   const runDir = await ensureRunDir(runId);
   const createdAt = nowIso();
