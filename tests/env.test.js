@@ -69,7 +69,7 @@ describe("namespace resolution from run cwd", () => {
   fs.writeFileSync(
     stubBin,
     `#!/bin/sh
-echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CODEX_HOME":"/home/u/ns/personal/codex","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
 `,
     { mode: 0o755 },
   );
@@ -96,6 +96,8 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       NS: "personal",
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CODEX_HOME: "/home/u/ns/personal/codex",
     });
   });
 
@@ -109,6 +111,8 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       NS: "personal",
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CODEX_HOME: "/home/u/ns/personal/codex",
     });
   });
 
@@ -130,11 +134,17 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
     });
   });
 
-  it("returns empty when direnv is unavailable", () => {
+  it("clears namespace keys when direnv is unavailable", () => {
     const env = resolveNamespaceEnv(stubDir, {
       PATH: "/bin",
       AGENT_HUB_DIRENV_BIN: path.join(stubDir, "missing-binary"),
     });
-    expect(env).toEqual({});
+    expect(env).toEqual({
+      NS: undefined,
+      GH_CONFIG_DIR: undefined,
+      GIT_CONFIG_GLOBAL: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      CODEX_HOME: undefined,
+    });
   });
 });

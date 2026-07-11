@@ -60,6 +60,10 @@ const DIRENV_CANDIDATES = [
   "/usr/bin/direnv",
 ];
 
+function clearedNamespaceEnv() {
+  return Object.fromEntries(NAMESPACE_ENV_KEYS.map((key) => [key, undefined]));
+}
+
 // Namespace rule (~/work/charter/NAMESPACE.md): the environment always follows
 // position — derive the workspace namespace from the run's cwd via direnv, regardless
 // of what the server process inherited. Stale DIRENV_* bookkeeping is stripped so the
@@ -70,6 +74,9 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
     if (!key.startsWith("DIRENV_")) {
       probeEnv[key] = value;
     }
+  }
+  for (const key of NAMESPACE_ENV_KEYS) {
+    delete probeEnv[key];
   }
   probeEnv.DIRENV_LOG_FORMAT = "";
   const candidates = source.AGENT_HUB_DIRENV_BIN
@@ -88,18 +95,18 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
       if (error?.code === "ENOENT") {
         continue;
       }
-      return {};
+      return clearedNamespaceEnv();
     }
     if (!stdout || !stdout.trim()) {
-      return {};
+      return clearedNamespaceEnv();
     }
     let parsed;
     try {
       parsed = JSON.parse(stdout);
     } catch {
-      return {};
+      return clearedNamespaceEnv();
     }
-    const env = {};
+    const env = clearedNamespaceEnv();
     for (const key of NAMESPACE_ENV_KEYS) {
       if (typeof parsed[key] === "string") {
         env[key] = parsed[key];
@@ -111,7 +118,7 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
     }
     return env;
   }
-  return {};
+  return clearedNamespaceEnv();
 }
 
 export function buildAgentEnv(source = process.env) {
