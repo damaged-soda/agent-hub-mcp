@@ -103,6 +103,10 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
     for (const key of NAMESPACE_ENV_KEYS) {
       if (typeof parsed[key] === "string") {
         env[key] = parsed[key];
+      } else if (Object.hasOwn(parsed, key) && parsed[key] === null) {
+        // direnv uses null to unset a variable inherited from another namespace.
+        // child_process omits undefined env values, so the overlay clears it.
+        env[key] = undefined;
       }
     }
     return env;

@@ -65,10 +65,18 @@ describe("agent environment", () => {
 describe("namespace resolution from run cwd", () => {
   const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hub-direnv-"));
   const stubBin = path.join(stubDir, "direnv-stub");
+  const unsetStubBin = path.join(stubDir, "direnv-unset-stub");
   fs.writeFileSync(
     stubBin,
     `#!/bin/sh
 echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+`,
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(
+    unsetStubBin,
+    `#!/bin/sh
+echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex"}'
 `,
     { mode: 0o755 },
   );
@@ -101,6 +109,24 @@ echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT
       NS: "personal",
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+    });
+  });
+
+  it("clears namespace keys that direnv returns as null", () => {
+    const env = resolveNamespaceEnv(stubDir, {
+      NS: "personal",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CODEX_HOME: "/home/u/ns/personal/codex",
+      AGENT_HUB_DIRENV_BIN: unsetStubBin,
+    });
+    expect(env).toEqual({
+      NS: undefined,
+      GH_CONFIG_DIR: undefined,
+      GIT_CONFIG_GLOBAL: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      CODEX_HOME: "/home/u/.codex",
     });
   });
 
