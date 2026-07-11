@@ -21,6 +21,7 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "DISABLE_AUTO_UPDATE",
   "FORCE_COLOR",
   "GH_CONFIG_DIR",
+  "GIT_CONFIG_GLOBAL",
   "HOME",
   "LANG",
   "LC_ALL",
@@ -44,7 +45,13 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "XDG_DATA_HOME",
 ]);
 
-const NAMESPACE_ENV_KEYS = ["NS", "GH_CONFIG_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+const NAMESPACE_ENV_KEYS = [
+  "NS",
+  "GH_CONFIG_DIR",
+  "GIT_CONFIG_GLOBAL",
+  "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
+];
 
 const DIRENV_CANDIDATES = [
   "direnv",
@@ -52,6 +59,10 @@ const DIRENV_CANDIDATES = [
   "/usr/local/bin/direnv",
   "/usr/bin/direnv",
 ];
+
+function clearedNamespaceEnv() {
+  return Object.fromEntries(NAMESPACE_ENV_KEYS.map((key) => [key, undefined]));
+}
 
 // Namespace rule (~/work/charter/NAMESPACE.md): the environment always follows
 // position — derive the workspace namespace from the run's cwd via direnv, regardless
@@ -63,6 +74,9 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
     if (!key.startsWith("DIRENV_")) {
       probeEnv[key] = value;
     }
+  }
+  for (const key of NAMESPACE_ENV_KEYS) {
+    delete probeEnv[key];
   }
   probeEnv.DIRENV_LOG_FORMAT = "";
   const candidates = source.AGENT_HUB_DIRENV_BIN
@@ -81,26 +95,30 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
       if (error?.code === "ENOENT") {
         continue;
       }
-      return {};
+      return clearedNamespaceEnv();
     }
     if (!stdout || !stdout.trim()) {
-      return {};
+      return clearedNamespaceEnv();
     }
     let parsed;
     try {
       parsed = JSON.parse(stdout);
     } catch {
-      return {};
+      return clearedNamespaceEnv();
     }
-    const env = {};
+    const env = clearedNamespaceEnv();
     for (const key of NAMESPACE_ENV_KEYS) {
       if (typeof parsed[key] === "string") {
         env[key] = parsed[key];
+      } else if (Object.hasOwn(parsed, key) && parsed[key] === null) {
+        // direnv uses null to unset a variable inherited from another namespace.
+        // child_process omits undefined env values, so the overlay clears it.
+        env[key] = undefined;
       }
     }
     return env;
   }
-  return {};
+  return clearedNamespaceEnv();
 }
 
 export function buildAgentEnv(source = process.env) {

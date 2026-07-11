@@ -48,13 +48,15 @@ describe("agent environment", () => {
     const env = buildAgentEnv({
       PATH: "/bin",
       NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
       CODEX_HOME: "/home/u/ns/personal/codex",
     });
 
     expect(env.NS).toBe("personal");
-    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/gh");
+    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/github/runtime");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/home/u/ns/personal/github/config/gitconfig");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/u/ns/personal/claude");
     expect(env.CODEX_HOME).toBe("/home/u/ns/personal/codex");
   });
@@ -63,10 +65,18 @@ describe("agent environment", () => {
 describe("namespace resolution from run cwd", () => {
   const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hub-direnv-"));
   const stubBin = path.join(stubDir, "direnv-stub");
+  const unsetStubBin = path.join(stubDir, "direnv-unset-stub");
   fs.writeFileSync(
     stubBin,
     `#!/bin/sh
-echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CODEX_HOME":"/home/u/ns/personal/codex","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+`,
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(
+    unsetStubBin,
+    `#!/bin/sh
+echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex"}'
 `,
     { mode: 0o755 },
   );
@@ -78,12 +88,16 @@ echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"b
   it("derives from cwd even when the server env carries another namespace", () => {
     const env = resolveNamespaceEnv(stubDir, {
       NS: "company",
-      GH_CONFIG_DIR: "/home/u/ns/company/gh",
+      GH_CONFIG_DIR: "/home/u/ns/company/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/company/github/config/gitconfig",
       AGENT_HUB_DIRENV_BIN: stubBin,
     });
     expect(env).toEqual({
       NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CODEX_HOME: "/home/u/ns/personal/codex",
     });
   });
 
@@ -95,15 +109,42 @@ echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"b
     });
     expect(env).toEqual({
       NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CODEX_HOME: "/home/u/ns/personal/codex",
     });
   });
 
-  it("returns empty when direnv is unavailable", () => {
+  it("clears namespace keys that direnv returns as null", () => {
+    const env = resolveNamespaceEnv(stubDir, {
+      NS: "personal",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CODEX_HOME: "/home/u/ns/personal/codex",
+      AGENT_HUB_DIRENV_BIN: unsetStubBin,
+    });
+    expect(env).toEqual({
+      NS: undefined,
+      GH_CONFIG_DIR: undefined,
+      GIT_CONFIG_GLOBAL: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      CODEX_HOME: "/home/u/.codex",
+    });
+  });
+
+  it("clears namespace keys when direnv is unavailable", () => {
     const env = resolveNamespaceEnv(stubDir, {
       PATH: "/bin",
       AGENT_HUB_DIRENV_BIN: path.join(stubDir, "missing-binary"),
     });
-    expect(env).toEqual({});
+    expect(env).toEqual({
+      NS: undefined,
+      GH_CONFIG_DIR: undefined,
+      GIT_CONFIG_GLOBAL: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      CODEX_HOME: undefined,
+    });
   });
 });

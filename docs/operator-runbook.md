@@ -41,7 +41,7 @@ node scripts/mcp-client.js list_agents
 | `AGENT_HUB_CLAUDE_EFFORT` | unset | Default `--effort` for Claude runs when the request omits `metadata.claude.effort`. |
 | `AGENT_HUB_CODEX_EFFORT` | unset | Default `model_reasoning_effort` for Codex runs when the request omits `metadata.codex.effort`. |
 
-The runner forwards a small default environment allowlist for Claude and Codex auth (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. Add project-specific keys by setting `AGENT_HUB_FORWARD_ENV` on the MCP server process, for example:
+The runner forwards a small default environment allowlist for Claude and Codex auth (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), namespace Git/GitHub routing (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. Add project-specific keys by setting `AGENT_HUB_FORWARD_ENV` on the MCP server process, for example:
 
 ```sh
 AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE node src/server.js
