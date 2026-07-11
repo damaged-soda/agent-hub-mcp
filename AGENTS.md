@@ -66,7 +66,7 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 
 The environment always follows position (`~/work/charter/NAMESPACE.md`): before
 spawning Claude Code, the runner derives the workspace namespace (`NS`,
-`GH_CONFIG_DIR`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) from the run's `cwd` via
+`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) from the run's `cwd` via
 `direnv export json`. Values derived from `cwd` take precedence over anything the
 server process inherited; `DIRENV_*` bookkeeping is never forwarded. If the `cwd`
 is outside any workspace or direnv is unavailable, no namespace keys are injected.

@@ -48,13 +48,15 @@ describe("agent environment", () => {
     const env = buildAgentEnv({
       PATH: "/bin",
       NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
       CODEX_HOME: "/home/u/ns/personal/codex",
     });
 
     expect(env.NS).toBe("personal");
-    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/gh");
+    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/github/runtime");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/home/u/ns/personal/github/config/gitconfig");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/u/ns/personal/claude");
     expect(env.CODEX_HOME).toBe("/home/u/ns/personal/codex");
   });
@@ -66,7 +68,7 @@ describe("namespace resolution from run cwd", () => {
   fs.writeFileSync(
     stubBin,
     `#!/bin/sh
-echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
 `,
     { mode: 0o755 },
   );
@@ -78,12 +80,14 @@ echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"b
   it("derives from cwd even when the server env carries another namespace", () => {
     const env = resolveNamespaceEnv(stubDir, {
       NS: "company",
-      GH_CONFIG_DIR: "/home/u/ns/company/gh",
+      GH_CONFIG_DIR: "/home/u/ns/company/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/company/github/config/gitconfig",
       AGENT_HUB_DIRENV_BIN: stubBin,
     });
     expect(env).toEqual({
       NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
     });
   });
 
@@ -95,7 +99,8 @@ echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/gh","DIRENV_DIFF":"b
     });
     expect(env).toEqual({
       NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/gh",
+      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
     });
   });
 
