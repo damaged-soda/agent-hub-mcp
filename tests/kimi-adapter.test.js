@@ -3,10 +3,13 @@ import {
   buildKimiCommand,
   createKimiSessionRef,
   interpretKimiExit,
+  isSupportedKimiVersion,
   parseKimiStdout,
+  parseKimiVersion,
 } from "../src/kimi-adapter.js";
 
 const SESSION_ID = "session_437f4ac7-19f4-472b-be3c-a87be0f41419";
+const MIGRATED_SESSION_ID = "ses_437f4ac7-19f4-472b-be3c-a87be0f41419";
 
 function successStdout(text = "hello") {
   return [
@@ -20,6 +23,27 @@ function successStdout(text = "hello") {
     }),
   ].join("\n");
 }
+
+describe("kimi version probe", () => {
+  it("accepts a bare semver version line", () => {
+    expect(parseKimiVersion("0.26.0\n", "")).toEqual([0, 26, 0]);
+  });
+
+  it("rejects the legacy kimi-cli version output", () => {
+    expect(parseKimiVersion("kimi, version 1.49.0\n", "")).toBeNull();
+  });
+
+  it("rejects output that merely contains a semver", () => {
+    expect(parseKimiVersion("kimi-code 0.26.0\n", "")).toBeNull();
+  });
+
+  it("enforces the minimum supported version 0.2.0", () => {
+    expect(isSupportedKimiVersion([0, 1, 9])).toBe(false);
+    expect(isSupportedKimiVersion([0, 2, 0])).toBe(true);
+    expect(isSupportedKimiVersion([0, 26, 0])).toBe(true);
+    expect(isSupportedKimiVersion([1, 0, 0])).toBe(true);
+  });
+});
 
 describe("kimi adapter", () => {
   it("starts new sessions without a native session id", () => {
@@ -43,6 +67,26 @@ describe("kimi adapter", () => {
     });
   });
 
+  it("accepts migrated ses_<uuid> session ids for continuation", () => {
+    const ref = createKimiSessionRef({
+      agent_id: "kimi-code",
+      native_session_id: MIGRATED_SESSION_ID,
+    });
+    expect(ref).toEqual({
+      agent_id: "kimi-code",
+      native_session_id: MIGRATED_SESSION_ID,
+      resumed: true,
+    });
+
+    const command = buildKimiCommand({
+      request: { prompt: "continue", metadata: {} },
+      effectiveCliSessionRef: ref,
+      env: {},
+    });
+    expect(command.argv.slice(0, 2)).toEqual(["kimi", "--session"]);
+    expect(command.argv).toContain(MIGRATED_SESSION_ID);
+  });
+
   it("maps request metadata into kimi argv", () => {
     const command = buildKimiCommand({
       request: {
@@ -63,6 +107,7 @@ describe("kimi adapter", () => {
         },
       },
       effectiveCliSessionRef: createKimiSessionRef(null),
+      env: {},
     });
 
     expect(command.argv).toEqual([
@@ -84,6 +129,7 @@ describe("kimi adapter", () => {
     const command = buildKimiCommand({
       request: { prompt: "review this", metadata: {} },
       effectiveCliSessionRef: createKimiSessionRef(null),
+      env: {},
     });
 
     expect(command.argv).toEqual([
@@ -105,6 +151,7 @@ describe("kimi adapter", () => {
         buildKimiCommand({
           request: { prompt: "review this", metadata: { permission } },
           effectiveCliSessionRef: createKimiSessionRef(null),
+          env: {},
         }),
       ).toThrow(/not supported by kimi -p/);
     }
@@ -115,6 +162,7 @@ describe("kimi adapter", () => {
       buildKimiCommand({
         request: { prompt: "review this", metadata: { permission: "yolo" } },
         effectiveCliSessionRef: createKimiSessionRef(null),
+        env: {},
       }),
     ).toThrow(/metadata.permission must be one of/);
   });
@@ -123,6 +171,7 @@ describe("kimi adapter", () => {
     const command = buildKimiCommand({
       request: { prompt: "review this", metadata: { model: "k2" } },
       effectiveCliSessionRef: createKimiSessionRef(null),
+      env: {},
     });
     expect(command.argv).toContain("k2");
 
@@ -132,6 +181,7 @@ describe("kimi adapter", () => {
         metadata: { model: "k2", "kimi-code": { model: "k1.5" } },
       },
       effectiveCliSessionRef: createKimiSessionRef(null),
+      env: {},
     });
     const modelIndex = overridden.argv.indexOf("-m");
     expect(overridden.argv[modelIndex + 1]).toBe("k1.5");
@@ -180,6 +230,7 @@ describe("kimi adapter", () => {
     const command = buildKimiCommand({
       request: { prompt: "review this", metadata: { "kimi-code": { effort: "ultra" } } },
       effectiveCliSessionRef: createKimiSessionRef(null),
+      env: {},
     });
     expect(command.env).toEqual({ KIMI_MODEL_THINKING_EFFORT: "ultra" });
   });
@@ -197,6 +248,7 @@ describe("kimi adapter", () => {
           native_session_id: "--help",
           resumed: true,
         },
+        env: {},
       }),
     ).toThrow(/must be a Kimi session id/);
   });
@@ -209,6 +261,7 @@ describe("kimi adapter", () => {
           metadata: { "kimi-code": { add_dirs: ["/tmp/example"] } },
         },
         effectiveCliSessionRef: createKimiSessionRef(null),
+        env: {},
       }),
     ).toThrow(/resolved_metadata is required/);
   });
@@ -218,6 +271,7 @@ describe("kimi adapter", () => {
       buildKimiCommand({
         request: { metadata: {} },
         effectiveCliSessionRef: createKimiSessionRef(null),
+        env: {},
       }),
     ).toThrow(/request.prompt must be a non-empty string/);
   });
@@ -229,6 +283,7 @@ describe("kimi adapter", () => {
         agent_id: "kimi-code",
         native_session_id: SESSION_ID,
       }),
+      env: {},
     });
 
     expect(command.argv).toEqual([
@@ -272,6 +327,35 @@ describe("kimi adapter", () => {
     const parsed = parseKimiStdout(stdout);
     expect(parsed.resultText).toBe("final answer");
     expect(parsed.cliSessionRef.native_session_id).toBe(SESSION_ID);
+  });
+
+  it("ignores session_id fields outside the session.resume_hint event", () => {
+    const stdout = [
+      JSON.stringify({ role: "assistant", content: "done", session_id: SESSION_ID }),
+      JSON.stringify({ type: "not-a-resume-hint", session_id: SESSION_ID }),
+    ].join("\n");
+    const parsed = parseKimiStdout(stdout);
+    expect(parsed.resultText).toBe("done");
+    expect(parsed.cliSessionRef).toBeNull();
+
+    const outcome = interpretKimiExit({ code: 0, signal: null, stdout, stderr: "" });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error.code).toBe("stdout_parse_failed");
+  });
+
+  it("ignores a resume_hint whose session_id has an unexpected shape", () => {
+    const stdout = [
+      JSON.stringify({ role: "assistant", content: "done" }),
+      JSON.stringify({
+        role: "meta",
+        type: "session.resume_hint",
+        session_id: "not-a-kimi-session-id",
+        command: "kimi -r not-a-kimi-session-id",
+        content: "To resume this session: kimi -r not-a-kimi-session-id",
+      }),
+    ].join("\n");
+    const parsed = parseKimiStdout(stdout);
+    expect(parsed.cliSessionRef).toBeNull();
   });
 
   it("interprets a clean exit as completed", () => {

@@ -11,10 +11,16 @@ const AVAILABILITY_CACHE_MS = 30000;
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_KIMI_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_KIMI_EFFORT";
 const CHILD_EFFORT_ENV_KEY = "KIMI_MODEL_THINKING_EFFORT";
-// Kimi session ids look like session_<uuid>. The resume id is an argv value,
-// so anything else (for example "--help") would be parsed as a kimi option.
+// Kimi session ids look like session_<uuid>; the official migrator from the
+// legacy kimi-cli registers migrated sessions as ses_<uuid>. The resume id is
+// an argv value, so anything else (for example "--help") would be parsed as a
+// kimi option.
 const SESSION_ID_PATTERN =
-  /^session_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^(?:session|ses)_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The structured session.resume_hint stream event (the session-id backfill
+// contract) was introduced in Kimi Code 0.2.0 — per cross-review finding;
+// not verified against an upstream changelog.
+const MIN_KIMI_VERSION = [0, 2, 0];
 const TAIL_LIMIT = 4000;
 
 let availabilityCache = null;
@@ -47,20 +53,30 @@ export async function getKimiAvailability() {
     return availabilityCache.value;
   }
   const result = await runVersionCommand("kimi", ["--version"], 5000);
-  const value =
-    result.error || result.code !== 0 || !isKimiVersionOutput(result.stdout, result.stderr)
-      ? {
-          available: false,
-          reason:
-            result.error?.message ||
-            result.stderr.trim() ||
-            result.stdout.trim() ||
-            `exit ${result.code}`,
-        }
-      : {
-          available: true,
-          version: (result.stdout || result.stderr).trim(),
-        };
+  const version = parseKimiVersion(result.stdout, result.stderr);
+  let value;
+  if (result.error || result.code !== 0 || !version) {
+    value = {
+      available: false,
+      reason:
+        result.error?.message ||
+        result.stderr.trim() ||
+        result.stdout.trim() ||
+        `exit ${result.code}`,
+    };
+  } else if (!isSupportedKimiVersion(version)) {
+    value = {
+      available: false,
+      reason: `kimi ${version.join(".")} is below the minimum supported version ${MIN_KIMI_VERSION.join(
+        ".",
+      )} (session.resume_hint stream event required)`,
+    };
+  } else {
+    value = {
+      available: true,
+      version: (result.stdout || result.stderr).trim(),
+    };
+  }
   availabilityCache = {
     checkedAtMs: Date.now(),
     value,
@@ -68,10 +84,25 @@ export async function getKimiAvailability() {
   return value;
 }
 
-function isKimiVersionOutput(stdout, stderr) {
-  // `kimi --version` prints a bare semver (e.g. "0.26.0").
+// `kimi --version` prints a bare semver (e.g. "0.26.0"). The legacy kimi-cli
+// prints "kimi, version 1.49.0"; its session/JSONL contract is incompatible,
+// so only an exact bare-semver line counts.
+export function parseKimiVersion(stdout, stderr) {
   const text = `${stdout}\n${stderr}`.trim();
-  return /\d+\.\d+\.\d+/.test(text);
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/.exec(text);
+  if (!match) {
+    return null;
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+export function isSupportedKimiVersion(version) {
+  for (let index = 0; index < MIN_KIMI_VERSION.length; index += 1) {
+    if (version[index] !== MIN_KIMI_VERSION[index]) {
+      return version[index] > MIN_KIMI_VERSION[index];
+    }
+  }
+  return true;
 }
 
 export function buildKimiCommand({ request, effectiveCliSessionRef, env = process.env }) {
@@ -157,7 +188,15 @@ export function parseKimiStdout(stdout) {
   let resultText = null;
   let resultEvent = null;
   for (const event of events) {
-    if (typeof event?.session_id === "string" && event.session_id.trim() !== "") {
+    // The session ref comes only from the terminal session.resume_hint meta
+    // event, and only when the id has the expected shape — a stray session_id
+    // field on any other event must not become a resumable ref.
+    if (
+      event?.role === "meta" &&
+      event.type === "session.resume_hint" &&
+      typeof event.session_id === "string" &&
+      SESSION_ID_PATTERN.test(event.session_id)
+    ) {
       sessionId = event.session_id;
     }
     if (
@@ -245,7 +284,9 @@ export async function listKimiAgent() {
 
 function assertKimiSessionId(value) {
   if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
-    throw new Error("cli_session_ref.native_session_id must be a Kimi session id (session_<uuid>)");
+    throw new Error(
+      "cli_session_ref.native_session_id must be a Kimi session id (session_<uuid> or ses_<uuid>)",
+    );
   }
 }
 

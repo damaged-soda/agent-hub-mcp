@@ -601,6 +601,52 @@ describe("MCP flow", () => {
     expect(result.content[0].text).toBe("fake kimi failure");
   });
 
+  it("marks kimi-code unavailable for legacy kimi-cli version output", async () => {
+    await fsp.writeFile(
+      path.join(binDir, "kimi"),
+      `#!/usr/bin/env node
+if (process.argv.includes("--version")) {
+  process.stdout.write("kimi, version 1.49.0\\n");
+  process.exit(0);
+}
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+
+    const listed = await callAgentHubTool("list_agents", {}, { env });
+    expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
+    const unavailable = listed.structuredContent.unavailable_agents.find(
+      (agent) => agent.agent_id === "kimi-code",
+    );
+    expect(unavailable).toBeDefined();
+    expect(unavailable.unavailable_reason).toContain("1.49.0");
+  });
+
+  it("marks kimi-code unavailable when the version is below the minimum", async () => {
+    await fsp.writeFile(
+      path.join(binDir, "kimi"),
+      `#!/usr/bin/env node
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.1.9\\n");
+  process.exit(0);
+}
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+
+    const listed = await callAgentHubTool("list_agents", {}, { env });
+    const unavailable = listed.structuredContent.unavailable_agents.find(
+      (agent) => agent.agent_id === "kimi-code",
+    );
+    expect(unavailable).toBeDefined();
+    expect(unavailable.unavailable_reason).toContain("below the minimum supported version");
+  });
+
   it("rejects a cli_session_ref whose agent_id does not match", async () => {
     const result = await callAgentHubTool(
       "dispatch_to_agent",
@@ -1019,7 +1065,7 @@ async function writeFakeKimi(target) {
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
-  process.stdout.write("0.0.0-test\\n");
+  process.stdout.write("0.26.0-test\\n");
   process.exit(0);
 }
 const sessionIndex = args.indexOf("--session");

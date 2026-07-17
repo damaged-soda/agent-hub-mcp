@@ -187,7 +187,7 @@ On continuations (`codex exec resume`) the sandbox and writable roots are passed
 | `effort` | `KIMI_MODEL_THINKING_EFFORT` env | Optional; passed through unvalidated (documented values: `low`/`medium`/`high`/`xhigh`/`max`); falls back to `AGENT_HUB_KIMI_EFFORT`. |
 | `add_dirs` | `--add-dir` | Array of directories resolved and allowlist-checked before execution. |
 
-Kimi prompt mode takes no permission flags (`--plan`/`--auto`/`--yolo` conflict with `-p`), and its built-in auto approval matches the unified default `permission: "auto"`. Unified `read-only` or `full` are rejected at dispatch time.
+Kimi prompt mode takes no permission flags (`--plan`/`--auto`/`--yolo` conflict with `-p`), and its built-in auto approval matches the unified default `permission: "auto"`. Unified `read-only` or `full` fail command construction in the runner (the run is accepted, then ends `failed` with `runner_exception`) — the same stage where other adapters validate their native metadata.
 
 ## Session Continuation
 
@@ -206,7 +206,7 @@ To continue, pass back the previous terminal response's `cli_session_ref`:
 }
 ```
 
-Agent Hub then calls Claude Code with `--resume <native_session_id>`, Codex with `codex exec resume <native_session_id>`, or Kimi with `kimi --session <native_session_id> -p …`. The `agent_id` inside `cli_session_ref` must match the request's `agent_id`; a Codex `native_session_id` must be a thread UUID and a Kimi one must look like `session_<uuid>` (both are argv values, so other strings are rejected).
+Agent Hub then calls Claude Code with `--resume <native_session_id>`, Codex with `codex exec resume <native_session_id>`, or Kimi with `kimi --session <native_session_id> -p …`. The `agent_id` inside `cli_session_ref` must match the request's `agent_id`; a Codex `native_session_id` must be a thread UUID and a Kimi one must look like `session_<uuid>` or `ses_<uuid>` (migrated legacy sessions; both are argv values, so other strings are rejected).
 
 ## Artifacts
 

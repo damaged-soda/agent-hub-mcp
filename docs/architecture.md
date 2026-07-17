@@ -554,8 +554,9 @@ kimi -p <prompt> --output-format stream-json
 - 新会话不预设 session id；kimi 在 stdout 事件流末尾的 `session.resume_hint` meta
   事件里上报 `session_id`（形如 `session_<uuid>`）。
 - continuation 使用 `kimi --session <native_session_id> -p ...`；session id 必须匹配
-  `session_<uuid>` 形态，其他字符串在 dispatch 和命令构建两处都会被拒绝（防止
-  `--help` 之类的值被解析成 kimi 选项）。
+  `session_<uuid>` 或 `ses_<uuid>`（官方迁移器从旧 kimi-cli 迁移过来的会话）形态，
+  其他字符串在 dispatch 和命令构建两处都会被拒绝（防止 `--help` 之类的值被解析成
+  kimi 选项）。
 - `metadata["kimi-code"].model`（或统一的 `metadata.model`）映射到 `-m`；未提供时回退到
   服务端环境变量 `AGENT_HUB_KIMI_MODEL`，都未设置时不传 `-m`。
 - `metadata["kimi-code"].effort` 映射到子进程环境变量 `KIMI_MODEL_THINKING_EFFORT`；
