@@ -9,6 +9,7 @@ import { getAdapter } from "./adapters.js";
 import { validateRequestPaths } from "./security.js";
 import {
   aggregateEvidenceStatus,
+  canonicalizeStructuredReferences,
   parseDiscussionDispatch,
   parseStructuredOutput,
   resolveDiscussionConfiguration,
@@ -682,6 +683,7 @@ export class DiscussionManager {
   async validateTurnOutput(id, memberId, kind, output) {
     const state = await readDiscussionState(id);
     const allowedRefs = await this.allowedProvenanceRefs(id, state, memberId);
+    output = canonicalizeStructuredReferences(output, allowedRefs);
     validateEvidenceAdditions(output, state.evidence);
     for (const evidence of [...(output.external_evidence ?? []), ...(output.evidence_added ?? [])]) {
       allowedRefs.add(`external:${evidence.evidence_id}`);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalizeStructuredReferences,
   parseDiscussionDispatch,
   parseStructuredOutput,
   resolveDiscussionConfiguration,
@@ -67,6 +68,53 @@ describe("discussion protocol", () => {
     expect(() =>
       parseStructuredOutput("participant_memo", JSON.stringify({ ...memo, extra: true })),
     ).toThrow(/Unrecognized key/);
+  });
+
+  it("normalizes practical evidence timestamps and unambiguous bare references", () => {
+    const memo = parseStructuredOutput(
+      "participant_memo",
+      JSON.stringify({
+        schema_version: 1,
+        recommendation: "keep 8700",
+        claims: [
+          {
+            claim_id: "claim-1",
+            statement: "the example already uses it",
+            evidence_refs: ["brief", "repo-1"],
+          },
+        ],
+        risks: [],
+        counterexamples: [],
+        uncertainties: [],
+        confidence: { level: "high", rationale: "checked" },
+        questions_for_others: [],
+        external_evidence: [
+          {
+            evidence_id: "repo-1",
+            kind: "external",
+            source: "README.md",
+            retrieved_at: "2026-07-18T00:00:00.000+08:00",
+            claim: "the example uses 8700",
+            relevance: "answers the question",
+          },
+          {
+            evidence_id: "repo-2",
+            kind: "external",
+            source: "src/server.js",
+            claim: "the default is 8700",
+            relevance: "shows consistency",
+          },
+        ],
+      }),
+    );
+    const normalized = canonicalizeStructuredReferences(memo, new Set(["material:brief"]));
+
+    expect(normalized.claims[0].evidence_refs).toEqual([
+      "material:brief",
+      "external:repo-1",
+    ]);
+    expect(normalized.external_evidence[0].retrieved_at).toBe("2026-07-17T16:00:00.000Z");
+    expect(normalized.external_evidence[1].retrieved_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("enforces one moderation assignment per effective participant", () => {

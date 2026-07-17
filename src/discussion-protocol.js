@@ -141,7 +141,7 @@ export const ExternalEvidenceSchema = z
     evidence_id: IdSchema,
     kind: z.literal("external"),
     source: z.string().min(1).max(4096),
-    retrieved_at: z.string().datetime(),
+    retrieved_at: evidenceTimestampSchema(),
     claim: ShortText,
     relevance: ShortText,
     status: z.literal("reported").default("reported"),
@@ -301,6 +301,41 @@ export function parseStructuredOutput(kind, text) {
     throw codedError("structured_output_invalid", result.error.issues.map(formatIssue).join("; "));
   }
   return result.data;
+}
+
+export function canonicalizeStructuredReferences(value, allowedRefs) {
+  const normalized = structuredClone(value);
+  const allowed = new Set(allowedRefs);
+  const ownExternalIds = new Set(
+    [...(normalized.external_evidence ?? []), ...(normalized.evidence_added ?? [])].map(
+      (item) => item.evidence_id,
+    ),
+  );
+  const arrayFields = new Set([
+    "evidence_refs",
+    "related_claim_refs",
+    "tested_claim_refs",
+    "provenance",
+  ]);
+
+  const visit = (node) => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    for (const [key, child] of Object.entries(node)) {
+      if (arrayFields.has(key) && Array.isArray(child)) {
+        node[key] = child.map((ref) => canonicalReference(ref, allowed, ownExternalIds));
+      } else if (key === "evidence_ref" && typeof child === "string") {
+        node[key] = canonicalReference(child, allowed, ownExternalIds);
+      } else {
+        visit(child);
+      }
+    }
+  };
+  visit(normalized);
+  return normalized;
 }
 
 export function normalizeStructuredText(text) {
@@ -469,6 +504,36 @@ function byteLimitedString(label, maxBytes) {
     .string()
     .min(1)
     .refine((value) => Buffer.byteLength(value, "utf8") <= maxBytes, `${label} exceeds ${maxBytes} bytes`);
+}
+
+function evidenceTimestampSchema() {
+  return z.preprocess(
+    (value) =>
+      value === undefined || value === null || value === ""
+        ? new Date().toISOString()
+        : value,
+    z
+      .string()
+      .refine(
+        (value) =>
+          /^\d{4}-\d{2}-\d{2}(?:T.+)?$/.test(value) && Number.isFinite(Date.parse(value)),
+        "Invalid ISO 8601 date or date-time",
+      )
+      .transform((value) => new Date(value).toISOString()),
+  );
+}
+
+function canonicalReference(ref, allowed, ownExternalIds) {
+  if (typeof ref !== "string" || allowed.has(ref)) return ref;
+  if (ownExternalIds.has(ref)) return `external:${ref}`;
+  const direct = [`material:${ref}`, `external:${ref}`].filter((candidate) =>
+    allowed.has(candidate),
+  );
+  if (direct.length === 1) return direct[0];
+  const claimMatches = Array.from(allowed).filter(
+    (candidate) => candidate.startsWith("event:") && candidate.endsWith(`#${ref}`),
+  );
+  return claimMatches.length === 1 ? claimMatches[0] : ref;
 }
 
 function isAllowedRef(ref, allowed) {

@@ -587,6 +587,11 @@ Coordinator 不自动访问 URL 或本地路径判定外部证据真伪；它只
 本地工作区中未进入冻结材料包的发现也按外部证据登记，`source` 使用绝对路径和可用
 的 Git revision。
 
+`retrieved_at` 接受 ISO 8601 日期、UTC 时间或带偏移量的时间并统一保存为 UTC；模型
+未提供时由 coordinator 使用接收时间补齐。引用在持久化前规范化为
+`material:<material_id>`、`external:<evidence_id>` 或
+`event:<sequence>#<claim_id>`，无法无歧义规范化的裸引用仍会被拒绝。
+
 ### 9.3 ModerationPlan
 
 ```json
