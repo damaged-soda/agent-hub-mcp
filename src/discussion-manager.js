@@ -225,20 +225,27 @@ export class DiscussionManager {
   async query(input) {
     const id = input?.discussion_ref?.discussion_id;
     let state;
+    let page;
     try {
       state = await readDiscussionState(id);
+      page = await discussionEventsPage(id, input ?? {});
     } catch (error) {
       if (error?.code === "unknown_discussion") throw error;
       try {
         state = await recoverDiscussionRecord(id);
+        page = await discussionEventsPage(id, input ?? {});
       } catch (recoveryError) {
         state = await markDiscussionUnknown(id, recoveryError);
+        page = {
+          events: [],
+          next_sequence: state.committed_event_sequence ?? 0,
+          has_more: false,
+        };
       }
     }
     if (!DISCUSSION_FINAL_STATUSES.has(state.status) && state.preflight_complete) {
       this.ensureRunning(id);
     }
-    const page = await discussionEventsPage(id, input ?? {});
     const artifacts = await discussionArtifacts(id);
     const response = {
       schema_version: state.schema_version,

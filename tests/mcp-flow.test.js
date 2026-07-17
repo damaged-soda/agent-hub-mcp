@@ -265,6 +265,24 @@ describe("MCP flow", () => {
     });
   });
 
+  it("rejects browser origins unless they are explicitly allowed", async () => {
+    await withAgentHubHttpServer(env, async (url) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://attacker.example",
+        },
+        body: "{}",
+      });
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: -32003, message: "Forbidden origin" },
+      });
+    });
+  });
+
   it("rejects non-loopback streamable HTTP hosts", async () => {
     const port = await getFreePort();
     const result = await runAgentHubServerExpectFailure(

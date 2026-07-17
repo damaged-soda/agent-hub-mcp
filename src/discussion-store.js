@@ -404,10 +404,30 @@ function assertLeaseMatches(current, expected) {
 }
 
 async function appendAndSync(filePath, chunk) {
+  const buffer = Buffer.from(chunk);
   const handle = await fsp.open(filePath, "a", 0o600);
+  const originalSize = (await handle.stat()).size;
   try {
-    await handle.write(chunk);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesWritten } = await handle.write(
+        buffer,
+        offset,
+        buffer.length - offset,
+        null,
+      );
+      if (bytesWritten <= 0) {
+        throw codedError("discussion_event_write_failed", "Event append made no progress");
+      }
+      offset += bytesWritten;
+    }
     await handle.sync();
+  } catch (error) {
+    await handle
+      .truncate(originalSize)
+      .then(() => handle.sync())
+      .catch(() => undefined);
+    throw error;
   } finally {
     await handle.close();
   }

@@ -65,7 +65,7 @@ It can also run as a long-lived local streamable HTTP daemon:
 node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
 ```
 
-The HTTP transport is the supported surface for new functionality, including Discussions. It is intended for local loopback use only; the server rejects non-loopback hosts and does not implement remote authentication. The stdio transport remains available for the six original run tools but is deprecated and does not expose Discussion tools.
+The HTTP transport is the supported surface for new functionality, including Discussions. It is intended for local loopback use only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. The stdio transport remains available for the six original run tools but is deprecated and does not expose Discussion tools.
 
 MCP clients should launch the server process, for example:
 
@@ -124,6 +124,7 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_RUN_TTL_SECONDS` | Override terminal run retention; default is `604800`. |
 | `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage; by default it is a `discussions` sibling of the run root. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Override terminal Discussion retention; defaults to `AGENT_HUB_RUN_TTL_SECONDS` or `604800`. |
+| `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Comma-separated exact browser origins allowed to call the loopback HTTP daemon; unset rejects requests carrying `Origin`. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra environment variable names forwarded to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |

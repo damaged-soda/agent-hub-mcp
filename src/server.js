@@ -350,6 +350,14 @@ async function listenStreamableHttp(options) {
   await discussionManager.start();
   const activeRequests = new Set();
   const httpServer = createHttpServer(async (req, res) => {
+    if (!isAllowedHttpOrigin(req.headers.origin)) {
+      res.writeHead(403, {
+        "content-type": "application/json",
+        vary: "Origin",
+      });
+      res.end(JSON.stringify(jsonRpcError(-32003, "Forbidden origin")));
+      return;
+    }
     const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
     if (requestPath !== options.path) {
       res.writeHead(404, { "content-type": "application/json" });
@@ -397,6 +405,19 @@ async function listenStreamableHttp(options) {
   console.error(
     `agent-hub-mcp listening on http://${options.host}:${options.port}${options.path}`,
   );
+}
+
+function isAllowedHttpOrigin(origin) {
+  if (!origin) {
+    return true;
+  }
+  const allowed = new Set(
+    (process.env.AGENT_HUB_HTTP_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  return allowed.has(origin);
 }
 
 function installHttpShutdownHandlers(httpServer, activeRequests, discussionManager) {

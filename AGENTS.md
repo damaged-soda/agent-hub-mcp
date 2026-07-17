@@ -65,6 +65,7 @@ Use Node.js 20 or newer. `npm start` / `node src/server.js` is the deprecated st
 | `AGENT_HUB_RUN_TTL_SECONDS` | Terminal run retention; default is `604800`. |
 | `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage root. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Terminal Discussion retention; default follows run TTL. |
+| `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Exact comma-separated browser origins allowed to call the loopback HTTP daemon. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | Server-side default model for Claude runs. |

@@ -12,6 +12,7 @@ import {
 const LOCK_WAIT_MS = 5000;
 const STALE_LOCK_MS = 20000;
 const STALE_ACTIVE_MS = 20000;
+export const SESSION_RESERVATION_STALE_MS = 5 * 60 * 1000;
 
 function assertSessionRef(ref) {
   if (
@@ -121,6 +122,24 @@ async function clearStaleActive(record) {
   return record;
 }
 
+function clearStaleReservation(record) {
+  if (!record?.reserved_by) {
+    return record;
+  }
+  const reservedAt = Date.parse(record.reserved_at ?? "");
+  if (
+    !Number.isFinite(reservedAt) ||
+    Date.now() - reservedAt >= SESSION_RESERVATION_STALE_MS
+  ) {
+    return { ...record, reserved_by: null, reserved_at: null };
+  }
+  return record;
+}
+
+async function normalizeRecord(record) {
+  return clearStaleReservation(await clearStaleActive(record));
+}
+
 export async function getSessionRecord(ref) {
   assertSessionRef(ref);
   return readRecord(ref);
@@ -130,7 +149,7 @@ export async function claimSessionLineage(ref, options) {
   const claimId = requiredString(options?.claim_id, "claim_id");
   const expectedGeneration = requiredGeneration(options?.expected_generation);
   return withSessionLock(ref, async () => {
-    let record = await clearStaleActive((await readRecord(ref)) ?? initialRecord(ref));
+    let record = await normalizeRecord((await readRecord(ref)) ?? initialRecord(ref));
     if (record.active_run_id) {
       throw codedError("session_busy", `Session is active in run ${record.active_run_id}`);
     }
@@ -163,7 +182,7 @@ export async function acquireSessionLease(ref, options) {
   const claimId = optionalString(options?.claim_id);
   const expectedGeneration = optionalGeneration(options?.expected_generation);
   return withSessionLock(ref, async () => {
-    let record = await clearStaleActive((await readRecord(ref)) ?? initialRecord(ref));
+    let record = await normalizeRecord((await readRecord(ref)) ?? initialRecord(ref));
     if (record.active_run_id === runId) {
       return record;
     }

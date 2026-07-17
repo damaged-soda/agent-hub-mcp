@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DiscussionManager } from "../src/discussion-manager.js";
-import { readDiscussionState } from "../src/discussion-store.js";
+import { discussionDirFor, readDiscussionState } from "../src/discussion-store.js";
 
 describe("discussion manager lifecycle", () => {
   let root;
@@ -112,6 +112,24 @@ describe("discussion manager lifecycle", () => {
     const moderation = handoff.events.find((event) => event.type === "moderation.plan.accepted");
     expect(moderation.payload.output.assignments.map((item) => item.participant_id)).toEqual(["a"]);
     await manager.shutdown();
+  });
+
+  it("repairs a torn event tail during query without requiring a daemon restart", async () => {
+    const fake = createFakeRunApi({ hold: true });
+    const manager = createManager(fake.api);
+    await manager.start();
+    const accepted = await manager.dispatch(newRequest(workspace));
+    const id = accepted.discussion_ref.discussion_id;
+    await waitUntil(async () => (await readDiscussionState(id)).active_run_refs.length === 2);
+    await manager.shutdown();
+
+    const eventPath = path.join(discussionDirFor(id), "events.jsonl");
+    await fsp.appendFile(eventPath, '{"sequence":999');
+    const queried = await manager.query({ discussion_ref: accepted.discussion_ref });
+
+    expect(queried.status).toBe("running");
+    expect(queried.recent_events.at(-1).type).toBe("discussion.recovered");
+    expect(await fsp.readFile(eventPath, "utf8")).toMatch(/\n$/);
   });
 });
 
