@@ -13,10 +13,12 @@ import {
   ensureRunDir,
   expiresAt,
   getCancellerPath,
+  getRunRoot,
   getRunnerPath,
   isProcessAlive,
   nowIso,
   recentEventSummary,
+  readJsonIfExists,
   readState,
   readTextIfExists,
   runDirFor,
@@ -33,6 +35,11 @@ import {
   MAX_WAIT_MS,
   POLL_AFTER_MS,
 } from "./timing.js";
+import {
+  acquireSessionLease,
+  completeSessionRun,
+  releaseSessionRun,
+} from "./session-registry.js";
 
 const CANCEL_GRACE_MS = 10000;
 
@@ -65,8 +72,58 @@ function normalizeMetadata(metadata) {
   return metadata;
 }
 
-export async function dispatchToAgent(input) {
+export async function dispatchToAgent(input, internal = {}) {
   await cleanupExpiredRuns();
+  const idempotencyKey = optionalNonEmptyString(internal.idempotency_key, "idempotency_key");
+  if (!idempotencyKey) {
+    return dispatchToAgentWithRunId(input, internal, crypto.randomUUID());
+  }
+  const requestHash = canonicalHash({
+    input,
+    expected_session_generation: internal.expected_session_generation ?? null,
+    session_claim_id: internal.session_claim_id ?? null,
+  });
+  return withIdempotencyLock(idempotencyKey, async () => {
+    const indexPath = idempotencyRecordPath(idempotencyKey);
+    const existing = await readJsonIfExists(indexPath);
+    if (existing && existing.request_hash !== requestHash) {
+      const error = new Error(`Idempotency key ${idempotencyKey} was reused with a different request`);
+      error.code = "idempotency_conflict";
+      throw error;
+    }
+    const runId = existing?.run_id ?? crypto.randomUUID();
+    const existingState = await readJsonIfExists(path.join(getRunRoot(), runId, "state.json"));
+    if (existingState) {
+      const livenessPid = existingState.runner_pid ?? existingState.pid;
+      const existingCreatedAt = Date.parse(
+        existingState.created_at ?? existingState.updated_at ?? "",
+      );
+      const strandedBeforeSpawn =
+        ACTIVE_STATUSES.has(existingState.status) &&
+        !livenessPid &&
+        (!Number.isFinite(existingCreatedAt) || Date.now() - existingCreatedAt > 15000);
+      if (!strandedBeforeSpawn) {
+        return acceptedFromState(existingState);
+      }
+      await releaseSessionRun(existingState.cli_session_ref, runId).catch(() => undefined);
+      await fsp.rm(path.join(getRunRoot(), runId), { recursive: true, force: true });
+    }
+    if (!existing) {
+      await atomicWriteJson(indexPath, {
+        schema_version: 1,
+        idempotency_key_hash: crypto.createHash("sha256").update(idempotencyKey).digest("hex"),
+        request_hash: requestHash,
+        run_id: runId,
+        created_at: nowIso(),
+      });
+    } else {
+      await fsp.rm(path.join(getRunRoot(), runId), { recursive: true, force: true });
+    }
+    return dispatchToAgentWithRunId(input, internal, runId);
+  });
+}
+
+async function dispatchToAgentWithRunId(input, internal, runId) {
   const adapter = getAdapter(input?.agent_id);
   const availability = await adapter.getAvailability();
   if (!availability.available) {
@@ -96,9 +153,23 @@ export async function dispatchToAgent(input) {
     },
   };
   const effectiveCliSessionRef = adapter.createSessionRef(input.cli_session_ref);
-  const runId = crypto.randomUUID();
-  const runDir = await ensureRunDir(runId);
+  let sessionRecord = null;
+  if (effectiveCliSessionRef?.native_session_id) {
+    sessionRecord = await acquireSessionLease(effectiveCliSessionRef, {
+      run_id: runId,
+      expected_generation: internal.expected_session_generation,
+      claim_id: internal.session_claim_id,
+    });
+  }
+  let runDir;
+  try {
+    runDir = await ensureRunDir(runId);
+  } catch (error) {
+    await releaseSessionRun(effectiveCliSessionRef, runId).catch(() => undefined);
+    throw error;
+  }
   const createdAt = nowIso();
+  const internalRetention = normalizeInternalRetention(internal);
 
   const state = {
     schema_version: 1,
@@ -110,21 +181,33 @@ export async function dispatchToAgent(input) {
     updated_at: createdAt,
     expires_at: expiresAt(new Date(createdAt)),
     cli_session_ref: publicCliSessionRef(effectiveCliSessionRef),
+    session_generation: sessionRecord?.generation,
+    idempotency_key_hash: internal.idempotency_key
+      ? crypto.createHash("sha256").update(internal.idempotency_key).digest("hex")
+      : undefined,
+    retain_until: internalRetention?.retainUntil,
+    retained_by_discussion: internalRetention ? [internalRetention.discussionId] : undefined,
   };
-  await writeState(runDir, state);
+  try {
+    await writeState(runDir, state);
 
-  await atomicWriteJson(path.join(runDir, "request.json"), {
-    schema_version: 1,
-    agent_id: input.agent_id,
-    cwd: paths.cwd,
-    prompt: input.prompt,
-    metadata,
-    resolved_metadata: resolvedMetadata,
-    cli_session_ref: input.cli_session_ref ?? null,
-    effective_cli_session_ref: effectiveCliSessionRef,
-    created_at: createdAt,
-  });
-  await atomicWriteFile(path.join(runDir, "input.txt"), input.prompt);
+    await atomicWriteJson(path.join(runDir, "request.json"), {
+      schema_version: 1,
+      agent_id: input.agent_id,
+      cwd: paths.cwd,
+      prompt: input.prompt,
+      metadata,
+      resolved_metadata: resolvedMetadata,
+      cli_session_ref: input.cli_session_ref ?? null,
+      effective_cli_session_ref: effectiveCliSessionRef,
+      session_generation: sessionRecord?.generation,
+      created_at: createdAt,
+    });
+    await atomicWriteFile(path.join(runDir, "input.txt"), input.prompt);
+  } catch (error) {
+    await releaseSessionRun(effectiveCliSessionRef, runId).catch(() => undefined);
+    throw error;
+  }
 
   const runnerLog = await fsp.open(path.join(runDir, "runner.log"), "a", 0o600);
   let runner;
@@ -132,11 +215,21 @@ export async function dispatchToAgent(input) {
     runner = spawn(process.execPath, [getRunnerPath(), runDir], {
       cwd: paths.cwd,
       detached: true,
-      env: buildAgentEnv(process.env),
+      env: buildRunnerEnv(process.env),
       stdio: ["ignore", "ignore", runnerLog.fd],
     });
   } finally {
     await runnerLog.close();
+  }
+  if (Number.isInteger(runner.pid) && runner.pid > 0) {
+    await updateStateGuarded(
+      runDir,
+      {
+        runner_pid: runner.pid,
+        runner_pgid: runner.pid,
+      },
+      { ifStatus: "queued" },
+    );
   }
   runner.once("error", (error) => {
     updateStateGuarded(
@@ -158,6 +251,7 @@ export async function dispatchToAgent(input) {
         }\n`,
       );
     });
+    releaseSessionRun(effectiveCliSessionRef, runId).catch(() => undefined);
   });
   runner.unref();
 
@@ -165,8 +259,35 @@ export async function dispatchToAgent(input) {
     status: "accepted",
     run_ref: { run_id: runId },
     cli_session_ref: publicCliSessionRef(effectiveCliSessionRef),
+    session_generation: sessionRecord?.generation,
     poll_after_ms: POLL_AFTER_MS,
   };
+}
+
+function normalizeInternalRetention(internal) {
+  if (internal.retain_until === undefined && internal.retained_by_discussion === undefined) {
+    return null;
+  }
+  const timestamp = Date.parse(internal.retain_until ?? "");
+  if (
+    !Number.isFinite(timestamp) ||
+    typeof internal.retained_by_discussion !== "string" ||
+    !internal.retained_by_discussion
+  ) {
+    throw new Error("Internal run retention requires a valid date and discussion id");
+  }
+  return {
+    retainUntil: new Date(timestamp).toISOString(),
+    discussionId: internal.retained_by_discussion,
+  };
+}
+
+function buildRunnerEnv(source) {
+  const env = buildAgentEnv(source);
+  for (const key of ["AGENT_HUB_RUN_DIR", "AGENT_HUB_DIRENV_BIN"]) {
+    if (typeof source[key] === "string") env[key] = source[key];
+  }
+  return env;
 }
 
 async function markUnknown(runDir, runId, error) {
@@ -187,7 +308,7 @@ async function markUnknown(runDir, runId, error) {
 }
 
 async function markMissingProcess(runDir, state) {
-  return withStateLock(runDir, async () => {
+  const failed = await withStateLock(runDir, async () => {
     const current = await readState(runDir);
     if (!ACTIVE_STATUSES.has(current.status)) {
       return current;
@@ -209,6 +330,10 @@ async function markMissingProcess(runDir, state) {
     await writeState(runDir, failed);
     return failed;
   });
+  if (failed.status === "failed") {
+    await completeSessionRun(failed.cli_session_ref, failed.run_id).catch(() => undefined);
+  }
+  return failed;
 }
 
 async function stateForQuery(runRef, options = {}) {
@@ -238,6 +363,11 @@ async function stateForQuery(runRef, options = {}) {
 
 export async function queryAgentRun(input) {
   const { runDir, state } = await stateForQuery(input?.run_ref);
+  return snapshotFromState(runDir, state);
+}
+
+export async function queryAgentRunSnapshot(input) {
+  const { runDir, state } = await stateForQuery(input?.run_ref, { cleanup: false });
   return snapshotFromState(runDir, state);
 }
 
@@ -310,6 +440,7 @@ export async function cancelAgentRun(input) {
     },
     { ifStatus: "cancelled" },
   );
+  await completeSessionRun(cancelled.cli_session_ref, cancelled.run_id).catch(() => undefined);
   return snapshotFromState(runDir, cancelled);
 }
 
@@ -322,6 +453,32 @@ export async function runAgent(input) {
     run_ref: accepted.run_ref,
     timeout_ms: remainingTimeoutMs,
     poll_interval_ms: input?.poll_interval_ms ?? POLL_AFTER_MS,
+  });
+}
+
+export async function retainAgentRun(runRef, discussionId, retainUntil) {
+  const runId = runRef?.run_id;
+  const runDir = runDirFor(runId);
+  const timestamp = Date.parse(retainUntil);
+  if (typeof discussionId !== "string" || !discussionId || !Number.isFinite(timestamp)) {
+    throw new Error("discussionId and a valid retainUntil are required");
+  }
+  return withStateLock(runDir, async () => {
+    const state = await readState(runDir);
+    const retainedBy = new Set(state.retained_by_discussion ?? []);
+    retainedBy.add(discussionId);
+    const currentRetain = Date.parse(state.retain_until ?? "");
+    const next = {
+      ...state,
+      retained_by_discussion: Array.from(retainedBy).sort(),
+      retain_until:
+        Number.isFinite(currentRetain) && currentRetain > timestamp
+          ? state.retain_until
+          : new Date(timestamp).toISOString(),
+      updated_at: nowIso(),
+    };
+    await writeState(runDir, next);
+    return next;
   });
 }
 
@@ -341,6 +498,11 @@ export async function snapshotFromState(runDir, state) {
       content: [{ type: "text", text }],
       run_ref: runRef,
       cli_session_ref: cliSessionRef,
+      session_generation: state.session_generation,
+      created_at: state.created_at,
+      started_at: state.started_at,
+      completed_at: state.completed_at,
+      usage: state.usage,
       artifacts,
     };
   }
@@ -354,6 +516,11 @@ export async function snapshotFromState(runDir, state) {
       content: text ? [{ type: "text", text }] : [],
       run_ref: runRef,
       cli_session_ref: cliSessionRef,
+      session_generation: state.session_generation,
+      created_at: state.created_at,
+      started_at: state.started_at,
+      completed_at: state.completed_at,
+      retryable: state.retryable ?? state.error?.retryable,
       error: state.error,
       cancel_reason: state.cancel_reason,
       cancel_actor: state.cancel_actor,
@@ -369,6 +536,9 @@ export async function snapshotFromState(runDir, state) {
     content: [{ type: "text", text: activeStatusText(state.status) }],
     run_ref: runRef,
     cli_session_ref: cliSessionRef,
+    session_generation: state.session_generation,
+    created_at: state.created_at,
+    started_at: state.started_at,
     log_tail: tail ? { type: "text", text: tail } : undefined,
     progress_events: recentEvents.length > 0 ? recentEvents : undefined,
     poll_after_ms: POLL_AFTER_MS,
@@ -412,6 +582,76 @@ function optionalNonEmptyString(value, key) {
     return undefined;
   }
   return trimmed;
+}
+
+function acceptedFromState(state) {
+  return {
+    status: "accepted",
+    run_ref: { run_id: state.run_id },
+    cli_session_ref: publicCliSessionRef(state.cli_session_ref),
+    session_generation: state.session_generation,
+    poll_after_ms: POLL_AFTER_MS,
+  };
+}
+
+function canonicalHash(value) {
+  return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function idempotencyRecordPath(key) {
+  const hash = crypto.createHash("sha256").update(key).digest("hex");
+  return path.join(getRunRoot(), ".internal", "idempotency", `${hash}.json`);
+}
+
+async function withIdempotencyLock(key, fn) {
+  const hash = crypto.createHash("sha256").update(key).digest("hex");
+  const root = path.join(getRunRoot(), ".internal", "idempotency");
+  const lockDir = path.join(root, `${hash}.lock`);
+  await fsp.mkdir(root, { recursive: true, mode: 0o700 });
+  await fsp.chmod(root, 0o700).catch(() => undefined);
+  const deadline = Date.now() + 5000;
+  while (true) {
+    try {
+      await fsp.mkdir(lockDir, { mode: 0o700 });
+      await atomicWriteJson(path.join(lockDir, "owner.json"), {
+        pid: process.pid,
+        created_at: nowIso(),
+      });
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      const owner = await readJsonIfExists(path.join(lockDir, "owner.json")).catch(() => null);
+      const createdAt = Date.parse(owner?.created_at ?? "");
+      if (Number.isFinite(createdAt) && Date.now() - createdAt > 20000) {
+        await fsp.rm(lockDir, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out acquiring idempotency lock");
+      }
+      await sleep(10);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await fsp.rm(lockDir, { recursive: true, force: true });
+  }
 }
 
 function signalProcessGroup(pgid, signal) {

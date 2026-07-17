@@ -16,7 +16,7 @@ import {
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const HTTP_SHUTDOWN_GRACE_MS = 30000;
 
-function createAgentHubServer() {
+function createAgentHubServer(options = {}) {
   const server = new McpServer(
     {
       name: "agent-hub-mcp",
@@ -33,7 +33,7 @@ function createAgentHubServer() {
     },
   );
 
-  registerTools(server);
+  registerTools(server, options);
   return server;
 }
 
@@ -67,7 +67,76 @@ const CancelInputSchema = {
   actor: z.string().optional(),
 };
 
-function registerTools(server) {
+const DiscussionRefSchema = z.object({ discussion_id: z.string() }).strict();
+
+const DiscussionMaterialSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      material_id: z.string(),
+      type: z.literal("inline"),
+      title: z.string(),
+      content: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      material_id: z.string(),
+      type: z.literal("file"),
+      title: z.string(),
+      path: z.string(),
+    })
+    .strict(),
+]);
+
+const DiscussionHostSchema = z
+  .object({
+    agent_id: z.string(),
+    metadata: z.record(z.any()).optional(),
+  })
+  .strict();
+
+const DiscussionParticipantSchema = z
+  .object({
+    participant_id: z.string(),
+    agent_id: z.string(),
+    role: z.string(),
+    focus: z.string(),
+    metadata: z.record(z.any()).optional(),
+  })
+  .strict();
+
+const DiscussionDispatchInputSchema = z.union([
+  z
+    .object({
+      kind: z.literal("new"),
+      objective: z.string(),
+      question: z.string(),
+      cwd: z.string(),
+      materials: z.array(DiscussionMaterialSchema).optional(),
+      host: DiscussionHostSchema,
+      participants: z.array(DiscussionParticipantSchema).min(2),
+      quorum: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("follow_up"),
+      parent_discussion_ref: DiscussionRefSchema,
+      question: z.string(),
+      materials: z.array(DiscussionMaterialSchema).optional(),
+    })
+    .strict(),
+]);
+
+const DiscussionQueryInputSchema = z
+  .object({
+    discussion_ref: DiscussionRefSchema,
+    after_sequence: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+function registerTools(server, options = {}) {
   server.registerTool(
     "list_agents",
     {
@@ -136,12 +205,72 @@ function registerTools(server) {
     },
     async (input) => asToolResult(await runAgent(input)),
   );
+
+  if (options.discussionManager) {
+    registerDiscussionTools(server, options.discussionManager);
+  }
+}
+
+function registerDiscussionTools(server, manager) {
+  server.registerTool(
+    "dispatch_discussion",
+    {
+      title: "Dispatch Discussion",
+      description:
+        "Start a fixed-protocol multi-agent discussion. Participants are selected by the caller during preparation. Runs use adapter-configured best-effort read-only behavior; this is not a security boundary.",
+      inputSchema: DiscussionDispatchInputSchema,
+    },
+    async (input) => asToolResult(await manager.dispatch(input)),
+  );
+
+  server.registerTool(
+    "query_discussion",
+    {
+      title: "Query Discussion",
+      description: "Read the latest discussion projection, active runs, artifacts, and paged events.",
+      inputSchema: DiscussionQueryInputSchema,
+    },
+    async (input) => asToolResult(await manager.query(input)),
+  );
+
+  server.registerTool(
+    "wait_discussion",
+    {
+      title: "Wait Discussion",
+      description:
+        "Wait for a discussion terminal state. A timed_out response means the same discussion_ref should be waited again; it does not cancel the discussion.",
+      inputSchema: DiscussionQueryInputSchema,
+    },
+    async (input) => asToolResult(await manager.wait(input)),
+  );
+
+  server.registerTool(
+    "cancel_discussion",
+    {
+      title: "Cancel Discussion",
+      description: "Persist cancellation intent and cancel all currently known active discussion runs.",
+      inputSchema: z
+        .object({
+          discussion_ref: DiscussionRefSchema,
+          reason: z.string().optional(),
+          actor: z.string().optional(),
+        })
+        .strict(),
+    },
+    async (input) => asToolResult(await manager.cancel(input)),
+  );
 }
 
 function asToolResult(value) {
   if (Array.isArray(value?.content) && value.content.length > 0) {
     return {
       content: value.content,
+      structuredContent: value,
+    };
+  }
+  if (typeof value?.content === "string" && value.content) {
+    return {
+      content: [{ type: "text", text: value.content }],
       structuredContent: value,
     };
   }
@@ -162,7 +291,7 @@ async function main() {
     const server = createAgentHubServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("agent-hub-mcp listening on stdio");
+    console.error("agent-hub-mcp listening on stdio (deprecated; discussion tools are HTTP-only)");
     return;
   }
 
@@ -216,8 +345,19 @@ function requireValue(flag, value) {
 }
 
 async function listenStreamableHttp(options) {
+  const { DiscussionManager } = await import("./discussion-manager.js");
+  const discussionManager = new DiscussionManager();
+  await discussionManager.start();
   const activeRequests = new Set();
   const httpServer = createHttpServer(async (req, res) => {
+    if (!isAllowedHttpOrigin(req.headers.origin)) {
+      res.writeHead(403, {
+        "content-type": "application/json",
+        vary: "Origin",
+      });
+      res.end(JSON.stringify(jsonRpcError(-32003, "Forbidden origin")));
+      return;
+    }
     const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
     if (requestPath !== options.path) {
       res.writeHead(404, { "content-type": "application/json" });
@@ -230,7 +370,7 @@ async function listenStreamableHttp(options) {
       return;
     }
 
-    const server = createAgentHubServer();
+    const server = createAgentHubServer({ discussionManager });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
@@ -261,33 +401,54 @@ async function listenStreamableHttp(options) {
   await new Promise((resolve) => {
     httpServer.listen(options.port, options.host, resolve);
   });
-  installHttpShutdownHandlers(httpServer, activeRequests);
+  installHttpShutdownHandlers(httpServer, activeRequests, discussionManager);
   console.error(
     `agent-hub-mcp listening on http://${options.host}:${options.port}${options.path}`,
   );
 }
 
-function installHttpShutdownHandlers(httpServer, activeRequests) {
+function isAllowedHttpOrigin(origin) {
+  if (!origin) {
+    return true;
+  }
+  const allowed = new Set(
+    (process.env.AGENT_HUB_HTTP_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  return allowed.has(origin);
+}
+
+function installHttpShutdownHandlers(httpServer, activeRequests, discussionManager) {
   let shuttingDown = false;
-  const shutdown = (signal) => {
+  const shutdown = async (signal) => {
     if (shuttingDown) {
       return;
     }
     shuttingDown = true;
     console.error(`agent-hub-mcp received ${signal}, shutting down HTTP server`);
-    httpServer.close(() => {
-      process.exit(0);
-    });
-    setTimeout(() => {
+    const forcedExit = setTimeout(() => {
       for (const { server, transport } of activeRequests) {
         transport.close().catch(() => undefined);
         server.close().catch(() => undefined);
       }
       process.exit(0);
     }, HTTP_SHUTDOWN_GRACE_MS).unref();
+    const closed = new Promise((resolve) => httpServer.close(resolve));
+    await discussionManager.shutdown().catch((error) => {
+      console.error("agent-hub-mcp discussion shutdown error:", error);
+    });
+    for (const { server, transport } of activeRequests) {
+      await transport.close().catch(() => undefined);
+      await server.close().catch(() => undefined);
+    }
+    await closed;
+    clearTimeout(forcedExit);
+    process.exit(0);
   };
-  process.once("SIGTERM", () => shutdown("SIGTERM"));
-  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 }
 
 function jsonRpcError(code, message) {

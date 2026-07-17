@@ -1,6 +1,6 @@
 # Agent Hub MCP
 
-Agent Hub MCP is a local MCP stdio bridge for running agent CLIs from MCP tools. It ships three adapters — Claude Code (`claude-code`), Codex CLI (`codex`), and Kimi Code (`kimi-code`) — and runs them in non-interactive mode while Agent Hub owns run state, logs, waiting, cancellation, and local artifact storage.
+Agent Hub MCP is a local MCP daemon for running agent CLIs and durable multi-agent discussions. It ships three adapters — Claude Code (`claude-code`), Codex CLI (`codex`), and Kimi Code (`kimi-code`) — and runs them in non-interactive mode while Agent Hub owns run state, session lineage, logs, waiting, cancellation, and local artifacts.
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ Use the returned `run_ref` with `wait_agent_run` until the run reaches a termina
 
 ## MCP Server
 
-The server runs on stdio:
+The legacy server runs on stdio:
 
 ```sh
 npm start
@@ -65,7 +65,7 @@ It can also run as a long-lived local streamable HTTP daemon:
 node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
 ```
 
-The HTTP transport is intended for local loopback use only. The server rejects non-loopback hosts and does not implement remote authentication.
+The HTTP transport is the supported surface for new functionality, including Discussions. It is intended for local loopback use only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. The stdio transport remains available for the six original run tools but is deprecated and does not expose Discussion tools.
 
 MCP clients should launch the server process, for example:
 
@@ -80,7 +80,7 @@ MCP clients should launch the server process, for example:
 }
 ```
 
-The exposed tools are:
+Both transports expose the original run tools:
 
 - `list_agents`
 - `dispatch_to_agent`
@@ -89,12 +89,42 @@ The exposed tools are:
 - `cancel_agent_run`
 - `run_agent`
 
+Streamable HTTP additionally exposes:
+
+- `dispatch_discussion`
+- `query_discussion`
+- `wait_discussion`
+- `cancel_discussion`
+
+For example, with the HTTP daemon running:
+
+```sh
+node scripts/mcp-client.js dispatch_discussion --url http://127.0.0.1:8700/mcp --json '{
+  "kind": "new",
+  "objective": "Choose an implementation approach",
+  "question": "Which option should we ship?",
+  "cwd": "/absolute/path/to/project",
+  "materials": [],
+  "host": {"agent_id": "claude-code", "metadata": {}},
+  "participants": [
+    {"participant_id": "reviewer-a", "agent_id": "codex", "role": "reliability reviewer", "focus": "recovery and races", "metadata": {}},
+    {"participant_id": "reviewer-b", "agent_id": "kimi-code", "role": "product reviewer", "focus": "usability and scope", "metadata": {}}
+  ],
+  "quorum": 2
+}'
+```
+
+The caller chooses the host and complete participant roster before dispatch. The daemon then runs an uninterruptible five-phase protocol (independent memo, moderation, challenge, revision, synthesis). Use the returned `discussion_ref` with `wait_discussion`; after completion, a follow-up may add a question and new materials but keeps the original roster. Discussion permissions come from adapter capabilities: Claude/Codex currently prefer read-only and Kimi uses auto. This is best-effort only, not a security boundary.
+
 ## Configuration
 
 | Variable | Purpose |
 |---|---|
 | `AGENT_HUB_RUN_DIR` | Override the run storage root. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | Override terminal run retention; default is `604800`. |
+| `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage; by default it is a `discussions` sibling of the run root. |
+| `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Override terminal Discussion retention; defaults to `AGENT_HUB_RUN_TTL_SECONDS` or `604800`. |
+| `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Comma-separated exact browser origins allowed to call the loopback HTTP daemon; unset rejects requests carrying `Origin`. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra environment variable names forwarded to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |
@@ -104,11 +134,12 @@ The exposed tools are:
 | `AGENT_HUB_KIMI_MODEL` | Default `-m` for Kimi runs when `metadata["kimi-code"].model` is not provided. |
 | `AGENT_HUB_KIMI_EFFORT` | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when `metadata["kimi-code"].effort` is not provided. |
 
-Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions.
+Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions. Discussion records are stored in the sibling `discussions` directory and retain linked run artifacts for the same seven-day terminal TTL.
 
 ## Docs
 
 - [Architecture](docs/architecture.md) explains run/session boundaries, state files, process groups, and adapter behavior.
+- [Discussion feature design](docs/discussion-design.md) specifies the durable, structured multi-agent discussion workflow and its invariants.
 - [Integration guide](docs/integration-guide.md) shows how MCP clients should call the tools.
 - [Operator runbook](docs/operator-runbook.md) covers configuration, smoke tests, storage, and troubleshooting.
 

@@ -21,6 +21,11 @@ import {
 } from "./fs-store.js";
 import { getAdapter } from "./adapters.js";
 import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
+import {
+  acquireSessionLease,
+  completeSessionRun,
+  releaseSessionRun,
+} from "./session-registry.js";
 
 const EVENT_STREAM_FORMATS = new Set(["stream-json", "jsonl"]);
 const EARLY_SESSION_BUFFER_LIMIT = 65536;
@@ -167,6 +172,8 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     typeof adapter.sessionRefFromEvent !== "function" ||
     Boolean(publicCliSessionRef(request.effective_cli_session_ref));
   let earlySessionBuffer = "";
+  let earlySessionRegistration = Promise.resolve();
+  let earlySessionError = null;
   const captureEarlySessionRef = (chunk) => {
     earlySessionBuffer += chunk.toString("utf8");
     let newlineIndex;
@@ -188,11 +195,31 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
         earlySessionBuffer = "";
         // "cancelled" is included so a cancel that wins the state lock right
         // after thread.started still ends up with a resumable session ref.
-        updateStateGuarded(
-          runDir,
-          { cli_session_ref: publicCliSessionRef(sessionRef) },
-          { ifStatus: ["running", "cancelled"] },
-        ).catch(() => undefined);
+        earlySessionRegistration = (async () => {
+          const state = await readState(runDir);
+          const sessionRecord = await acquireSessionLease(sessionRef, {
+            run_id: state.run_id,
+          });
+          try {
+            const updated = await updateStateGuarded(
+              runDir,
+              {
+                cli_session_ref: publicCliSessionRef(sessionRef),
+                session_generation: sessionRecord.generation,
+              },
+              { ifStatus: ["running", "cancelled"] },
+            );
+            if (updated.status === "cancelled") {
+              await completeSessionRun(sessionRef, state.run_id);
+            }
+          } catch (error) {
+            await releaseSessionRun(sessionRef, state.run_id).catch(() => undefined);
+            throw error;
+          }
+        })().catch((error) => {
+          earlySessionError = error;
+          terminateChild(child, childPgid, killTimers);
+        });
       }
     }
     if (earlySessionBuffer.length > EARLY_SESSION_BUFFER_LIMIT) {
@@ -247,6 +274,10 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     ]);
   }
 
+  await earlySessionRegistration;
+  if (earlySessionError) {
+    throw earlySessionError;
+  }
   const current = await readState(runDir).catch(() => null);
   if (current?.status === "cancelled") {
     return;
@@ -300,6 +331,11 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     return;
   }
 
+  const precompletedState = await readState(runDir).catch(() => null);
+  const sessionRecord = await completeSessionRun(
+    outcome.cliSessionRef,
+    precompletedState?.run_id,
+  ).catch(() => null);
   await withStateLock(runDir, async () => {
     const currentState = await readJsonIfExists(path.join(runDir, "state.json"));
     if (currentState?.status !== "running") {
@@ -307,7 +343,7 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     }
     await atomicWriteJson(path.join(runDir, "result.json"), outcome.resultJson);
     await atomicWriteFile(path.join(runDir, "result.txt"), outcome.resultText);
-    await writeState(runDir, {
+    const completedState = {
       ...currentState,
       status: "completed",
       exit_code: code,
@@ -317,12 +353,20 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
       result_path: "result.txt",
       result_json_path: "result.json",
       cli_session_ref: outcome.cliSessionRef,
-    });
+      session_generation: sessionRecord?.generation ?? currentState.session_generation,
+      usage: normalizeUsage(outcome.resultJson),
+    };
+    await writeState(runDir, completedState);
   });
 }
 
 async function failRun(runDir, error) {
   const stateError = sanitizeStateError(error);
+  const prefailedState = await readState(runDir).catch(() => null);
+  const failedSessionRef = error.cli_session_ref ?? prefailedState?.cli_session_ref;
+  const sessionRecord = await completeSessionRun(failedSessionRef, prefailedState?.run_id).catch(
+    () => null,
+  );
   await withStateLock(runDir, async () => {
     const current = await readJsonIfExists(path.join(runDir, "state.json"));
     if (current?.status === "cancelled" || current?.status === "completed") {
@@ -339,6 +383,8 @@ async function failRun(runDir, error) {
       updated_at: nowIso(),
       expires_at: expiresAt(),
       error: stateError,
+      retryable: stateError.retryable,
+      session_generation: sessionRecord?.generation ?? current?.session_generation,
       result_path: "result.txt",
       result_json_path: "result.json",
     };
@@ -351,11 +397,100 @@ async function failRun(runDir, error) {
 
 function sanitizeStateError(error) {
   const sanitized = { ...error };
+  if (looksLikeSessionResumeFailure(error)) {
+    sanitized.code = "session_resume_failed";
+  }
   delete sanitized.stderr_tail;
   delete sanitized.stdout_tail;
   delete sanitized.result_json;
   delete sanitized.result_text;
+  sanitized.retryable =
+    typeof error.retryable === "boolean"
+      ? error.retryable
+      : inferRetryable(
+          sanitized.code,
+          [error.message, error.stderr_tail, error.stdout_tail, error.result_text]
+            .filter(Boolean)
+            .join("\n"),
+        );
   return sanitized;
+}
+
+function looksLikeSessionResumeFailure(error) {
+  const text = [error?.message, error?.stderr_tail, error?.stdout_tail, error?.result_text]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  return /(?:session|thread|conversation).*(?:not found|does not exist|unknown|expired)|(?:cannot|failed to) resume/.test(
+    text,
+  );
+}
+
+function inferRetryable(code, message) {
+  const deterministicCodes = new Set([
+    "runner_exception",
+    "invalid_request",
+    "unsupported_permission",
+    "stdout_parse_failed",
+  ]);
+  if (deterministicCodes.has(code)) {
+    return false;
+  }
+  const text = String(message ?? "").toLowerCase();
+  if (/model .*not (?:found|configured)|invalid model|permission .*not supported|outside .*allowlist/.test(text)) {
+    return false;
+  }
+  return new Set([
+    "agent_error",
+    "cli_spawn_failed",
+    "runner_spawn_failed",
+    "runner_terminated",
+    "process_missing",
+    "stdin_write_failed",
+    "log_write_failed",
+    "session_resume_failed",
+  ]).has(code);
+}
+
+function normalizeUsage(resultJson) {
+  const usage = findUsage(resultJson);
+  if (!usage) {
+    return undefined;
+  }
+  const normalized = {
+    input_tokens: finiteNumber(usage.input_tokens ?? usage.inputTokens),
+    output_tokens: finiteNumber(usage.output_tokens ?? usage.outputTokens),
+    cached_tokens: finiteNumber(
+      usage.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedInputTokens,
+    ),
+    reported_cost: finiteNumber(usage.cost_usd ?? usage.total_cost_usd ?? usage.cost),
+  };
+  return Object.fromEntries(Object.entries(normalized).filter(([, value]) => value !== undefined));
+}
+
+function findUsage(value, depth = 0) {
+  if (!value || depth > 4) {
+    return null;
+  }
+  if (typeof value === "object" && !Array.isArray(value) && value.usage) {
+    return value.usage;
+  }
+  if (Array.isArray(value)) {
+    for (let index = value.length - 1; index >= 0; index -= 1) {
+      const found = findUsage(value[index], depth + 1);
+      if (found) return found;
+    }
+  } else if (typeof value === "object") {
+    for (const child of Object.values(value)) {
+      const found = findUsage(child, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function finiteNumber(value) {
+  return Number.isFinite(value) ? Number(value) : undefined;
 }
 
 function publicCliSessionRef(ref) {

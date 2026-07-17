@@ -24,7 +24,8 @@ node scripts/mcp-client.js list_agents
 
 | Command | Purpose |
 |---|---|
-| `npm start` | Start the MCP stdio server. |
+| `npm start` | Start the deprecated MCP stdio server (original run tools only). |
+| `node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp` | Start the long-lived local daemon, including Discussion tools. |
 | `npm test` | Run the Vitest suite. |
 | `npm run selftest:mcp` | Call the local server through `scripts/mcp-client.js`. |
 | `npm run review:self` | Ask Claude Code to review this repository through Agent Hub. |
@@ -35,6 +36,9 @@ node scripts/mcp-client.js list_agents
 |---|---|---|
 | `AGENT_HUB_RUN_DIR` | `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` | Moves run state, logs, and artifacts. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | `604800` | Retention for terminal runs. Must be a non-negative number. |
+| `AGENT_HUB_DISCUSSION_DIR` | sibling `discussions` directory next to the run root | Moves Discussion state, events, materials, prompts, and decisions. |
+| `AGENT_HUB_DISCUSSION_TTL_SECONDS` | `AGENT_HUB_RUN_TTL_SECONDS` or `604800` | Retention for terminal Discussions and their linked runs. |
+| `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | unset | Comma-separated exact browser origins allowed to call the loopback daemon. Native MCP clients normally send no `Origin`; browser origins are rejected by default. |
 | `AGENT_HUB_CWD_ALLOWLIST` | unset | Path-delimited allowlist for request `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | unset | Comma-separated extra environment variable names to forward to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
@@ -70,6 +74,23 @@ result.json
 
 Terminal runs are removed after `expires_at`. Cleanup runs at the start of `list_agents`, `dispatch_to_agent`, `query_agent_run`, `wait_agent_run`, and `run_agent`.
 
+The run root also contains private `.internal/idempotency` and `.internal/sessions` indexes. Do not edit or delete them while a daemon or detached runner is active. Discussion directories are siblings of the run root by default:
+
+```text
+discussions/<discussion-id>/
+  request.json
+  state.json
+  events.jsonl
+  lease.json
+  materials/
+  prompts/
+  handoff/
+  decision.json
+  decision.md
+```
+
+Only terminal Discussions are TTL-cleaned. Linked run state records carry `retain_until`, so their raw CLI artifacts remain available for the Discussion retention window.
+
 ## Smoke Test
 
 Use a temporary run directory when verifying behavior:
@@ -93,6 +114,20 @@ For Codex, use `"agent_id": "codex"` with `metadata.codex`, for example `{"codex
 
 Use the returned `run_ref` with `wait_agent_run`, or with `query_agent_run` when you only need the latest snapshot. Inspect `structuredContent.status`, `structuredContent.content`, `progress_events`, and the run's `command.json` if the result is unexpected.
 
+## Discussion Smoke Test
+
+Start the HTTP daemon with an isolated store:
+
+```sh
+AGENT_HUB_RUN_DIR=/tmp/agent-hub-runs \
+AGENT_HUB_DISCUSSION_DIR=/tmp/agent-hub-discussions \
+node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
+```
+
+In another terminal, dispatch with `node scripts/mcp-client.js dispatch_discussion --url http://127.0.0.1:8700/mcp --json '…'`, then pass the returned `discussion_ref` to `wait_discussion`. A normal two-participant discussion creates eight runs. Do not treat one `timed_out: true` response as failure; repeat `wait_discussion` with the same ref.
+
+On SIGTERM/SIGINT the daemon stops creating turns, releases Discussion leases, and leaves already detached CLI runs alive. A restarted daemon scans nonterminal records and reattaches them. Do not manually cancel those runs during a rolling restart.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Action |
@@ -106,6 +141,11 @@ Use the returned `run_ref` with `wait_agent_run`, or with `query_agent_run` when
 | `status: "running"` with `timed_out: true` | Agent Hub's wait window expired while the CLI was still running. | Call `query_agent_run` or `wait_agent_run` again with the same `run_ref`; cancel only if the user wants to stop it. |
 | `process_missing` | Active state existed but the runner or CLI process was gone. | Inspect `runner.log`, `stderr.log`, and `command.json`. |
 | `stdout_parse_failed` | CLI stdout did not contain the expected JSON/JSONL result events. | Inspect `stdout.log` and `stderr.log`; verify the adapter command in `command.json`. |
+| `session_busy` | Another run currently owns the same CLI session. | Wait for or cancel the active run; do not retry concurrently. |
+| `session_generation_conflict` / `session_reserved` | A continuation or sibling follow-up tried to fork an already advanced lineage. | Start a fresh session; Discussion follow-ups rebuild from handoff automatically. |
+| `discussion_lease_held` | Another HTTP daemon currently owns that Discussion. | Keep only one daemon per store, or wait at least 20 seconds after an unclean owner loss. |
+| `protocol_integrity: degraded` | Quorum was met, but a participant missed or failed a later formal turn. | Inspect participant statuses and `events.jsonl`; the DecisionRecord may still be valid. |
+| Discussion `failed` with `quorum_not_met`, `moderation_failed`, or `decision_failed` | The fixed protocol could not produce the required formal record. | Inspect linked run artifacts and structured validation errors; start a new Discussion after correcting inputs/config. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |
 
 ## Cancellation

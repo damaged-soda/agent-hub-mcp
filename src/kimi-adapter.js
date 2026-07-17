@@ -7,6 +7,13 @@ import {
 } from "./adapter-utils.js";
 
 export const KIMI_AGENT_ID = "kimi-code";
+export const KIMI_DISCUSSION_CAPABILITIES = Object.freeze({
+  supported_permissions: ["auto"],
+  preferred_discussion_permission: "auto",
+  network_access: { auto: true },
+  max_prompt_bytes: 512 * 1024,
+  session_resume: true,
+});
 const AVAILABILITY_CACHE_MS = 30000;
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_KIMI_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_KIMI_EFFORT";
@@ -278,6 +285,7 @@ export async function listKimiAgent() {
       non_interactive: true,
       session_resume: true,
       command: "kimi -p <prompt> --output-format stream-json",
+      discussion: KIMI_DISCUSSION_CAPABILITIES,
     },
   };
 }

@@ -7,6 +7,13 @@ import {
 } from "./adapter-utils.js";
 
 export const CODEX_AGENT_ID = "codex";
+export const CODEX_DISCUSSION_CAPABILITIES = Object.freeze({
+  supported_permissions: ["read-only", "auto"],
+  preferred_discussion_permission: "read-only",
+  network_access: { "read-only": false, auto: true },
+  max_prompt_bytes: 512 * 1024,
+  session_resume: true,
+});
 const AVAILABILITY_CACHE_MS = 30000;
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 // Unified permission "auto" matches Claude's auto mode: writable workspace plus
@@ -307,6 +314,7 @@ export async function listCodexAgent() {
       non_interactive: true,
       session_resume: true,
       command: "codex exec --json --skip-git-repo-check",
+      discussion: CODEX_DISCUSSION_CAPABILITIES,
     },
   };
 }

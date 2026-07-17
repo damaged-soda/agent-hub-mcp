@@ -8,6 +8,13 @@ import {
 } from "./adapter-utils.js";
 
 export const CLAUDE_AGENT_ID = "claude-code";
+export const CLAUDE_DISCUSSION_CAPABILITIES = Object.freeze({
+  supported_permissions: ["read-only", "auto"],
+  preferred_discussion_permission: "read-only",
+  network_access: { "read-only": "unknown", auto: true },
+  max_prompt_bytes: 512 * 1024,
+  session_resume: true,
+});
 const AVAILABILITY_CACHE_MS = 30000;
 const PERMISSION_MODES = new Set([
   "acceptEdits",
@@ -334,6 +341,7 @@ export async function listClaudeAgent() {
       non_interactive: true,
       session_resume: true,
       command: "claude -p --input-format text --output-format stream-json --verbose",
+      discussion: CLAUDE_DISCUSSION_CAPABILITIES,
     },
   };
 }

@@ -224,6 +224,10 @@ export async function cleanupExpiredRuns() {
         if (!state || !FINAL_STATUSES.has(state.status) || !state.expires_at) {
           return;
         }
+        const retainUntil = Date.parse(state.retain_until ?? "");
+        if (Number.isFinite(retainUntil) && retainUntil > now) {
+          return;
+        }
         if (Date.parse(state.expires_at) <= now) {
           await fsp.rm(runDir, { recursive: true, force: true });
         }

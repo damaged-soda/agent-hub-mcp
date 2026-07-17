@@ -43,6 +43,20 @@ export async function validateDirectory(target, label, baseDir = process.cwd()) 
   return realpathTarget(resolved);
 }
 
+export async function validateRegularFile(target, label, baseDir = process.cwd()) {
+  if (typeof target !== "string" || target.trim() === "") {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  const resolved = path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
+  const real = await realpathExisting(resolved, label);
+  const stat = await fsp.stat(real);
+  if (!stat.isFile()) {
+    throw new Error(`${label} must be a regular file`);
+  }
+  await validateAllowlist([{ path: real, label }]);
+  return real;
+}
+
 export async function validateAllowlist(targets) {
   const allowlist = splitAllowlist(process.env.AGENT_HUB_CWD_ALLOWLIST);
   if (allowlist.length === 0) {

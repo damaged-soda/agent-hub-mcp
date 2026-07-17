@@ -133,6 +133,90 @@ Requests cancellation of the run process group:
 }
 ```
 
+## Discussions (streamable HTTP only)
+
+The stdio transport is deprecated and intentionally exposes only the original run tools. Start the long-lived HTTP daemon before using Discussions:
+
+```sh
+node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
+```
+
+`dispatch_discussion` accepts either a new discussion or a follow-up. A new discussion fixes the host, participant roster, role/focus, quorum, working directory, and material bundle before any CLI run starts:
+
+```json
+{
+  "kind": "new",
+  "objective": "Select an implementation",
+  "question": "Which option should ship?",
+  "cwd": "/absolute/path/to/project",
+  "materials": [
+    {
+      "material_id": "design",
+      "type": "file",
+      "title": "Current design",
+      "path": "docs/design.md"
+    }
+  ],
+  "host": {
+    "agent_id": "claude-code",
+    "metadata": {"claude": {"model": "sonnet"}}
+  },
+  "participants": [
+    {
+      "participant_id": "reliability",
+      "agent_id": "codex",
+      "role": "reliability reviewer",
+      "focus": "recovery, leases, and idempotency",
+      "metadata": {}
+    },
+    {
+      "participant_id": "product",
+      "agent_id": "kimi-code",
+      "role": "product reviewer",
+      "focus": "scope and usability",
+      "metadata": {}
+    }
+  ],
+  "quorum": 2
+}
+```
+
+The response is immediate:
+
+```json
+{
+  "status": "accepted",
+  "discussion_ref": {"discussion_id": "..."},
+  "poll_after_ms": 1000
+}
+```
+
+Call `query_discussion` for a snapshot or `wait_discussion` for the server's ten-minute wait window. Both accept `after_sequence` and `limit` (maximum 200) for event pagination. A wait response with `timed_out: true` is not a failure and does not cancel the discussion. `cancel_discussion` persists cancellation intent and cancels every known active run before the discussion becomes terminal.
+
+The daemon executes a fixed five-phase protocol: independent memos, host moderation, participant challenge, participant revision, and host synthesis. The process is not interactive; callers add information only by starting a follow-up after completion. A follow-up inherits the original objective, cwd, host, participants, roles, focus, quorum, and request metadata:
+
+```json
+{
+  "kind": "follow_up",
+  "parent_discussion_ref": {"discussion_id": "..."},
+  "question": "Does the decision change under the new constraint?",
+  "materials": [
+    {
+      "material_id": "constraint",
+      "type": "inline",
+      "title": "New constraint",
+      "content": "The migration must finish in one week."
+    }
+  ]
+}
+```
+
+The parent must still be retained and must have completed with a valid DecisionRecord. Follow-ups atomically claim resumable member session lineages where possible; otherwise they rebuild context from the frozen handoff. Sibling follow-ups cannot fork the same CLI session history.
+
+Discussion permissions are capability-driven and cannot be overridden in host/participant metadata. Current capabilities prefer `read-only` for Claude and Codex, and `auto` for Kimi because Kimi prompt mode has no read-only permission. This is best-effort behavior, not a sandbox guarantee. Each material is limited to 128 KiB, the bundle to 256 KiB, and terminal discussions plus linked runs are retained for seven days by default.
+
+Completed snapshots include deterministic Markdown in `content`, the authoritative structured `decision`, effective permission/network disclosure, artifacts, event cursor, and all associated `run_refs`. See [discussion-design.md](discussion-design.md) for message schemas and recovery invariants.
+
 ## Unified Metadata
 
 Top-level `metadata` fields work for every adapter; the adapter translates them to native CLI flags. The adapter namespaces below (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) remain available as native escape hatches and take precedence over the unified fields.

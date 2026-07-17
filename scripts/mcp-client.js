@@ -89,8 +89,10 @@ export async function callAgentHubToolHttp(name, args, url, options = {}) {
 }
 
 async function main() {
-  const { toolName, args, requestTimeoutMs } = await parseCli(process.argv.slice(2));
-  const result = await callAgentHubTool(toolName, args, { requestTimeoutMs });
+  const { toolName, args, requestTimeoutMs, url } = await parseCli(process.argv.slice(2));
+  const result = url
+    ? await callAgentHubToolHttp(toolName, args, url, { requestTimeoutMs })
+    : await callAgentHubTool(toolName, args, { requestTimeoutMs });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -98,6 +100,7 @@ async function parseCli(argv) {
   const toolName = argv[0] && !argv[0].startsWith("--") ? argv.shift() : "list_agents";
   let args = {};
   let requestTimeoutMs;
+  let url;
   while (argv.length > 0) {
     const flag = argv.shift();
     if (flag === "--json") {
@@ -106,11 +109,13 @@ async function parseCli(argv) {
       args = JSON.parse(await fsp.readFile(expectValue(flag, argv.shift()), "utf8"));
     } else if (flag === "--request-timeout-ms") {
       requestTimeoutMs = Number(expectValue(flag, argv.shift()));
+    } else if (flag === "--url") {
+      url = expectValue(flag, argv.shift());
     } else {
       throw new Error(`Unknown argument: ${flag}`);
     }
   }
-  return { toolName, args, requestTimeoutMs };
+  return { toolName, args, requestTimeoutMs, url };
 }
 
 function expectValue(flag, value) {
@@ -127,7 +132,7 @@ export function cleanEnv(env) {
 }
 
 export function defaultRequestTimeoutMs(toolName, args) {
-  if (toolName === "wait_agent_run") {
+  if (toolName === "wait_agent_run" || toolName === "wait_discussion") {
     return WAIT_AGENT_RUN_REQUEST_TIMEOUT_MS;
   }
   const agentTimeout = Number.isFinite(args?.timeout_ms)
