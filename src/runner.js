@@ -55,9 +55,11 @@ async function main() {
     return;
   }
   // Position wins: namespace derived from the run cwd overrides inherited env.
+  // command.env carries adapter-injected values (e.g. kimi's effort variable).
   const agentEnv = {
     ...buildAgentEnv(process.env),
     ...resolveNamespaceEnv(request.cwd),
+    ...command.env,
   };
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,

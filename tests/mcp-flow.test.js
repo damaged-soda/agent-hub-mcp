@@ -16,6 +16,7 @@ import {
 import { waitAgentRun } from "../src/runs.js";
 
 const FAKE_CODEX_THREAD_ID = "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000";
+const FAKE_KIMI_SESSION_ID = "session_0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000";
 
 describe("MCP flow", () => {
   let tempDir;
@@ -35,6 +36,7 @@ describe("MCP flow", () => {
     await fsp.writeFile(path.join(workspaceDir, "README.md"), "# Fixture\n");
     await writeFakeClaude(path.join(binDir, "claude"));
     await writeFakeCodex(path.join(binDir, "codex"));
+    await writeFakeKimi(path.join(binDir, "kimi"));
     env = {
       ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
@@ -52,6 +54,7 @@ describe("MCP flow", () => {
     expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
       "claude-code",
       "codex",
+      "kimi-code",
     ]);
 
     const result = await callAgentHubTool(
@@ -117,6 +120,7 @@ describe("MCP flow", () => {
       expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
         "claude-code",
         "codex",
+        "kimi-code",
       ]);
     });
   });
@@ -488,6 +492,159 @@ describe("MCP flow", () => {
     expect(command.argv.slice(0, 4)).toEqual(["codex", "exec", "resume", FAKE_CODEX_THREAD_ID]);
     expect(command.argv).toContain('sandbox_mode="workspace-write"');
     expect(command.argv).not.toContain("--sandbox");
+  });
+
+  it("runs a kimi agent end to end and discovers the session id", async () => {
+    const accepted = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "kimi-code",
+        prompt: "review this",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: {
+          "kimi-code": {
+            model: "k2",
+            effort: "high",
+            add_dirs: ["subdir"],
+          },
+        },
+      },
+      { env },
+    );
+    expect(accepted.structuredContent.cli_session_ref).toBeNull();
+
+    const result = await withRunDir(runDir, () =>
+      waitAgentRun({
+        run_ref: accepted.structuredContent.run_ref,
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.content[0].text).toBe("fake kimi result: review this");
+    expect(result.cli_session_ref).toEqual({
+      agent_id: "kimi-code",
+      native_session_id: FAKE_KIMI_SESSION_ID,
+    });
+
+    const command = JSON.parse(
+      await fsp.readFile(
+        path.join(runDir, accepted.structuredContent.run_ref.run_id, "command.json"),
+        "utf8",
+      ),
+    );
+    expect(command.argv.slice(0, 4)).toEqual(["kimi", "-p", "review this", "--output-format"]);
+    expect(command.argv).toContain("stream-json");
+    expect(command.argv).toContain("-m");
+    expect(command.argv).toContain("k2");
+    expect(command.argv).toContain("--add-dir");
+    expect(command.argv).toContain(await fsp.realpath(path.join(workspaceDir, "subdir")));
+    expect(command.argv).not.toContain("--yolo");
+    expect(command.argv).not.toContain("--auto");
+    expect(command.argv).not.toContain("--plan");
+    expect(command.output_format).toBe("stream-json");
+    expect(command.env_keys).toContain("KIMI_MODEL_THINKING_EFFORT");
+  });
+
+  it("passes kimi cli_session_ref through to kimi --session", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "kimi-code",
+        prompt: "continue",
+        cwd: workspaceDir,
+        cli_session_ref: {
+          agent_id: "kimi-code",
+          native_session_id: FAKE_KIMI_SESSION_ID,
+        },
+        metadata: { "kimi-code": {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    expect(result.structuredContent.status).toBe("completed");
+    expect(result.structuredContent.cli_session_ref.native_session_id).toBe(
+      FAKE_KIMI_SESSION_ID,
+    );
+
+    const command = JSON.parse(
+      await fsp.readFile(
+        path.join(runDir, result.structuredContent.run_ref.run_id, "command.json"),
+        "utf8",
+      ),
+    );
+    expect(command.argv.slice(0, 2)).toEqual(["kimi", "--session"]);
+    expect(command.argv).toContain(FAKE_KIMI_SESSION_ID);
+  });
+
+  it("maps kimi prompt failures onto agent_error", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "kimi-code",
+        prompt: "error",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { "kimi-code": {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    expect(result.structuredContent.status).toBe("failed");
+    expect(result.structuredContent.error.code).toBe("agent_error");
+    expect(result.content[0].text).toBe("fake kimi failure");
+  });
+
+  it("marks kimi-code unavailable for legacy kimi-cli version output", async () => {
+    await fsp.writeFile(
+      path.join(binDir, "kimi"),
+      `#!/usr/bin/env node
+if (process.argv.includes("--version")) {
+  process.stdout.write("kimi, version 1.49.0\\n");
+  process.exit(0);
+}
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+
+    const listed = await callAgentHubTool("list_agents", {}, { env });
+    expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
+    const unavailable = listed.structuredContent.unavailable_agents.find(
+      (agent) => agent.agent_id === "kimi-code",
+    );
+    expect(unavailable).toBeDefined();
+    expect(unavailable.unavailable_reason).toContain("1.49.0");
+  });
+
+  it("marks kimi-code unavailable when the version is below the minimum", async () => {
+    await fsp.writeFile(
+      path.join(binDir, "kimi"),
+      `#!/usr/bin/env node
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.1.9\\n");
+  process.exit(0);
+}
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+
+    const listed = await callAgentHubTool("list_agents", {}, { env });
+    const unavailable = listed.structuredContent.unavailable_agents.find(
+      (agent) => agent.agent_id === "kimi-code",
+    );
+    expect(unavailable).toBeDefined();
+    expect(unavailable.unavailable_reason).toContain("below the minimum supported version");
   });
 
   it("rejects a cli_session_ref whose agent_id does not match", async () => {
@@ -895,6 +1052,56 @@ process.stdin.on("end", () => {
     item: { id: "item_0", type: "agent_message", text: "fake codex result: " + prompt }
   });
   writeEvent({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } });
+});
+`,
+    { mode: 0o755 },
+  );
+  await fsp.chmod(target, 0o755);
+}
+
+async function writeFakeKimi(target) {
+  await fsp.writeFile(
+    target,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  process.stdout.write("0.26.0-test\\n");
+  process.exit(0);
+}
+const sessionIndex = args.indexOf("--session");
+const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : "${FAKE_KIMI_SESSION_ID}";
+const promptIndex = args.indexOf("-p");
+const prompt = promptIndex >= 0 ? args[promptIndex + 1] : "";
+let input = "";
+process.stdin.on("data", (chunk) => {
+  input += chunk;
+});
+process.stdin.on("end", () => {
+  const writeEvent = (value) => {
+    process.stdout.write(JSON.stringify(value) + "\\n");
+  };
+  const writeResumeHint = () => {
+    writeEvent({
+      role: "meta",
+      type: "session.resume_hint",
+      session_id: sessionId,
+      command: "kimi -r " + sessionId,
+      content: "To resume this session: kimi -r " + sessionId
+    });
+  };
+  if (prompt === "sleep") {
+    setTimeout(() => {
+      writeEvent({ role: "assistant", content: "late kimi result" });
+      writeResumeHint();
+    }, 30000);
+    return;
+  }
+  if (prompt === "error") {
+    process.stderr.write("error: failed to run prompt: fake kimi failure\\n");
+    process.exit(1);
+  }
+  writeEvent({ role: "assistant", content: "fake kimi result: " + prompt });
+  writeResumeHint();
 });
 `,
     { mode: 0o755 },

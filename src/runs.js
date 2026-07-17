@@ -117,6 +117,7 @@ export async function dispatchToAgent(input) {
     schema_version: 1,
     agent_id: input.agent_id,
     cwd: paths.cwd,
+    prompt: input.prompt,
     metadata,
     resolved_metadata: resolvedMetadata,
     cli_session_ref: input.cli_session_ref ?? null,

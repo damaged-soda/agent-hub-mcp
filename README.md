@@ -1,14 +1,14 @@
 # Agent Hub MCP
 
-Agent Hub MCP is a local MCP stdio bridge for running agent CLIs from MCP tools. It ships two adapters — Claude Code (`claude-code`) and Codex CLI (`codex`) — and runs them in non-interactive mode while Agent Hub owns run state, logs, waiting, cancellation, and local artifact storage.
+Agent Hub MCP is a local MCP stdio bridge for running agent CLIs from MCP tools. It ships three adapters — Claude Code (`claude-code`), Codex CLI (`codex`), and Kimi Code (`kimi-code`) — and runs them in non-interactive mode while Agent Hub owns run state, logs, waiting, cancellation, and local artifact storage.
 
 ## Quick Start
 
 Prerequisites:
 
 - Node.js 20 or newer.
-- Claude Code CLI available as `claude` and/or Codex CLI available as `codex`.
-- CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`).
+- Claude Code CLI available as `claude`, Codex CLI available as `codex`, and/or Kimi Code CLI available as `kimi`.
+- CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`).
 
 Install dependencies:
 
@@ -45,11 +45,11 @@ node scripts/mcp-client.js dispatch_to_agent --json '{
 }'
 ```
 
-The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex` (see the [integration guide](docs/integration-guide.md)). For a new Codex session the dispatch response has `cli_session_ref: null`; the thread id appears on the terminal snapshot once Codex reports it.
+The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, and for Kimi Code with `"agent_id": "kimi-code"` and `metadata["kimi-code"]` (see the [integration guide](docs/integration-guide.md)). For a new Codex or Kimi session the dispatch response has `cli_session_ref: null`; the session id appears on the terminal snapshot once the CLI reports it.
 
 Use the returned `run_ref` with `wait_agent_run` until the run reaches a terminal state. The server waits up to 10 minutes by default; if the MCP client times out first, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. `run_agent` is still available for short tasks that should finish inside the MCP client's tool timeout.
 
-`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for both adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code and `--sandbox workspace-write` with network access for Codex. Adapter namespaces (`metadata.claude`, `metadata.codex`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` server defaults).
+`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for all adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi has no permission flags in prompt mode, so `read-only`/`full` are rejected there rather than silently remapped). Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` server defaults).
 
 ## MCP Server
 
@@ -101,6 +101,8 @@ The exposed tools are:
 | `AGENT_HUB_CODEX_MODEL` | Default `--model` for Codex runs when `metadata.codex.model` is not provided. |
 | `AGENT_HUB_CLAUDE_EFFORT` | Default `--effort` for Claude runs when `metadata.claude.effort` is not provided. |
 | `AGENT_HUB_CODEX_EFFORT` | Default `model_reasoning_effort` for Codex runs when `metadata.codex.effort` is not provided. |
+| `AGENT_HUB_KIMI_MODEL` | Default `-m` for Kimi runs when `metadata["kimi-code"].model` is not provided. |
+| `AGENT_HUB_KIMI_EFFORT` | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when `metadata["kimi-code"].effort` is not provided. |
 
 Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions.
 

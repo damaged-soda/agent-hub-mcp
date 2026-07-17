@@ -27,7 +27,8 @@ Prompt 处理规则：
 - Agent Hub 不在 prompt 前后拼接任何文本。
 - Agent Hub 不通过 prompt 要求目标 agent 写 result file。
 - Agent Hub 将 prompt 原文写入 `input.txt`，runner 再把 `input.txt` 内容通过 stdin
-  传给 CLI。
+  传给 CLI。例外：kimi `-p` 只接受 argv prompt（不读 stdin），kimi adapter 从
+  `request.json` 的 `prompt` 字段拼 argv，`input.txt` 仍照常保存。
 
 CLI 参数处理规则：
 
@@ -38,24 +39,27 @@ CLI 参数处理规则：
 ### 统一 metadata 层
 
 `metadata` 顶层提供一组跨 adapter 的统一字段，adapter 负责翻译成各自 CLI 的原生参数；
-`metadata.claude.*` / `metadata.codex.*` 命名空间是原生逃生通道，同名语义字段以命名空
-间为准：
+`metadata.claude.*` / `metadata.codex.*` / `metadata["kimi-code"].*` 命名空间是原生逃生通道，
+同名语义字段以命名空间为准：
 
-| 统一字段 | 含义 | claude-code 映射 | codex 映射 |
-|---|---|---|---|
-| `model` | 模型名（按目标 CLI 的命名） | `--model` | `--model` |
-| `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` |
-| `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` |
+| 统一字段 | 含义 | claude-code 映射 | codex 映射 | kimi-code 映射 |
+|---|---|---|---|---|
+| `model` | 模型名（按目标 CLI 的命名） | `--model` | `--model` | `-m` |
+| `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` | 仅接受 `auto`（kimi `-p` 内建 auto 审批；其余值拒绝而非静默改语义） |
+| `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` | `--add-dir` |
 
 effort 不在统一层：各 CLI 的取值集合不同且随版本演进，Agent Hub 不枚举合法值，
 一律原样透传，由目标 CLI 自行接受或报错（报错按正常失败路径透传）。它只出现在
-adapter 命名空间（`metadata.claude.effort` / `metadata.codex.effort`），未提供时回退
-服务端环境变量 `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`。codex 侧仅有
-`[A-Za-z0-9_-]+` 字符集校验——这是 `-c` TOML 值的注入防护，不是取值假设。
+adapter 命名空间（`metadata.claude.effort` / `metadata.codex.effort` /
+`metadata["kimi-code"].effort`），未提供时回退服务端环境变量
+`AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT` / `AGENT_HUB_KIMI_EFFORT`。
+codex 侧仅有 `[A-Za-z0-9_-]+` 字符集校验——这是 `-c` TOML 值的注入防护，不是取值假设；
+kimi 侧走子进程环境变量 `KIMI_MODEL_THINKING_EFFORT`，无注入面，不做校验。
 
-错误码同样统一：模型侧失败（Claude `is_error`、Codex `turn.failed`）一律记为
-`agent_error`；`cli_exit_nonzero`、`stdout_parse_failed` 等 hub 层错误码本就与
-adapter 无关。原生细节保留在 `error.message` 与 `result.txt`。
+错误码同样统一：模型侧失败（Claude `is_error`、Codex `turn.failed`、kimi stderr 的
+`failed to run prompt`）一律记为 `agent_error`；`cli_exit_nonzero`、
+`stdout_parse_failed` 等 hub 层错误码本就与 adapter 无关。原生细节保留在
+`error.message` 与 `result.txt`。
 
 ### Run 归 Agent Hub
 
@@ -106,6 +110,10 @@ Session ID 的产生方式由 adapter 决定：
 - Codex：thread id 由 Codex 自己分配并通过第一条 `thread.started` 事件上报。新会话的
   dispatch 响应 `cli_session_ref` 为 `null`；runner 观察到 `thread.started` 后写回
   `state.json`，终态快照携带可用于 continuation 的 `cli_session_ref`。
+- Kimi Code：session id 由 kimi 自己分配，通过 stdout 事件流末尾的
+  `session.resume_hint` meta 事件上报。新会话的 dispatch 响应 `cli_session_ref` 为
+  `null`；终态快照携带可用于 continuation 的 `cli_session_ref`。与 Codex 不同，kimi
+  只在结束时上报，因此取消的 run 没有可 resume 的 session ref。
 
 ## MCP Tools
 
@@ -350,15 +358,18 @@ runs/
 
 - `agent_id`
 - `cwd`
+- `prompt`
 - `metadata`
 - `cli_session_ref`
 - `created_at`
 
-完整 prompt 保存到 `input.txt`。
+完整 prompt 同时保存到 `input.txt`；stdin 驱动的 CLI 从 `input.txt` 读取，kimi adapter
+从 `request.json` 的 `prompt` 字段拼 `-p` argv。
 
 ### input.txt
 
-保存调用方传入的原始 prompt。Runner 把该文件内容通过 stdin 传给 CLI。
+保存调用方传入的原始 prompt。Runner 把该文件内容通过 stdin 传给 CLI（kimi 不读
+stdin，该文件对它只作存档）。
 
 ### command.json
 
@@ -390,9 +401,9 @@ AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE
 
 Runner 分别捕获 CLI stdout 和 stderr。
 
-stdout 是 result 的来源。stderr 是诊断日志来源。对 Claude Code `stream-json`
-输出，runner 还会把同一事件流写入 `events.jsonl`，供 running snapshot 生成
-`progress_events`。
+stdout 是 result 的来源。stderr 是诊断日志来源。对 JSONL 事件流输出（Claude Code 与
+kimi 的 `stream-json`、Codex 的 `--json`），runner 还会把同一事件流写入
+`events.jsonl`，供 running snapshot 生成 `progress_events`。
 
 ### result.txt / result.json
 
@@ -430,6 +441,9 @@ Agent Hub 返回 CLI 的最终输出，不通过 prompt 建立额外结果通道
 
 对 Codex adapter，stdout 是 `codex exec --json` 的 JSONL 事件流；adapter 从最后一条
 `agent_message` item 写入 `result.txt` 和 `result.json`。
+
+对 Kimi Code adapter，stdout 是 `kimi -p --output-format stream-json` 的 JSONL 事件流；
+adapter 从最后一条带 `content` 的 `assistant` 事件写入 `result.txt` 和 `result.json`。
 
 ## Claude Code Adapter
 
@@ -523,6 +537,54 @@ Codex stdout 处理规则：
 - 缺少 `agent_message` 或 `thread_id` 时状态为 `failed`，错误码为
   `stdout_parse_failed`。
 
+## Kimi Code Adapter
+
+Kimi Code adapter 使用 `kimi -p` 非交互模式。
+
+基础命令：
+
+```text
+kimi -p <prompt> --output-format stream-json
+```
+
+执行规则：
+
+- prompt 通过 `-p` argv 传入（kimi `-p` 不读 stdin），内容来自 `request.json` 的
+  `prompt` 字段。
+- 新会话不预设 session id；kimi 在 stdout 事件流末尾的 `session.resume_hint` meta
+  事件里上报 `session_id`（形如 `session_<uuid>`）。
+- continuation 使用 `kimi --session <native_session_id> -p ...`；session id 必须匹配
+  `session_<uuid>` 或 `ses_<uuid>`（官方迁移器从旧 kimi-cli 迁移过来的会话）形态，
+  其他字符串在 dispatch 和命令构建两处都会被拒绝（防止 `--help` 之类的值被解析成
+  kimi 选项）。
+- `metadata["kimi-code"].model`（或统一的 `metadata.model`）映射到 `-m`；未提供时回退到
+  服务端环境变量 `AGENT_HUB_KIMI_MODEL`，都未设置时不传 `-m`。
+- `metadata["kimi-code"].effort` 映射到子进程环境变量 `KIMI_MODEL_THINKING_EFFORT`；
+  未提供时回退到服务端环境变量 `AGENT_HUB_KIMI_EFFORT`，都未设置时不注入。取值原样
+  透传（合法值见 kimi 文档：low/medium/high/xhigh/max），非法值由 kimi 报错并走
+  `agent_error` 失败路径。
+- 权限不传任何 flag：`--plan` / `--auto` / `--yolo` 与 `-p` 冲突（启动即拒绝），且
+  kimi `-p` 内建 auto 审批，正好对齐统一默认 `permission: "auto"`。统一
+  `permission` 为 `read-only` 或 `full` 时命令构建直接报错——没有原生对应物，
+  不能静默跑成别的权限级别。
+- `metadata["kimi-code"].add_dirs`（或统一的 `metadata.add_dirs`）映射到重复的
+  `--add-dir`。
+
+Kimi stdout 处理规则：
+
+- 完整 stdout 写入 `stdout.log`，事件流同时写入 `events.jsonl`。
+- 最后一条带字符串 `content` 的 `assistant` 事件写入 `result.json`，其 `content`
+  写入 `result.txt`。
+- 事件中的 `session_id`（来自 `session.resume_hint`）写回终态 `state.json` 的
+  `cli_session_ref`。该事件只在正常结束时出现，因此取消的 run 没有可 resume 的
+  session ref。
+- exit code 非 0 且 stderr 形如 `error: failed to run prompt: <detail>` 时状态为
+  `failed`，错误码为 `agent_error`（模型侧失败：模型别名无效、provider/API 错误等），
+  错误消息取自 `<detail>` 首行。
+- exit code 非 0 且无该形态时状态为 `failed`，错误码为 `cli_exit_nonzero`。
+- exit code 为 0 但缺少 `assistant` 消息或 `session_id` 时状态为 `failed`，错误码为
+  `stdout_parse_failed`。
+
 ## 清理策略
 
 Cleanup 在 `list_agents`、`dispatch_to_agent`、`query_agent_run`、`wait_agent_run` 和
@@ -540,7 +602,7 @@ Cleanup 在 `list_agents`、`dispatch_to_agent`、`query_agent_run`、`wait_agen
 
 - run 根目录和每个 run 目录权限为 `0700`。
 - CLI 启动使用 argv list。
-- prompt 通过 stdin 传递。
+- prompt 通过 stdin 传递（kimi 例外：`-p` 只接受 argv prompt）。
 - `cwd` 必须显式传入。
 - `AGENT_HUB_CWD_ALLOWLIST` 设置后，`cwd` 和 `metadata.*.add_dirs` 必须位于 allowlist 内。
 - cancel 只作用于对应 run 的进程组。

@@ -38,10 +38,14 @@ describe("agent environment", () => {
       PATH: "/bin",
       AGENT_HUB_CLAUDE_EFFORT: "high",
       AGENT_HUB_CODEX_EFFORT: "xhigh",
+      AGENT_HUB_KIMI_EFFORT: "medium",
+      AGENT_HUB_KIMI_MODEL: "k2",
     });
 
     expect(env.AGENT_HUB_CLAUDE_EFFORT).toBe("high");
     expect(env.AGENT_HUB_CODEX_EFFORT).toBe("xhigh");
+    expect(env.AGENT_HUB_KIMI_EFFORT).toBe("medium");
+    expect(env.AGENT_HUB_KIMI_MODEL).toBe("k2");
   });
 
   it("forwards namespace redirect vars when present in the server env", () => {
@@ -52,6 +56,7 @@ describe("agent environment", () => {
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
       CODEX_HOME: "/home/u/ns/personal/codex",
+      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
     });
 
     expect(env.NS).toBe("personal");
@@ -59,6 +64,7 @@ describe("agent environment", () => {
     expect(env.GIT_CONFIG_GLOBAL).toBe("/home/u/ns/personal/github/config/gitconfig");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/u/ns/personal/claude");
     expect(env.CODEX_HOME).toBe("/home/u/ns/personal/codex");
+    expect(env.KIMI_CODE_HOME).toBe("/home/u/ns/personal/kimi");
   });
 });
 
@@ -69,14 +75,14 @@ describe("namespace resolution from run cwd", () => {
   fs.writeFileSync(
     stubBin,
     `#!/bin/sh
-echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CODEX_HOME":"/home/u/ns/personal/codex","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CODEX_HOME":"/home/u/ns/personal/codex","KIMI_CODE_HOME":"/home/u/ns/personal/kimi","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
 `,
     { mode: 0o755 },
   );
   fs.writeFileSync(
     unsetStubBin,
     `#!/bin/sh
-echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex"}'
+echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex","KIMI_CODE_HOME":null}'
 `,
     { mode: 0o755 },
   );
@@ -98,6 +104,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
       CODEX_HOME: "/home/u/ns/personal/codex",
+      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
     });
   });
 
@@ -113,6 +120,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
       CODEX_HOME: "/home/u/ns/personal/codex",
+      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
     });
   });
 
@@ -123,6 +131,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
       CODEX_HOME: "/home/u/ns/personal/codex",
+      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
       AGENT_HUB_DIRENV_BIN: unsetStubBin,
     });
     expect(env).toEqual({
@@ -131,6 +140,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GIT_CONFIG_GLOBAL: undefined,
       CLAUDE_CONFIG_DIR: undefined,
       CODEX_HOME: "/home/u/.codex",
+      KIMI_CODE_HOME: undefined,
     });
   });
 
@@ -145,6 +155,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GIT_CONFIG_GLOBAL: undefined,
       CLAUDE_CONFIG_DIR: undefined,
       CODEX_HOME: undefined,
+      KIMI_CODE_HOME: undefined,
     });
   });
 });

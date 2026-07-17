@@ -8,7 +8,7 @@
 
 ## Project Shape
 
-This repository implements a local MCP stdio bridge. It maps MCP tool calls to non-interactive agent CLI runs (Claude Code and Codex) and stores run state, logs, and artifacts on the local filesystem.
+This repository implements a local MCP stdio bridge. It maps MCP tool calls to non-interactive agent CLI runs (Claude Code, Codex, and Kimi Code) and stores run state, logs, and artifacts on the local filesystem.
 
 Key files:
 
@@ -20,6 +20,7 @@ Key files:
 | `src/adapters.js` | Adapter registry keyed by `agent_id`. |
 | `src/claude-adapter.js` | Claude Code argv/session/result mapping. |
 | `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
+| `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/security.js` | `cwd` and `add_dirs` validation. |
@@ -41,9 +42,10 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 - Preserve prompt pass-through: do not prepend wrapper prompts, system prompts, or result-file instructions to user input.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
-- `cwd` must remain an explicit absolute directory from the request; `metadata.claude.add_dirs` and `metadata.codex.add_dirs` must resolve through `src/security.js`.
-- Unified metadata (`metadata.model` / `permission` / `add_dirs`) maps to native flags per adapter; the adapter namespaces (`metadata.claude.*`, `metadata.codex.*`) take precedence. Effort is adapter-native only (`metadata.<adapter>.effort`, falling back to `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`) because each CLI has its own value vocabulary. Model-side failures use the unified error code `agent_error`.
-- The default unified permission is `auto`: `--permission-mode auto` for Claude, `--sandbox workspace-write` plus `network_access=true` for Codex. Do not use `permission: "full"`, `bypassPermissions`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox` in examples, defaults, or self-review paths unless the user explicitly asks.
+- Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.
+- `cwd` must remain an explicit absolute directory from the request; `metadata.claude.add_dirs`, `metadata.codex.add_dirs`, and `metadata["kimi-code"].add_dirs` must resolve through `src/security.js`.
+- Unified metadata (`metadata.model` / `permission` / `add_dirs`) maps to native flags per adapter; the adapter namespaces (`metadata.claude.*`, `metadata.codex.*`, `metadata["kimi-code"].*`) take precedence. Effort is adapter-native only (`metadata.<adapter>.effort`, falling back to `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT` / `AGENT_HUB_KIMI_EFFORT`) because each CLI has its own value vocabulary. Model-side failures use the unified error code `agent_error`.
+- The default unified permission is `auto`: `--permission-mode auto` for Claude, `--sandbox workspace-write` plus `network_access=true` for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi prompt mode takes no permission flags; unified `read-only`/`full` are rejected rather than remapped). Do not use `permission: "full"`, `bypassPermissions`, `danger-full-access`, or `--dangerously-bypass-approvals-and-sandbox` in examples, defaults, or self-review paths unless the user explicitly asks.
 - Keep process cancellation scoped to the recorded process group for the run.
 - Keep run directories and state/log artifacts private (`0700` directories, `0600` files where applicable).
 - Do not record environment variable values in command metadata.
@@ -60,13 +62,16 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 | `AGENT_HUB_CODEX_MODEL` | Server-side default model for Codex runs. |
 | `AGENT_HUB_CLAUDE_EFFORT` | Server-side default effort for Claude runs. |
 | `AGENT_HUB_CODEX_EFFORT` | Server-side default effort for Codex runs. |
+| `AGENT_HUB_KIMI_MODEL` | Server-side default model for Kimi runs. |
+| `AGENT_HUB_KIMI_EFFORT` | Server-side default effort for Kimi runs. |
 | `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
 
 ## Workspace Namespace Resolution
 
 The environment always follows position (`~/work/charter/NAMESPACE.md`): before
-spawning Claude Code, the runner derives the workspace namespace (`NS`,
-`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) from the run's `cwd` via
+spawning the agent CLI, the runner derives the workspace namespace (`NS`,
+`GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`KIMI_CODE_HOME`) from the run's `cwd` via
 `direnv export json`. The probe removes inherited namespace keys first, so values
 and removals derived from `cwd` both take precedence over the server process.
 `DIRENV_*` bookkeeping is never forwarded. If the `cwd` is outside any workspace
