@@ -54,7 +54,12 @@ export async function runVersionCommand(command, args, timeoutMs) {
 
   try {
     const result = await Promise.race([
-      once(child, "close").then(([code, signal]) => ({ code, signal })),
+      // events.once rejects the "close" waiter when "error" fires first;
+      // normalize that rejection into the same shape as the error branch.
+      once(child, "close").then(
+        ([code, signal]) => ({ code, signal }),
+        (error) => ({ code: null, signal: null, error }),
+      ),
       once(child, "error").then(([error]) => ({ code: null, signal: null, error })),
     ]);
     if (timedOut && !result.error) {
