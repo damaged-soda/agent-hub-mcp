@@ -1261,7 +1261,24 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 - `selftest:discussion`。
 - 20 题 pilot、50+ 题正式盲评和 go/no-go 报告。
 
-## 21. 已知限制
+## 21. 后续 TODO：通用结构化输出
+
+本次 Discussion MVP 不实现通用 structured output。后续在实际格式失败率和重试成本
+有足够 telemetry 后，评估为现有 run/dispatch API 增加可选 `response_format`：
+
+- 使用 JSON Schema 描述预期回复，并同时返回原始内容、解析结果和校验状态。
+- 由 adapter 声明和映射能力：Claude Code 使用原生 `--json-schema`，Codex 使用原生
+  `--output-schema`；没有原生能力的 adapter 使用 prompt 约束、本地校验和至多一次
+  同 session 修复。
+- 即使 CLI 支持原生 schema，服务端仍执行最终校验；只允许无损、无歧义的确定性
+  规范化，不得补写观点、证据或结论。
+- 优先扩展现有通用调用接口，不新增独立“格式修复子 agent”；单独格式校验 MCP tool
+  不能避免首次生成浪费，也不作为主方案。
+- 先补齐按 adapter/turn 统计的格式失败、修复次数、耗时和 usage 覆盖率。若无原生
+  schema 的 adapter 在 pilot 中仍持续产生显著重试成本，再评估同一 CLI run 内的
+  一次性 `submit_turn` 校验工具。
+
+## 22. 已知限制
 
 - capability 配置为 auto 的 adapter 仍可能产生副作用；MVP 只披露，不检测或回滚。
 - 没有全局并发限制，发起者可以创建过多 participant 或 Discussion。
@@ -1273,7 +1290,7 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 - 同一个底层模型的多个 session 可能产生相关判断；系统只披露，不阻止。
 - 原生 CLI session 能否在 7 天内 resume 仍取决于各 CLI；失败时按 handoff 重建。
 
-## 22. 参考
+## 23. 参考
 
 - [Microsoft Agent Framework Group Chat](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/group-chat)
 - [Microsoft Agent Framework Magentic](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/magentic)
