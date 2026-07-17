@@ -1,6 +1,9 @@
 # Agent Hub MCP Integration Guide
 
-This guide is for MCP clients that want to call local agent CLIs through Agent Hub MCP. Agent Hub is a stdio MCP server; clients launch `src/server.js` and call tools with JSON arguments.
+This guide is for MCP clients that want to call local agent CLIs through Agent Hub MCP. Agent Hub
+supports a deprecated stdio surface for the original run tools and a long-lived streamable HTTP
+daemon for new functionality such as Discussions; clients launch `src/server.js` with the transport
+appropriate to the tools they need.
 
 ## Server Registration
 
@@ -31,7 +34,8 @@ tool_timeout_sec = 660
 
 1. Call `list_agents`.
 2. For long-running or agentic work, call `dispatch_to_agent` and then `wait_agent_run`.
-3. Keep the returned `cli_session_ref` if the next request should resume the same Claude Code session.
+3. Keep the terminal snapshot's `cli_session_ref` if the next request should resume the same CLI
+   session. Claude returns it at dispatch time; Codex and Kimi report it later.
 4. Use `run_agent` only for short tasks that should finish inside the MCP client's tool timeout.
 5. If the MCP client times out while waiting, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again.
 6. Use `cancel_agent_run` with `run_ref` to stop a still-running local process group only when the user explicitly asks to stop or the run is no longer needed.

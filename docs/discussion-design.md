@@ -1162,8 +1162,10 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 
 ### 17.2 真实 CLI selftest
 
-真实 Claude/Codex/Kimi 测试不进入默认 `npm test`，新增显式
-`npm run selftest:discussion`，并作为发布前人工门槛：
+真实 Claude/Codex/Kimi 测试不进入默认 `npm test`。当前仓库尚未提供一键
+`selftest:discussion` 脚本；发布前按 [operator runbook](operator-runbook.md) 启动隔离的
+HTTP daemon，并通过 `scripts/mcp-client.js` 完成下列人工 smoke test。后续再把相同流程
+固化为 `npm run selftest:discussion`：
 
 - 新 session 和 continuation。
 - Claude/Codex read-only 与 Kimi auto 的 capability 配置。
@@ -1258,7 +1260,7 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 
 - Parent handoff、线性 session lineage 和 sibling rebuild。
 - Fake-adapter 全链路测试。
-- `selftest:discussion`。
+- 将人工真实 CLI smoke test 固化为 `selftest:discussion`。
 - 20 题 pilot、50+ 题正式盲评和 go/no-go 报告。
 
 ## 21. 后续 TODO：通用结构化输出
@@ -1267,16 +1269,18 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 有足够 telemetry 后，评估为现有 run/dispatch API 增加可选 `response_format`：
 
 - 使用 JSON Schema 描述预期回复，并同时返回原始内容、解析结果和校验状态。
+- 评估同时扩展公开普通 run MCP 输入 schema 和内部 dispatch request；调用方未提供
+  `response_format` 时，现有 prompt pass-through 和返回语义保持不变。
 - 由 adapter 声明和映射能力：Claude Code 使用原生 `--json-schema`，Codex 使用原生
-  `--output-schema`；没有原生能力的 adapter 使用 prompt 约束、本地校验和至多一次
-  同 session 修复。
+  `--output-schema`；Kimi Code 当前归入没有原生 schema 能力的路径，使用 prompt
+  约束、本地校验和至多一次同 session 修复。
 - 即使 CLI 支持原生 schema，服务端仍执行最终校验；只允许无损、无歧义的确定性
   规范化，不得补写观点、证据或结论。
 - 优先扩展现有通用调用接口，不新增独立“格式修复子 agent”；单独格式校验 MCP tool
   不能避免首次生成浪费，也不作为主方案。
 - 先补齐按 adapter/turn 统计的格式失败、修复次数、耗时和 usage 覆盖率。若无原生
-  schema 的 adapter 在 pilot 中仍持续产生显著重试成本，再评估同一 CLI run 内的
-  一次性 `submit_turn` 校验工具。
+  schema 的 adapter 在 pilot 中仍持续产生显著重试成本，再评估让 agent 在同一 CLI
+  run 内调用一次性 `submit_turn` 工具提交结构化结果并立即获得校验反馈。
 
 ## 22. 已知限制
 
