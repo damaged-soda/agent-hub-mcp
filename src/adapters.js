@@ -1,5 +1,6 @@
 import {
   CLAUDE_AGENT_ID,
+  CLAUDE_DISCUSSION_CAPABILITIES,
   buildClaudeCommand,
   createClaudeSessionRef,
   getClaudeAvailability,
@@ -8,6 +9,7 @@ import {
 } from "./claude-adapter.js";
 import {
   CODEX_AGENT_ID,
+  CODEX_DISCUSSION_CAPABILITIES,
   buildCodexCommand,
   codexSessionRefFromEvent,
   createCodexSessionRef,
@@ -17,6 +19,7 @@ import {
 } from "./codex-adapter.js";
 import {
   KIMI_AGENT_ID,
+  KIMI_DISCUSSION_CAPABILITIES,
   buildKimiCommand,
   createKimiSessionRef,
   getKimiAvailability,
@@ -37,6 +40,7 @@ const ADAPTERS = new Map([
       buildCommand: buildClaudeCommand,
       interpretExit: interpretClaudeExit,
       sessionRefFromEvent: null,
+      discussionCapabilities: CLAUDE_DISCUSSION_CAPABILITIES,
     },
   ],
   [
@@ -51,6 +55,7 @@ const ADAPTERS = new Map([
       buildCommand: buildCodexCommand,
       interpretExit: interpretCodexExit,
       sessionRefFromEvent: codexSessionRefFromEvent,
+      discussionCapabilities: CODEX_DISCUSSION_CAPABILITIES,
     },
   ],
   [
@@ -65,6 +70,7 @@ const ADAPTERS = new Map([
       buildCommand: buildKimiCommand,
       interpretExit: interpretKimiExit,
       sessionRefFromEvent: null,
+      discussionCapabilities: KIMI_DISCUSSION_CAPABILITIES,
     },
   ],
 ]);

@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { spawn } from "node:child_process";
 import fsp from "node:fs/promises";
 import net from "node:net";
@@ -125,6 +126,131 @@ describe("MCP flow", () => {
     });
   });
 
+  it("keeps discussion tools HTTP-only and completes the fixed protocol", async () => {
+    const stdioTools = await listAgentHubTools({ env });
+    expect(stdioTools.tools.map((tool) => tool.name)).not.toContain("dispatch_discussion");
+
+    await withAgentHubHttpServer(env, async (url) => {
+      const httpTools = await listAgentHubToolsHttp(url);
+      expect(httpTools.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining([
+          "dispatch_discussion",
+          "query_discussion",
+          "wait_discussion",
+          "cancel_discussion",
+        ]),
+      );
+
+      const accepted = await callAgentHubToolHttp(
+        "dispatch_discussion",
+        {
+          kind: "new",
+          objective: "Decide whether the fixed discussion protocol works",
+          question: "Should this implementation ship?",
+          cwd: workspaceDir,
+          materials: [
+            {
+              material_id: "brief",
+              type: "inline",
+              title: "Brief",
+              content: "Use the frozen five-phase protocol.",
+            },
+          ],
+          host: { agent_id: "claude-code", metadata: {} },
+          participants: [
+            {
+              participant_id: "reviewer-a",
+              agent_id: "claude-code",
+              role: "reliability reviewer",
+              focus: "recovery and idempotency",
+              metadata: {},
+            },
+            {
+              participant_id: "reviewer-b",
+              agent_id: "claude-code",
+              role: "protocol reviewer",
+              focus: "schema and evidence",
+              metadata: {},
+            },
+          ],
+          quorum: 2,
+        },
+        url,
+        { requestTimeoutMs: 30000 },
+      );
+
+      expect(accepted.structuredContent.status).toBe("accepted");
+      const completed = await callAgentHubToolHttp(
+        "wait_discussion",
+        { discussion_ref: accepted.structuredContent.discussion_ref },
+        url,
+        { requestTimeoutMs: 30000 },
+      );
+
+      expect(completed.structuredContent.status).toBe("completed");
+      expect(completed.structuredContent.protocol_integrity).toBe("complete");
+      expect(completed.structuredContent.run_refs).toHaveLength(8);
+      expect(completed.structuredContent.decision.recommendation.summary).toBe("string");
+      expect(completed.content[0].text).toMatch(/^# Discussion Decision/m);
+      const discussionId = accepted.structuredContent.discussion_ref.discussion_id;
+      const discussionDir = path.join(tempDir, "discussions", discussionId);
+      await expect(fsp.stat(path.join(discussionDir, "decision.json"))).resolves.toBeDefined();
+      await expect(fsp.stat(path.join(discussionDir, "decision.md"))).resolves.toBeDefined();
+
+      const followUp = await callAgentHubToolHttp(
+        "dispatch_discussion",
+        {
+          kind: "follow_up",
+          parent_discussion_ref: accepted.structuredContent.discussion_ref,
+          question: "Does the prior decision still hold with one new constraint?",
+          materials: [
+            {
+              material_id: "new-constraint",
+              type: "inline",
+              title: "New constraint",
+              content: "The participant roster must stay unchanged.",
+            },
+          ],
+        },
+        url,
+        { requestTimeoutMs: 30000 },
+      );
+      const followUpCompleted = await callAgentHubToolHttp(
+        "wait_discussion",
+        { discussion_ref: followUp.structuredContent.discussion_ref },
+        url,
+        { requestTimeoutMs: 30000 },
+      );
+      expect(followUpCompleted.structuredContent.status).toBe("completed");
+      expect(followUpCompleted.structuredContent.run_refs).toHaveLength(8);
+      expect(
+        followUpCompleted.structuredContent.participant_statuses.map((member) => member.session_mode),
+      ).toEqual(["resumed", "resumed"]);
+      const followUpState = JSON.parse(
+        await fsp.readFile(
+          path.join(
+            tempDir,
+            "discussions",
+            followUp.structuredContent.discussion_ref.discussion_id,
+            "state.json",
+          ),
+          "utf8",
+        ),
+      );
+      expect(followUpState.parent_discussion_ref).toEqual(accepted.structuredContent.discussion_ref);
+      await expect(
+        fsp.stat(
+          path.join(
+            tempDir,
+            "discussions",
+            followUp.structuredContent.discussion_ref.discussion_id,
+            "handoff/context.json",
+          ),
+        ),
+      ).resolves.toBeDefined();
+    });
+  }, 45000);
+
   it("returns HTTP errors for wrong streamable HTTP routes", async () => {
     await withAgentHubHttpServer(env, async (url) => {
       const wrongPath = await fetch(url.replace("/mcp", "/not-mcp"), {
@@ -217,6 +343,40 @@ describe("MCP flow", () => {
     );
     expect(queried.structuredContent.status).toBe("cancelled");
     expect(queried.structuredContent.cancel_reason).toBe("test cleanup");
+  });
+
+  it("prevents a continuation while its CLI session is still active", async () => {
+    const accepted = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "claude-code",
+        prompt: "sleep",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { claude: {} },
+      },
+      { env },
+    );
+
+    const conflicting = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "claude-code",
+        prompt: "continue too early",
+        cwd: workspaceDir,
+        cli_session_ref: accepted.structuredContent.cli_session_ref,
+        metadata: { claude: {} },
+      },
+      { env },
+    );
+    expect(conflicting.isError).toBe(true);
+    expect(conflicting.content[0].text).toMatch(/session is active/i);
+
+    await callAgentHubTool(
+      "cancel_agent_run",
+      { run_ref: accepted.structuredContent.run_ref },
+      { env },
+    );
   });
 
   it("reconciles stale active runs before cancel", async () => {
@@ -785,6 +945,20 @@ async function listAgentHubTools(options = {}) {
   }
 }
 
+async function listAgentHubToolsHttp(url) {
+  const transport = new StreamableHTTPClientTransport(new URL(url));
+  const client = new Client(
+    { name: "agent-hub-mcp-http-test-client", version: "0.1.0" },
+    { capabilities: {} },
+  );
+  try {
+    await client.connect(transport);
+    return await client.listTools(undefined, { timeout: 30000 });
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
 async function withAgentHubHttpServer(env, fn) {
   const port = await getFreePort();
   const stderrChunks = [];
@@ -998,6 +1172,16 @@ process.stdin.on("end", () => {
   if (input.trim() === "error") {
     writeAssistant("fake failure");
     writeResult("fake failure", true);
+    return;
+  }
+  if (input.includes("AGENT_HUB_DISCUSSION_PROTOCOL_V1")) {
+    const marker = "[OUTPUT CONTRACT]\\n";
+    const markerIndex = input.lastIndexOf(marker);
+    const output = markerIndex >= 0
+      ? input.slice(markerIndex + marker.length).trim()
+      : JSON.stringify({ schema_version: 1 });
+    writeAssistant(output);
+    writeResult(output);
     return;
   }
   writeAssistant("fake result: " + input);

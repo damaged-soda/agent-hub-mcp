@@ -8,13 +8,13 @@
 
 ## Project Shape
 
-This repository implements a local MCP stdio bridge. It maps MCP tool calls to non-interactive agent CLI runs (Claude Code, Codex, and Kimi Code) and stores run state, logs, and artifacts on the local filesystem.
+This repository implements a local MCP bridge and HTTP Discussion daemon. It maps MCP tool calls to non-interactive agent CLI runs (Claude Code, Codex, and Kimi Code), stores local artifacts, and coordinates durable structured discussions.
 
 Key files:
 
 | Path | Purpose |
 |---|---|
-| `src/server.js` | MCP stdio server and tool schemas. |
+| `src/server.js` | MCP stdio/HTTP server and tool schemas; Discussion tools are HTTP-only. |
 | `src/runs.js` | Tool behavior, run lifecycle, waiting, cancellation, snapshots. |
 | `src/runner.js` | Detached runner that launches the agent CLI and writes terminal results. |
 | `src/adapters.js` | Adapter registry keyed by `agent_id`. |
@@ -23,6 +23,13 @@ Key files:
 | `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
+| `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
+| `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |
+| `src/discussion-protocol.js` | Discussion input/output schemas, limits, and provenance validation. |
+| `src/discussion-store.js` | Discussion events, projections, leases, artifacts, and TTL cleanup. |
+| `src/discussion-materials.js` | Frozen material bundles, file validation, hashing, and handoff data. |
+| `src/discussion-prompts.js` | Versioned turn and format-repair prompts. |
+| `src/discussion-render.js` | Deterministic DecisionRecord Markdown rendering. |
 | `src/security.js` | `cwd` and `add_dirs` validation. |
 | `src/env.js` | Environment allowlist and forwarding. |
 | `scripts/mcp-client.js` | Local MCP smoke-test client. |
@@ -35,11 +42,11 @@ npm run selftest:mcp
 npm run review:self
 ```
 
-Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
+Use Node.js 20 or newer. `npm start` / `node src/server.js` is the deprecated stdio surface; new functionality uses `node src/server.js --transport streamable-http`.
 
 ## Behavioral Rules
 
-- Preserve prompt pass-through: do not prepend wrapper prompts, system prompts, or result-file instructions to user input.
+- Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.
@@ -56,6 +63,8 @@ Use Node.js 20 or newer. The server is `npm start` / `node src/server.js`.
 |---|---|
 | `AGENT_HUB_RUN_DIR` | Override run storage root. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | Terminal run retention; default is `604800`. |
+| `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage root. |
+| `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Terminal Discussion retention; default follows run TTL. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to the agent CLI. |
 | `AGENT_HUB_CLAUDE_MODEL` | Server-side default model for Claude runs. |
@@ -85,3 +94,4 @@ or direnv is unavailable, inherited namespace keys are cleared.
 | `docs/integration-guide.md` | Implementing a client call flow or understanding request/response shapes. |
 | `docs/operator-runbook.md` | Operating, configuring, or troubleshooting local runs. |
 | `docs/architecture.md` | Changing lifecycle, storage, adapter, or process-group behavior. |
+| `docs/discussion-design.md` | Changing the fixed Discussion protocol, schemas, recovery, or safety boundaries. |
