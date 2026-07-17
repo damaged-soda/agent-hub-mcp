@@ -277,7 +277,8 @@ export async function recentEventSummary(runDir, maxEvents = 5) {
     } catch {
       continue;
     }
-    const summary = summarizeClaudeEvent(event) ?? summarizeCodexEvent(event);
+    const summary =
+      summarizeClaudeEvent(event) ?? summarizeCodexEvent(event) ?? summarizeKimiEvent(event);
     if (summary) {
       summaries.push(summary);
     }
@@ -389,6 +390,36 @@ function summarizeCodexEvent(event) {
     return {
       type: "error",
       message: truncate(event.message.trim(), 1000),
+    };
+  }
+  return null;
+}
+
+function summarizeKimiEvent(event) {
+  if (event?.role === "assistant") {
+    if (typeof event.content === "string" && event.content.trim()) {
+      return {
+        type: "assistant",
+        message: truncate(event.content.trim(), 1000),
+      };
+    }
+    if (Array.isArray(event.tool_calls) && event.tool_calls.length > 0) {
+      const toolNames = event.tool_calls
+        .map((call) => call?.function?.name)
+        .filter((name) => typeof name === "string");
+      if (toolNames.length > 0) {
+        return {
+          type: "assistant",
+          message: `Using tools: ${toolNames.join(", ")}.`,
+        };
+      }
+    }
+  }
+  if (event?.role === "meta" && event.type === "session.resume_hint") {
+    return {
+      type: "result",
+      message: "Completed",
+      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
     };
   }
   return null;

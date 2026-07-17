@@ -15,7 +15,7 @@ This guide is for MCP clients that want to call local agent CLIs through Agent H
 }
 ```
 
-The server exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code, and the `codex` adapter when `codex --version` succeeds.
+The server exposes the `claude-code` adapter when `claude --version` succeeds and reports Claude Code, the `codex` adapter when `codex --version` succeeds, and the `kimi-code` adapter when `kimi --version` succeeds.
 
 For Codex clients, set the MCP server's `tool_timeout_sec` based on how long the host should allow a single `wait_agent_run` call to remain open. Agent Hub's server-side wait window is 10 minutes; a shorter host timeout only aborts that MCP tool call, not the background run. To let Agent Hub return its own `timed_out: true` snapshot, set the host timeout above 10 minutes:
 
@@ -65,8 +65,8 @@ Dispatches a run and waits until it reaches a terminal state or the timeout expi
 
 Important request rules:
 
-- `agent_id` must be `claude-code` or `codex`.
-- `prompt` is passed to the agent CLI through stdin without wrapper text.
+- `agent_id` must be `claude-code`, `codex`, or `kimi-code`.
+- `prompt` is passed to the agent CLI without wrapper text (via stdin, or as the `-p` argv value for kimi).
 - `cwd` must be an existing absolute directory.
 - `timeout_ms` defaults to `30000` and is capped at `3600000`.
 - `poll_interval_ms` defaults to `1000`.
@@ -135,19 +135,19 @@ Requests cancellation of the run process group:
 
 ## Unified Metadata
 
-Top-level `metadata` fields work for every adapter; the adapter translates them to native CLI flags. The adapter namespaces below (`metadata.claude`, `metadata.codex`) remain available as native escape hatches and take precedence over the unified fields.
+Top-level `metadata` fields work for every adapter; the adapter translates them to native CLI flags. The adapter namespaces below (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) remain available as native escape hatches and take precedence over the unified fields.
 
-| Field | Meaning | claude-code | codex |
-|---|---|---|---|
-| `model` | Model name in the target CLI's naming | `--model` | `--model` |
-| `permission` | `read-only`, `auto` (default), or `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write` + network / `danger-full-access` |
-| `add_dirs` | Extra writable directories (resolved and allowlist-checked) | `--add-dir` | `--add-dir` |
+| Field | Meaning | claude-code | codex | kimi-code |
+|---|---|---|---|---|
+| `model` | Model name in the target CLI's naming | `--model` | `--model` | `-m` |
+| `permission` | `read-only`, `auto` (default), or `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write` + network / `danger-full-access` | Only `auto` is accepted: kimi `-p` always runs with built-in auto approval and has no permission flags, so other values are rejected instead of silently remapped. |
+| `add_dirs` | Extra writable directories (resolved and allowlist-checked) | `--add-dir` | `--add-dir` | `--add-dir` |
 
-Effort is deliberately not unified: each CLI has its own evolving value vocabulary, so Agent Hub does not enumerate valid values — it passes the string through and lets the target CLI accept or reject it (rejections surface through the normal failure path). Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT`. The codex-side `[A-Za-z0-9_-]+` check is TOML-injection hygiene for the `-c` override, not a value assumption.
+Effort is deliberately not unified: each CLI has its own evolving value vocabulary, so Agent Hub does not enumerate valid values — it passes the string through and lets the target CLI accept or reject it (rejections surface through the normal failure path). Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort` / `metadata["kimi-code"].effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT` / `AGENT_HUB_KIMI_EFFORT`. The codex-side `[A-Za-z0-9_-]+` check is TOML-injection hygiene for the `-c` override, not a value assumption; the kimi value travels in the child process's `KIMI_MODEL_THINKING_EFFORT` environment variable and needs no such check.
 
-With the default `permission: "auto"`, both adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
+With the default `permission: "auto"`, all adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
 
-Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`); the native detail stays in `error.message` and `result.txt`. `cli_exit_nonzero` and `stdout_parse_failed` are adapter-independent as before.
+Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt` on stderr); the native detail stays in `error.message` and `result.txt`. `cli_exit_nonzero` and `stdout_parse_failed` are adapter-independent as before.
 
 ## Claude Metadata
 
@@ -177,12 +177,25 @@ Supported `permission_mode` values are `acceptEdits`, `auto`, `bypassPermissions
 
 On continuations (`codex exec resume`) the sandbox and writable roots are passed as `-c sandbox_mode="…"` and `-c sandbox_workspace_write.writable_roots=[…]` config overrides because the resume subcommand accepts a narrower flag set.
 
+## Kimi Metadata
+
+`metadata["kimi-code"]` maps to Kimi Code CLI flags:
+
+| Field | CLI flag | Notes |
+|---|---|---|
+| `model` | `-m` | Optional non-empty string. |
+| `effort` | `KIMI_MODEL_THINKING_EFFORT` env | Optional; passed through unvalidated (documented values: `low`/`medium`/`high`/`xhigh`/`max`); falls back to `AGENT_HUB_KIMI_EFFORT`. |
+| `add_dirs` | `--add-dir` | Array of directories resolved and allowlist-checked before execution. |
+
+Kimi prompt mode takes no permission flags (`--plan`/`--auto`/`--yolo` conflict with `-p`), and its built-in auto approval matches the unified default `permission: "auto"`. Unified `read-only` or `full` are rejected at dispatch time.
+
 ## Session Continuation
 
 For a new session, pass `cli_session_ref: null`.
 
 - `claude-code`: Agent Hub creates a UUID and passes it as `--session-id`; the dispatch response already contains the `cli_session_ref`.
 - `codex`: Codex assigns the thread id itself, so the dispatch response has `cli_session_ref: null`. The id appears on running/terminal snapshots once Codex reports it (usually within the first second).
+- `kimi-code`: Kimi assigns the session id itself and reports it in the final `session.resume_hint` event, so the dispatch response has `cli_session_ref: null` and the id appears on the terminal snapshot. A cancelled kimi run has no resumable session ref.
 
 To continue, pass back the previous terminal response's `cli_session_ref`:
 
@@ -193,7 +206,7 @@ To continue, pass back the previous terminal response's `cli_session_ref`:
 }
 ```
 
-Agent Hub then calls Claude Code with `--resume <native_session_id>`, or Codex with `codex exec resume <native_session_id>`. The `agent_id` inside `cli_session_ref` must match the request's `agent_id`, and a Codex `native_session_id` must be a thread UUID (it is a positional CLI argument, so other strings are rejected).
+Agent Hub then calls Claude Code with `--resume <native_session_id>`, Codex with `codex exec resume <native_session_id>`, or Kimi with `kimi --session <native_session_id> -p …`. The `agent_id` inside `cli_session_ref` must match the request's `agent_id`; a Codex `native_session_id` must be a thread UUID and a Kimi one must look like `session_<uuid>` (both are argv values, so other strings are rejected).
 
 ## Artifacts
 

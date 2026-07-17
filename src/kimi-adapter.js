@@ -1,0 +1,270 @@
+import path from "node:path";
+import {
+  assertMetadataString,
+  defaultFromEnv,
+  resolveUnifiedPermission,
+  runVersionCommand,
+} from "./adapter-utils.js";
+
+export const KIMI_AGENT_ID = "kimi-code";
+const AVAILABILITY_CACHE_MS = 30000;
+const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_KIMI_MODEL";
+const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_KIMI_EFFORT";
+const CHILD_EFFORT_ENV_KEY = "KIMI_MODEL_THINKING_EFFORT";
+// Kimi session ids look like session_<uuid>. The resume id is an argv value,
+// so anything else (for example "--help") would be parsed as a kimi option.
+const SESSION_ID_PATTERN =
+  /^session_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TAIL_LIMIT = 4000;
+
+let availabilityCache = null;
+
+// Kimi assigns the session id itself and reports it in the final
+// session.resume_hint meta event, so a new session starts with
+// native_session_id: null until the run completes and the runner backfills it.
+export function createKimiSessionRef(cliSessionRef) {
+  if (cliSessionRef?.native_session_id) {
+    const nativeSessionId = String(cliSessionRef.native_session_id);
+    assertKimiSessionId(nativeSessionId);
+    return {
+      agent_id: KIMI_AGENT_ID,
+      native_session_id: nativeSessionId,
+      resumed: true,
+    };
+  }
+  return {
+    agent_id: KIMI_AGENT_ID,
+    native_session_id: null,
+    resumed: false,
+  };
+}
+
+export async function getKimiAvailability() {
+  if (
+    availabilityCache &&
+    Date.now() - availabilityCache.checkedAtMs < AVAILABILITY_CACHE_MS
+  ) {
+    return availabilityCache.value;
+  }
+  const result = await runVersionCommand("kimi", ["--version"], 5000);
+  const value =
+    result.error || result.code !== 0 || !isKimiVersionOutput(result.stdout, result.stderr)
+      ? {
+          available: false,
+          reason:
+            result.error?.message ||
+            result.stderr.trim() ||
+            result.stdout.trim() ||
+            `exit ${result.code}`,
+        }
+      : {
+          available: true,
+          version: (result.stdout || result.stderr).trim(),
+        };
+  availabilityCache = {
+    checkedAtMs: Date.now(),
+    value,
+  };
+  return value;
+}
+
+function isKimiVersionOutput(stdout, stderr) {
+  // `kimi --version` prints a bare semver (e.g. "0.26.0").
+  const text = `${stdout}\n${stderr}`.trim();
+  return /\d+\.\d+\.\d+/.test(text);
+}
+
+export function buildKimiCommand({ request, effectiveCliSessionRef, env = process.env }) {
+  const resumed = effectiveCliSessionRef?.resumed === true;
+  if (resumed) {
+    assertKimiSessionId(effectiveCliSessionRef.native_session_id);
+  }
+  if (typeof request.prompt !== "string" || request.prompt.trim() === "") {
+    throw new Error("request.prompt must be a non-empty string");
+  }
+  const usingResolvedMetadata = Boolean(request.resolved_metadata);
+  const meta = request.resolved_metadata ?? request.metadata ?? {};
+  const kimi = meta[KIMI_AGENT_ID] ?? {};
+
+  const argv = ["kimi"];
+  if (resumed) {
+    argv.push("--session", effectiveCliSessionRef.native_session_id);
+  }
+  // kimi -p only takes the prompt as an argv value; it never reads stdin.
+  argv.push("-p", request.prompt, "--output-format", "stream-json");
+
+  const model =
+    assertMetadataString(kimi.model, "metadata.kimi-code.model") ??
+    assertMetadataString(meta.model, "metadata.model") ??
+    defaultFromEnv(env, DEFAULT_MODEL_ENV_KEY);
+  if (model) {
+    argv.push("-m", model);
+  }
+
+  // Effort vocabularies are CLI-specific, so the value stays in the adapter
+  // namespace and falls back to a server-side default instead of a unified field.
+  // kimi has no effort flag; the child process reads KIMI_MODEL_THINKING_EFFORT.
+  // The value is passed through unvalidated (env values carry no injection risk);
+  // kimi rejects unknown values with a normal agent_error failure.
+  const effort =
+    assertMetadataString(kimi.effort, "metadata.kimi-code.effort") ??
+    defaultFromEnv(env, DEFAULT_EFFORT_ENV_KEY);
+
+  // kimi -p has no permission flags: --plan/--auto/--yolo all conflict with -p,
+  // and prompt mode always applies its built-in auto approval. Only the unified
+  // default ("auto") maps onto that; anything else would silently run with a
+  // different access level than requested, so reject it instead.
+  const permission = resolveUnifiedPermission(meta);
+  if (permission !== "auto") {
+    throw new Error(
+      `metadata.permission "${permission}" is not supported by kimi -p: prompt mode always runs with auto approval`,
+    );
+  }
+
+  const addDirs = kimi.add_dirs ?? [];
+  if (!Array.isArray(addDirs)) {
+    throw new Error("metadata.kimi-code.add_dirs must be an array");
+  }
+  if (!usingResolvedMetadata && addDirs.length > 0) {
+    throw new Error("request.resolved_metadata is required when add_dirs are provided");
+  }
+  for (const addDir of addDirs) {
+    if (typeof addDir !== "string" || addDir.trim() === "") {
+      throw new Error("metadata.kimi-code.add_dirs entries must be non-empty strings");
+    }
+    argv.push("--add-dir", usingResolvedMetadata ? addDir : path.resolve(addDir));
+  }
+
+  return {
+    adapter_id: KIMI_AGENT_ID,
+    command: argv[0],
+    args: argv.slice(1),
+    argv,
+    output_format: "stream-json",
+    env: effort ? { [CHILD_EFFORT_ENV_KEY]: effort } : undefined,
+  };
+}
+
+export function parseKimiStdout(stdout) {
+  const events = String(stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => parseJsonLine(line))
+    .filter(Boolean);
+
+  let sessionId = null;
+  let resultText = null;
+  let resultEvent = null;
+  for (const event of events) {
+    if (typeof event?.session_id === "string" && event.session_id.trim() !== "") {
+      sessionId = event.session_id;
+    }
+    if (
+      event?.role === "assistant" &&
+      typeof event.content === "string" &&
+      event.content.trim() !== ""
+    ) {
+      resultText = event.content.trimEnd();
+      resultEvent = event;
+    }
+  }
+
+  return {
+    raw: events,
+    sessionId,
+    resultText,
+    resultJson: resultEvent,
+    cliSessionRef: sessionId
+      ? { agent_id: KIMI_AGENT_ID, native_session_id: sessionId }
+      : null,
+  };
+}
+
+export function interpretKimiExit({ code, signal, stdout, stderr }) {
+  const parsed = parseKimiStdout(stdout);
+  if (code !== 0) {
+    // Model-side failures surface as `error: failed to run prompt: <detail>` on
+    // stderr with no JSONL on stdout; treat them as agent_error, not CLI misuse.
+    const promptFailure = /failed to run prompt:\s*(.+)/.exec(String(stderr ?? ""));
+    if (promptFailure) {
+      const detail = promptFailure[1].trim();
+      return {
+        status: "failed",
+        error: {
+          code: "agent_error",
+          message: detail.slice(0, TAIL_LIMIT),
+          result_text: detail,
+          exit_code: code,
+          signal,
+          cli_session_ref: parsed.cliSessionRef ?? undefined,
+        },
+      };
+    }
+    return {
+      status: "failed",
+      error: {
+        code: "cli_exit_nonzero",
+        message: `Kimi exited with code ${code}${signal ? ` and signal ${signal}` : ""}`,
+        exit_code: code,
+        signal,
+        stderr_tail: String(stderr ?? "").trimEnd().slice(-TAIL_LIMIT),
+        cli_session_ref: parsed.cliSessionRef ?? undefined,
+      },
+    };
+  }
+  if (typeof parsed.resultText !== "string") {
+    return failedParse(code, stdout, "Kimi stdout did not include an assistant message");
+  }
+  if (!parsed.cliSessionRef) {
+    return failedParse(code, stdout, "Kimi stdout did not include a session.resume_hint session_id");
+  }
+  return {
+    status: "completed",
+    resultText: parsed.resultText,
+    resultJson: parsed.resultJson,
+    cliSessionRef: parsed.cliSessionRef,
+  };
+}
+
+export async function listKimiAgent() {
+  const availability = await getKimiAvailability();
+  return {
+    agent_id: KIMI_AGENT_ID,
+    title: "Kimi Code",
+    available: availability.available,
+    version: availability.version,
+    unavailable_reason: availability.available ? undefined : availability.reason,
+    capabilities: {
+      non_interactive: true,
+      session_resume: true,
+      command: "kimi -p <prompt> --output-format stream-json",
+    },
+  };
+}
+
+function assertKimiSessionId(value) {
+  if (typeof value !== "string" || !SESSION_ID_PATTERN.test(value)) {
+    throw new Error("cli_session_ref.native_session_id must be a Kimi session id (session_<uuid>)");
+  }
+}
+
+function failedParse(code, stdout, message) {
+  return {
+    status: "failed",
+    error: {
+      code: "stdout_parse_failed",
+      message,
+      exit_code: code,
+      stdout_tail: String(stdout ?? "").trimEnd().slice(-TAIL_LIMIT),
+    },
+  };
+}
+
+function parseJsonLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}

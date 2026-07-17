@@ -15,6 +15,14 @@ import {
   interpretCodexExit,
   listCodexAgent,
 } from "./codex-adapter.js";
+import {
+  KIMI_AGENT_ID,
+  buildKimiCommand,
+  createKimiSessionRef,
+  getKimiAvailability,
+  interpretKimiExit,
+  listKimiAgent,
+} from "./kimi-adapter.js";
 
 const ADAPTERS = new Map([
   [
@@ -43,6 +51,20 @@ const ADAPTERS = new Map([
       buildCommand: buildCodexCommand,
       interpretExit: interpretCodexExit,
       sessionRefFromEvent: codexSessionRefFromEvent,
+    },
+  ],
+  [
+    KIMI_AGENT_ID,
+    {
+      agentId: KIMI_AGENT_ID,
+      displayName: "Kimi Code",
+      metadataKey: KIMI_AGENT_ID,
+      getAvailability: getKimiAvailability,
+      listAgent: listKimiAgent,
+      createSessionRef: createKimiSessionRef,
+      buildCommand: buildKimiCommand,
+      interpretExit: interpretKimiExit,
+      sessionRefFromEvent: null,
     },
   ],
 ]);
