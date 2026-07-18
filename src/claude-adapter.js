@@ -282,6 +282,34 @@ function findSessionId(resultEvent, events) {
 }
 
 export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat }) {
+  let parsed;
+  let parseError;
+  try {
+    parsed = parseClaudeOutput(stdout, outputFormat);
+  } catch (error) {
+    parseError = error;
+  }
+  if (parsed?.isError) {
+    const message = parsed.resultText || "Claude returned is_error=true";
+    return {
+      status: "failed",
+      error: {
+        code: "agent_error",
+        message,
+        result_text: message,
+        result_json: parsed.resultJson,
+        exit_code: code,
+        signal,
+        cli_session_ref: parsed.cliSessionRef,
+        ...(Number.isInteger(parsed.resultJson?.api_error_status)
+          ? { api_error_status: parsed.resultJson.api_error_status }
+          : {}),
+        ...(typeof parsed.resultJson?.terminal_reason === "string"
+          ? { terminal_reason: parsed.resultJson.terminal_reason }
+          : {}),
+      },
+    };
+  }
   if (code !== 0) {
     return {
       status: "failed",
@@ -294,30 +322,14 @@ export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat
       },
     };
   }
-  let parsed;
-  try {
-    parsed = parseClaudeOutput(stdout, outputFormat);
-  } catch (error) {
+  if (parseError) {
     return {
       status: "failed",
       error: {
         code: "stdout_parse_failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: parseError instanceof Error ? parseError.message : String(parseError),
         exit_code: code,
         stdout_tail: String(stdout ?? "").trimEnd().slice(-4000),
-      },
-    };
-  }
-  if (parsed.isError) {
-    return {
-      status: "failed",
-      error: {
-        code: "agent_error",
-        message: "Claude returned is_error=true",
-        result_text: parsed.resultText || "Claude returned is_error=true",
-        result_json: parsed.resultJson,
-        exit_code: code,
-        cli_session_ref: parsed.cliSessionRef,
       },
     };
   }

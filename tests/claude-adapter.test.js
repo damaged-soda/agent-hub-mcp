@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeCommand,
+  interpretClaudeExit,
   parseClaudeJson,
   parseClaudeOutput,
   parseClaudeStdout,
@@ -245,6 +246,65 @@ describe("claude adapter", () => {
       "550e8400-e29b-41d4-a716-446655440000",
     );
     expect(parsed.isError).toBe(false);
+  });
+
+  it("preserves a structured Claude error when the CLI exits nonzero", () => {
+    const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+    const message = "You've hit your session limit · resets 7am (Asia/Singapore)";
+    const outcome = interpretClaudeExit({
+      code: 1,
+      signal: null,
+      stderr: "",
+      outputFormat: "stream-json",
+      stdout: [
+        JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 429,
+          terminal_reason: "api_error",
+          result: message,
+          session_id: sessionId,
+        }),
+      ].join("\n"),
+    });
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      error: {
+        code: "agent_error",
+        message,
+        result_text: message,
+        exit_code: 1,
+        signal: null,
+        api_error_status: 429,
+        terminal_reason: "api_error",
+        cli_session_ref: {
+          agent_id: "claude-code",
+          native_session_id: sessionId,
+        },
+      },
+    });
+  });
+
+  it("falls back to cli_exit_nonzero when nonzero stdout has no structured result", () => {
+    const outcome = interpretClaudeExit({
+      code: 1,
+      signal: null,
+      stdout: "not a Claude result",
+      stderr: "native failure",
+      outputFormat: "stream-json",
+    });
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      error: {
+        code: "cli_exit_nonzero",
+        message: "Claude exited with code 1",
+        stderr_tail: "native failure",
+      },
+    });
   });
 
   it("maps legacy json output without stream flags", () => {

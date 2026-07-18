@@ -324,6 +324,32 @@ describe("MCP flow", () => {
     );
   });
 
+  it("surfaces structured Claude rate limits when the CLI exits nonzero", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "claude-code",
+        prompt: "rate-limit",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { claude: {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    const message = "You've hit your session limit · resets 7am (Asia/Singapore)";
+    expect(result.structuredContent.status).toBe("failed");
+    expect(result.structuredContent.error).toMatchObject({
+      code: "agent_error",
+      message,
+      api_error_status: 429,
+      terminal_reason: "api_error",
+    });
+    expect(result.content[0].text).toBe(message);
+  });
+
   it("cancels a run even when cancellation races with runner startup", async () => {
     const accepted = await callAgentHubTool(
       "dispatch_to_agent",
@@ -1161,21 +1187,23 @@ process.stdin.on("end", () => {
       session_id: sessionId
     });
   };
-  const writeResult = (result, isError = false) => {
+  const writeResult = (result, isError = false, extra = {}) => {
     if (streamJson) {
       writeJson({
         type: "result",
         subtype: isError ? "error" : "success",
         result,
         session_id: sessionId,
-        is_error: isError
+        is_error: isError,
+        ...extra
       });
       return;
     }
     writeJson({
       result,
       session_id: sessionId,
-      is_error: isError
+      is_error: isError,
+      ...extra
     });
   };
   if (input.trim() === "sleep") {
@@ -1190,6 +1218,16 @@ process.stdin.on("end", () => {
   if (input.trim() === "error") {
     writeAssistant("fake failure");
     writeResult("fake failure", true);
+    return;
+  }
+  if (input.trim() === "rate-limit") {
+    const message = "You've hit your session limit · resets 7am (Asia/Singapore)";
+    writeAssistant(message);
+    writeResult(message, true, {
+      api_error_status: 429,
+      terminal_reason: "api_error"
+    });
+    process.exitCode = 1;
     return;
   }
   if (input.includes("AGENT_HUB_DISCUSSION_PROTOCOL_V1")) {
