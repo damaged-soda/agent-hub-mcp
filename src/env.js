@@ -68,7 +68,7 @@ function clearedNamespaceEnv() {
   return Object.fromEntries(NAMESPACE_ENV_KEYS.map((key) => [key, undefined]));
 }
 
-// Namespace rule (~/work/charter/NAMESPACE.md): the environment always follows
+// Namespace rule (~/work/meta/charter/NAMESPACE.md): the environment always follows
 // position — derive the workspace namespace from the run's cwd via direnv, regardless
 // of what the server process inherited. Stale DIRENV_* bookkeeping is stripped so the
 // probe evaluates cleanly for this cwd.
