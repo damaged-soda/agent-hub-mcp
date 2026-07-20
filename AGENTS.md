@@ -78,7 +78,7 @@ Use Node.js 20 or newer. `npm start` / `node src/server.js` is the deprecated st
 
 ## Workspace Namespace Resolution
 
-The environment always follows position (`~/work/charter/NAMESPACE.md`): before
+The environment always follows position (`~/work/meta/charter/NAMESPACE.md`): before
 spawning the agent CLI, the runner derives the workspace namespace (`NS`,
 `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
 `KIMI_CODE_HOME`) from the run's `cwd` via
