@@ -28,6 +28,18 @@ List available adapters through the local MCP client:
 node scripts/mcp-client.js list_agents
 ```
 
+`list_agents` includes the selectable model catalog reported by each available CLI. Pass
+an absolute `cwd` when model availability depends on workspace-specific authentication or
+settings:
+
+```sh
+node scripts/mcp-client.js list_agents --json '{"cwd":"/absolute/path/to/project"}'
+```
+
+Each agent has a normalized `models` array and a `model_discovery` status. Model discovery
+is best-effort: if a CLI cannot return its catalog, the agent remains available and reports
+`model_discovery.status: "unavailable"` with an empty `models` array.
+
 Dispatch a smoke prompt:
 
 ```sh

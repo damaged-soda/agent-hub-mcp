@@ -37,20 +37,52 @@ export function defaultFromEnv(env, envKey) {
   return value.trim();
 }
 
-export async function runVersionCommand(command, args, timeoutMs) {
+export async function runCommand(command, args, options = {}) {
+  const {
+    cwd,
+    env,
+    input,
+    maxOutputBytes = 8 * 1024 * 1024,
+    timeoutMs = 5000,
+  } = options;
   const child = spawn(command, args, {
-    stdio: ["ignore", "pipe", "pipe"],
+    cwd,
+    env,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
   const stdout = [];
   const stderr = [];
+  let outputBytes = 0;
+  let outputError = null;
   let timedOut = false;
+
+  const collect = (chunks) => (chunk) => {
+    const value = Buffer.from(chunk);
+    outputBytes += value.length;
+    if (outputBytes > maxOutputBytes) {
+      outputError = new Error(`Command output exceeded ${maxOutputBytes} bytes`);
+      child.kill("SIGKILL");
+      return;
+    }
+    chunks.push(value);
+  };
+  child.stdout.on("data", collect(stdout));
+  child.stderr.on("data", collect(stderr));
+
   const timeout = setTimeout(() => {
     timedOut = true;
     child.kill("SIGKILL");
   }, timeoutMs);
 
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  if (input !== undefined) {
+    child.stdin.on("error", () => undefined);
+    try {
+      child.stdin.end(input);
+    } catch (error) {
+      outputError = error;
+      child.kill("SIGKILL");
+    }
+  }
 
   try {
     const result = await Promise.race([
@@ -65,6 +97,9 @@ export async function runVersionCommand(command, args, timeoutMs) {
     if (timedOut && !result.error) {
       result.error = new Error(`Timed out after ${timeoutMs}ms`);
     }
+    if (outputError && !result.error) {
+      result.error = outputError;
+    }
     return {
       ...result,
       stdout: Buffer.concat(stdout).toString("utf8"),
@@ -73,4 +108,8 @@ export async function runVersionCommand(command, args, timeoutMs) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function runVersionCommand(command, args, timeoutMs) {
+  return runCommand(command, args, { timeoutMs });
 }

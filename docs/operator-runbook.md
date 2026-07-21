@@ -19,6 +19,10 @@ node scripts/mcp-client.js list_agents
 ```
 
 `list_agents` returns `claude-code`, `codex`, and `kimi-code` under `agents` only when the corresponding local CLI is available; missing CLIs appear under `unavailable_agents`.
+It also returns the selectable model catalog for each adapter. Use
+`--json '{"cwd":"/absolute/path/to/project"}'` when the CLI configuration or authentication
+namespace depends on the target workspace. A model catalog failure is reported through
+`model_discovery` and does not move the adapter to `unavailable_agents`.
 
 ## Commands
 

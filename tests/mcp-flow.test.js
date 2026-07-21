@@ -51,12 +51,36 @@ describe("MCP flow", () => {
   });
 
   it("runs list_agents and run_agent end to end over MCP stdio", async () => {
-    const listed = await callAgentHubTool("list_agents", {}, { env });
+    const listed = await callAgentHubTool("list_agents", { cwd: workspaceDir }, { env });
     expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
       "claude-code",
       "codex",
       "kimi-code",
     ]);
+    const listedById = Object.fromEntries(
+      listed.structuredContent.agents.map((agent) => [agent.agent_id, agent]),
+    );
+    expect(listedById["claude-code"].model_discovery.status).toBe("available");
+    expect(listedById["claude-code"].models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "sonnet",
+          resolved_id: "claude-sonnet-test",
+          supported_efforts: ["low", "high"],
+        }),
+      ]),
+    );
+    expect(listedById.codex.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-test-codex", priority: 1 }),
+      ]),
+    );
+    expect(listedById["kimi-code"].models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "kimi-code/test", context_window: 131072 }),
+      ]),
+    );
+    expect(JSON.stringify(listedById["kimi-code"])).not.toContain("secret-provider-key");
 
     const result = await callAgentHubTool(
       "run_agent",
@@ -825,6 +849,30 @@ process.exit(1);
     expect(unavailable.unavailable_reason).toContain("below the minimum supported version");
   });
 
+  it("keeps an agent available when only model discovery fails", async () => {
+    await fsp.writeFile(
+      path.join(binDir, "codex"),
+      `#!/usr/bin/env node
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex-cli 0.0.0-test\\n");
+  process.exit(0);
+}
+process.exit(2);
+`,
+      { mode: 0o755 },
+    );
+
+    const listed = await callAgentHubTool("list_agents", { cwd: workspaceDir }, { env });
+    const codex = listed.structuredContent.agents.find(
+      (agent) => agent.agent_id === "codex",
+    );
+    expect(codex).toBeDefined();
+    expect(codex.models).toEqual([]);
+    expect(codex.model_discovery).toEqual(
+      expect.objectContaining({ status: "unavailable", source: "codex-debug-models" }),
+    );
+  });
+
   it("rejects a cli_session_ref whose agent_id does not match", async () => {
     const result = await callAgentHubTool(
       "dispatch_to_agent",
@@ -1178,6 +1226,44 @@ process.stdin.on("end", () => {
       is_error: isError
     });
   };
+  let controlRequest = null;
+  try {
+    controlRequest = JSON.parse(input.trim());
+  } catch {}
+  if (
+    controlRequest?.type === "control_request" &&
+    controlRequest?.request?.subtype === "list_models"
+  ) {
+    writeJson({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: controlRequest.request_id,
+        response: {
+          models: [
+            {
+              value: "default",
+              resolvedModel: "claude-opus-test",
+              displayName: "Default (recommended)",
+              description: "Fake default model",
+              supportsEffort: true,
+              supportedEffortLevels: ["low", "high"],
+              supportsAdaptiveThinking: true
+            },
+            {
+              value: "sonnet",
+              resolvedModel: "claude-sonnet-test",
+              displayName: "Sonnet Test",
+              description: "Fake sonnet model",
+              supportsEffort: true,
+              supportedEffortLevels: ["low", "high"]
+            }
+          ]
+        }
+      }
+    });
+    return;
+  }
   if (input.trim() === "sleep") {
     writeInit();
     writeAssistant("fake progress");
@@ -1218,6 +1304,31 @@ async function writeFakeCodex(target) {
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("codex-cli 0.0.0-test\\n");
+  process.exit(0);
+}
+if (args[0] === "debug" && args[1] === "models") {
+  process.stdout.write(JSON.stringify({
+    models: [
+      {
+        slug: "gpt-test-codex",
+        display_name: "GPT Test Codex",
+        description: "Fake Codex model",
+        visibility: "list",
+        priority: 1,
+        default_reasoning_level: "medium",
+        supported_reasoning_levels: [{ effort: "low" }, { effort: "medium" }],
+        context_window: 128000,
+        input_modalities: ["text", "image"],
+        supports_reasoning_summaries: true
+      },
+      {
+        slug: "gpt-hidden",
+        display_name: "Hidden",
+        visibility: "hidden",
+        priority: 0
+      }
+    ]
+  }));
   process.exit(0);
 }
 const resumeIndex = args.indexOf("resume");
@@ -1268,6 +1379,27 @@ async function writeFakeKimi(target) {
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("0.26.0-test\\n");
+  process.exit(0);
+}
+if (args[0] === "provider" && args[1] === "list" && args.includes("--json")) {
+  process.stdout.write(JSON.stringify({
+    models: {
+      "kimi-code/test": {
+        displayName: "Kimi Test",
+        model: "test",
+        maxContextSize: 131072,
+        capabilities: ["thinking", "image_in", "tool_use"],
+        defaultEffort: "high",
+        supportEfforts: ["low", "high"]
+      }
+    },
+    providers: {
+      "managed:test": {
+        type: "kimi",
+        apiKey: "secret-provider-key"
+      }
+    }
+  }));
   process.exit(0);
 }
 const sessionIndex = args.indexOf("--session");

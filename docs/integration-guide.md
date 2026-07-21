@@ -40,7 +40,30 @@ tool_timeout_sec = 660
 
 ### list_agents
 
-No input. Returns available and unavailable local adapters.
+Returns available and unavailable local adapters together with their selectable models.
+The optional `cwd` must be an absolute directory and selects the same workspace namespace
+and CLI configuration used for a run:
+
+```json
+{
+  "cwd": "/absolute/path/to/project"
+}
+```
+
+Every adapter entry contains:
+
+- `models`: normalized model entries. `id` is the value accepted by `metadata.model` or the
+  adapter-specific model field. Optional metadata includes `resolved_id`, `description`,
+  `supported_efforts`, `default_effort`, `context_window`, `input_modalities`, and
+  `capabilities`.
+- `model_discovery.status`: `available` when the CLI returned a valid catalog, otherwise
+  `unavailable`.
+- `model_discovery.source`: the CLI discovery surface used for that adapter.
+- `model_discovery.reason`: present only when discovery failed.
+
+Model discovery failure does not make the adapter unavailable. In that case `models` is an
+empty array, while normal dispatch remains usable. Results are cached for 30 seconds per
+workspace namespace.
 
 ### run_agent
 

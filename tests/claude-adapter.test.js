@@ -1,12 +1,52 @@
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeCommand,
+  parseClaudeModelCatalog,
   parseClaudeJson,
   parseClaudeOutput,
   parseClaudeStdout,
 } from "../src/claude-adapter.js";
 
 describe("claude adapter", () => {
+  it("normalizes the selectable model catalog from a control response", () => {
+    const requestId = "models-1";
+    const models = parseClaudeModelCatalog(
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: requestId,
+          response: {
+            models: [
+              {
+                value: "default",
+                resolvedModel: "claude-opus-test",
+                displayName: "Default",
+                description: "Recommended",
+                supportsEffort: true,
+                supportedEffortLevels: ["low", "high"],
+                supportsFastMode: true,
+              },
+            ],
+          },
+        },
+      }),
+      requestId,
+    );
+
+    expect(models).toEqual([
+      {
+        id: "default",
+        display_name: "Default",
+        resolved_id: "claude-opus-test",
+        description: "Recommended",
+        recommended: true,
+        supported_efforts: ["low", "high"],
+        capabilities: ["effort", "fast_mode"],
+      },
+    ]);
+  });
+
   it("maps request metadata and new sessions into Claude argv", () => {
     const command = buildClaudeCommand({
       request: {

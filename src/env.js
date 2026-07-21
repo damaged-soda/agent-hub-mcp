@@ -63,6 +63,7 @@ const DIRENV_CANDIDATES = [
   "/usr/local/bin/direnv",
   "/usr/bin/direnv",
 ];
+const NAMESPACE_PROBE_TIMEOUT_MS = 5000;
 
 function clearedNamespaceEnv() {
   return Object.fromEntries(NAMESPACE_ENV_KEYS.map((key) => [key, undefined]));
@@ -92,7 +93,7 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
       stdout = execFileSync(bin, ["export", "json"], {
         cwd,
         env: probeEnv,
-        timeout: 2000,
+        timeout: NAMESPACE_PROBE_TIMEOUT_MS,
         encoding: "utf8",
       });
     } catch (error) {

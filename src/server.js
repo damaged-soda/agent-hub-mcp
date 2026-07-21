@@ -141,10 +141,13 @@ function registerTools(server, options = {}) {
     "list_agents",
     {
       title: "List Agents",
-      description: "List locally available agent CLI adapters.",
-      inputSchema: {},
+      description:
+        "List locally available agent CLI adapters and their selectable models. Pass cwd to resolve workspace-specific CLI configuration.",
+      inputSchema: {
+        cwd: z.string().optional(),
+      },
     },
-    async () => asToolResult(await listAgents()),
+    async (input) => asToolResult(await listAgents(input)),
   );
 
   server.registerTool(
