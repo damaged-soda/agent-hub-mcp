@@ -4,12 +4,47 @@ import {
   createKimiSessionRef,
   interpretKimiExit,
   isSupportedKimiVersion,
+  parseKimiModelCatalog,
   parseKimiStdout,
   parseKimiVersion,
 } from "../src/kimi-adapter.js";
 
 const SESSION_ID = "session_437f4ac7-19f4-472b-be3c-a87be0f41419";
 const MIGRATED_SESSION_ID = "ses_437f4ac7-19f4-472b-be3c-a87be0f41419";
+
+describe("kimi model catalog", () => {
+  it("returns model metadata without exposing provider credentials", () => {
+    const raw = JSON.stringify({
+      models: {
+        "kimi-code/k3": {
+          displayName: "K3",
+          model: "k3",
+          maxContextSize: 1048576,
+          capabilities: ["thinking", "image_in", "tool_use"],
+          defaultEffort: "max",
+          supportEfforts: ["low", "high", "max"],
+        },
+      },
+      providers: {
+        "managed:kimi-code": { apiKey: "must-not-leak", baseUrl: "https://example.test" },
+      },
+    });
+
+    const models = parseKimiModelCatalog(raw);
+    expect(models).toEqual([
+      {
+        id: "kimi-code/k3",
+        display_name: "K3",
+        resolved_id: "k3",
+        default_effort: "max",
+        context_window: 1048576,
+        supported_efforts: ["low", "high", "max"],
+        capabilities: ["thinking", "image_in", "tool_use"],
+      },
+    ]);
+    expect(JSON.stringify(models)).not.toContain("must-not-leak");
+  });
+});
 
 function successStdout(text = "hello") {
   return [

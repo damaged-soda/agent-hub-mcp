@@ -4,6 +4,7 @@ import {
   assertMetadataString,
   defaultFromEnv,
   resolveUnifiedPermission,
+  runCommand,
   runVersionCommand,
 } from "./adapter-utils.js";
 
@@ -33,8 +34,12 @@ const OUTPUT_FORMATS = new Set(["json", "stream-json"]);
 const DEFAULT_OUTPUT_FORMAT = "stream-json";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CLAUDE_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_CLAUDE_EFFORT";
+const MODEL_DISCOVERY_SOURCE = "claude-code-control";
+const MODEL_DISCOVERY_TIMEOUT_MS = 5000;
+const MODEL_CATALOG_CACHE_MS = 30000;
 
 let availabilityCache = null;
+const modelCatalogCache = new Map();
 
 export function createClaudeSessionRef(cliSessionRef) {
   if (cliSessionRef?.native_session_id) {
@@ -329,14 +334,19 @@ export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat
   };
 }
 
-export async function listClaudeAgent() {
+export async function listClaudeAgent(options = {}) {
   const availability = await getClaudeAvailability();
+  const catalog = availability.available
+    ? await getClaudeModelCatalog(options)
+    : unavailableModelCatalog("agent CLI is unavailable");
   return {
     agent_id: CLAUDE_AGENT_ID,
     title: "Claude Code",
     available: availability.available,
     version: availability.version,
     unavailable_reason: availability.available ? undefined : availability.reason,
+    models: catalog.models,
+    model_discovery: catalog.model_discovery,
     capabilities: {
       non_interactive: true,
       session_resume: true,
@@ -344,4 +354,143 @@ export async function listClaudeAgent() {
       discussion: CLAUDE_DISCUSSION_CAPABILITIES,
     },
   };
+}
+
+export async function getClaudeModelCatalog({ cwd = process.cwd(), env = process.env } = {}) {
+  const cacheKey = [
+    cwd,
+    env.CLAUDE_CONFIG_DIR ?? "",
+    env.ANTHROPIC_BASE_URL ?? "",
+    env.CLAUDE_CODE_USE_BEDROCK ?? "",
+    env.CLAUDE_CODE_USE_VERTEX ?? "",
+  ].join("\0");
+  const cached = modelCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAtMs < MODEL_CATALOG_CACHE_MS) {
+    return cached.value;
+  }
+
+  const requestId = `agent-hub-list-models-${crypto.randomUUID()}`;
+  const request = `${JSON.stringify({
+    type: "control_request",
+    request_id: requestId,
+    request: { subtype: "list_models" },
+  })}\n`;
+  const result = await runCommand(
+    "claude",
+    [
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--input-format",
+      "stream-json",
+      "--permission-mode",
+      "plan",
+      "--tools",
+      "",
+      "--no-session-persistence",
+    ],
+    { cwd, env, input: request, timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS },
+  );
+
+  let value;
+  if (result.error || result.code !== 0) {
+    value = unavailableModelCatalog(commandFailureReason(result));
+  } else {
+    try {
+      value = availableModelCatalog(parseClaudeModelCatalog(result.stdout, requestId));
+    } catch (error) {
+      value = unavailableModelCatalog(error.message);
+    }
+  }
+  modelCatalogCache.set(cacheKey, { checkedAtMs: Date.now(), value });
+  return value;
+}
+
+export function parseClaudeModelCatalog(stdout, requestId) {
+  const response = String(stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .find(
+      (message) =>
+        message?.type === "control_response" &&
+        message?.response?.request_id === requestId,
+    );
+  if (!response) {
+    throw new Error("Claude model discovery did not return a matching control response");
+  }
+  if (response.response?.subtype !== "success") {
+    throw new Error("Claude model discovery control request failed");
+  }
+  const rawModels = response.response?.response?.models;
+  if (!Array.isArray(rawModels)) {
+    throw new Error("Claude model discovery response did not include a models array");
+  }
+  return rawModels.flatMap((model) => normalizeClaudeModel(model));
+}
+
+function normalizeClaudeModel(raw) {
+  if (!raw || typeof raw.value !== "string" || raw.value.trim() === "") {
+    return [];
+  }
+  const model = {
+    id: raw.value,
+    display_name:
+      typeof raw.displayName === "string" && raw.displayName.trim()
+        ? raw.displayName
+        : raw.value,
+  };
+  copyNonEmptyString(raw, "resolvedModel", model, "resolved_id");
+  copyNonEmptyString(raw, "description", model, "description");
+  if (raw.value === "default") model.recommended = true;
+  const efforts = stringArray(raw.supportedEffortLevels);
+  if (efforts.length > 0) model.supported_efforts = efforts;
+  const capabilities = [];
+  if (raw.supportsEffort === true) capabilities.push("effort");
+  if (raw.supportsAdaptiveThinking === true) capabilities.push("adaptive_thinking");
+  if (raw.supportsFastMode === true) capabilities.push("fast_mode");
+  if (raw.supportsAutoMode === true) capabilities.push("auto_mode");
+  if (capabilities.length > 0) model.capabilities = capabilities;
+  return [model];
+}
+
+function availableModelCatalog(models) {
+  return {
+    models,
+    model_discovery: { status: "available", source: MODEL_DISCOVERY_SOURCE },
+  };
+}
+
+function unavailableModelCatalog(reason) {
+  return {
+    models: [],
+    model_discovery: {
+      status: "unavailable",
+      source: MODEL_DISCOVERY_SOURCE,
+      reason,
+    },
+  };
+}
+
+function commandFailureReason(result) {
+  if (result.error?.message) return result.error.message;
+  return `Claude model discovery exited with code ${result.code}`;
+}
+
+function copyNonEmptyString(source, sourceKey, target, targetKey) {
+  const value = source?.[sourceKey];
+  if (typeof value === "string" && value.trim()) target[targetKey] = value;
+}
+
+function stringArray(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim() !== "")
+    : [];
 }

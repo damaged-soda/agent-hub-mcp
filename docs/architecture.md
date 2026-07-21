@@ -127,6 +127,21 @@ Adapter 出现在列表中的条件：
 - direct non-interactive 命令可用。
 - Adapter 能把一次 CLI 退出转换为明确的 `completed` 或 `failed`。
 
+`list_agents` 还会 best-effort 探测每个可用 adapter 的可选模型，并返回统一的
+`models` 数组与 `model_discovery` 状态。调用方可传可选的绝对路径 `cwd`；服务端用它
+解析与 run 相同的 workspace namespace。未传时使用 MCP server 的当前目录。
+
+- Claude Code：以 stream-json 启动无持久化、无工具会话，发送 SDK control
+  `list_models` 请求；这与交互式 `/model` picker 使用同一份账号、provider 和策略目录。
+- Codex：读取 `codex debug models`，只保留 `visibility: "list"` 的条目；原始目录中的
+  instructions 等内部字段不会进入 MCP 响应或持久化 artifact。
+- Kimi Code：读取 `kimi provider list --json`，只保留 `models` 下的安全模型字段；
+  `providers` 中的 API key、base URL 等配置不会进入响应。
+
+探测并行执行，按 workspace namespace 缓存 30 秒，单个命令限时 5 秒、输出限
+8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，
+不会改变 adapter 自身的 `available` 状态。
+
 ### dispatch_to_agent
 
 启动一次 run 并立即返回。

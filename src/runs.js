@@ -28,7 +28,7 @@ import {
 } from "./fs-store.js";
 import { allAdapters, getAdapter } from "./adapters.js";
 import { validateRequestPaths } from "./security.js";
-import { buildAgentEnv } from "./env.js";
+import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
 import {
   DEFAULT_RUN_AGENT_WAIT_MS,
   DEFAULT_WAIT_AGENT_RUN_MS,
@@ -43,9 +43,19 @@ import {
 
 const CANCEL_GRACE_MS = 10000;
 
-export async function listAgents() {
+export async function listAgents(input = {}) {
   await cleanupExpiredRuns();
-  const described = await Promise.all(allAdapters().map((adapter) => adapter.listAgent()));
+  let cwd = process.cwd();
+  if (input?.cwd !== undefined) {
+    ({ cwd } = await validateRequestPaths(input.cwd));
+  }
+  const env = {
+    ...buildAgentEnv(process.env),
+    ...resolveNamespaceEnv(cwd),
+  };
+  const described = await Promise.all(
+    allAdapters().map((adapter) => adapter.listAgent({ cwd, env })),
+  );
   return {
     agents: described.filter((agent) => agent.available),
     unavailable_agents: described.filter((agent) => !agent.available),

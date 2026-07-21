@@ -4,6 +4,7 @@ import {
   codexSessionRefFromEvent,
   createCodexSessionRef,
   interpretCodexExit,
+  parseCodexModelCatalog,
   parseCodexStdout,
 } from "../src/codex-adapter.js";
 
@@ -22,6 +23,42 @@ function successStdout(text = "hello\n") {
 }
 
 describe("codex adapter", () => {
+  it("normalizes visible models and excludes hidden catalog entries", () => {
+    const models = parseCodexModelCatalog(
+      JSON.stringify({
+        models: [
+          {
+            slug: "gpt-visible",
+            display_name: "GPT Visible",
+            description: "Selectable",
+            visibility: "list",
+            priority: 2,
+            default_reasoning_level: "medium",
+            supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+            context_window: 200000,
+            input_modalities: ["text", "image"],
+            supports_reasoning_summaries: true,
+          },
+          { slug: "gpt-hidden", visibility: "hidden", priority: 1 },
+        ],
+      }),
+    );
+
+    expect(models).toEqual([
+      {
+        id: "gpt-visible",
+        display_name: "GPT Visible",
+        description: "Selectable",
+        default_effort: "medium",
+        priority: 2,
+        context_window: 200000,
+        supported_efforts: ["low", "high"],
+        input_modalities: ["text", "image"],
+        capabilities: ["reasoning_summaries"],
+      },
+    ]);
+  });
+
   it("starts new sessions without a native session id", () => {
     const ref = createCodexSessionRef(null);
     expect(ref).toEqual({

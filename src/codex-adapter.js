@@ -3,6 +3,7 @@ import {
   assertMetadataString,
   defaultFromEnv,
   resolveUnifiedPermission,
+  runCommand,
   runVersionCommand,
 } from "./adapter-utils.js";
 
@@ -28,6 +29,9 @@ const NETWORK_ACCESS_OVERRIDE = "sandbox_workspace_write.network_access=true";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CODEX_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_CODEX_EFFORT";
 const EFFORT_PATTERN = /^[A-Za-z0-9_-]+$/;
+const MODEL_DISCOVERY_SOURCE = "codex-debug-models";
+const MODEL_DISCOVERY_TIMEOUT_MS = 5000;
+const MODEL_CATALOG_CACHE_MS = 30000;
 // Codex thread ids are UUIDs. The resume session id is a positional argv value,
 // so anything else (for example "--last") would be parsed as a codex option and
 // could resume an unrelated session.
@@ -36,6 +40,7 @@ const SESSION_ID_PATTERN =
 const TAIL_LIMIT = 4000;
 
 let availabilityCache = null;
+const modelCatalogCache = new Map();
 
 // Codex assigns the thread id itself and reports it in the first thread.started
 // event, so a new session starts with native_session_id: null until the runner
@@ -302,14 +307,19 @@ export function codexSessionRefFromEvent(event) {
   return null;
 }
 
-export async function listCodexAgent() {
+export async function listCodexAgent(options = {}) {
   const availability = await getCodexAvailability();
+  const catalog = availability.available
+    ? await getCodexModelCatalog(options)
+    : unavailableModelCatalog("agent CLI is unavailable");
   return {
     agent_id: CODEX_AGENT_ID,
     title: "Codex CLI",
     available: availability.available,
     version: availability.version,
     unavailable_reason: availability.available ? undefined : availability.reason,
+    models: catalog.models,
+    model_discovery: catalog.model_discovery,
     capabilities: {
       non_interactive: true,
       session_resume: true,
@@ -317,6 +327,120 @@ export async function listCodexAgent() {
       discussion: CODEX_DISCUSSION_CAPABILITIES,
     },
   };
+}
+
+export async function getCodexModelCatalog({ cwd = process.cwd(), env = process.env } = {}) {
+  const cacheKey = [cwd, env.CODEX_HOME ?? "", env.OPENAI_BASE_URL ?? ""].join("\0");
+  const cached = modelCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAtMs < MODEL_CATALOG_CACHE_MS) {
+    return cached.value;
+  }
+  const result = await runCommand("codex", ["debug", "models"], {
+    cwd,
+    env,
+    timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+  });
+  let value;
+  if (result.error || result.code !== 0) {
+    value = unavailableModelCatalog(commandFailureReason(result));
+  } else {
+    try {
+      value = availableModelCatalog(parseCodexModelCatalog(result.stdout));
+    } catch (error) {
+      value = unavailableModelCatalog(error.message);
+    }
+  }
+  modelCatalogCache.set(cacheKey, { checkedAtMs: Date.now(), value });
+  return value;
+}
+
+export function parseCodexModelCatalog(stdout) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(stdout ?? ""));
+  } catch {
+    throw new Error("Codex model discovery returned invalid JSON");
+  }
+  if (!Array.isArray(parsed?.models)) {
+    throw new Error("Codex model discovery response did not include a models array");
+  }
+  const models = parsed.models
+    .filter(
+      (model) =>
+        model?.visibility === "list" &&
+        typeof model.slug === "string" &&
+        model.slug.trim() !== "",
+    )
+    .sort((left, right) => numericPriority(left.priority) - numericPriority(right.priority));
+  return models.map((raw) => normalizeCodexModel(raw));
+}
+
+function normalizeCodexModel(raw) {
+  const model = {
+    id: raw.slug,
+    display_name:
+      typeof raw.display_name === "string" && raw.display_name.trim()
+        ? raw.display_name
+        : raw.slug,
+  };
+  copyNonEmptyString(raw, "description", model, "description");
+  copyNonEmptyString(raw, "default_reasoning_level", model, "default_effort");
+  if (Number.isFinite(raw.priority)) {
+    model.priority = raw.priority;
+  }
+  if (Number.isInteger(raw.context_window) && raw.context_window > 0) {
+    model.context_window = raw.context_window;
+  }
+  const efforts = Array.isArray(raw.supported_reasoning_levels)
+    ? raw.supported_reasoning_levels
+        .map((entry) => entry?.effort)
+        .filter((effort) => typeof effort === "string" && effort.trim() !== "")
+    : [];
+  if (efforts.length > 0) model.supported_efforts = efforts;
+  const modalities = stringArray(raw.input_modalities);
+  if (modalities.length > 0) model.input_modalities = modalities;
+  if (raw.supports_reasoning_summaries === true) {
+    model.capabilities = ["reasoning_summaries"];
+  }
+  return model;
+}
+
+function numericPriority(value) {
+  return Number.isFinite(value) ? value : Number.POSITIVE_INFINITY;
+}
+
+function availableModelCatalog(models) {
+  return {
+    models,
+    model_discovery: { status: "available", source: MODEL_DISCOVERY_SOURCE },
+  };
+}
+
+function unavailableModelCatalog(reason) {
+  return {
+    models: [],
+    model_discovery: {
+      status: "unavailable",
+      source: MODEL_DISCOVERY_SOURCE,
+      reason,
+    },
+  };
+}
+
+function commandFailureReason(result) {
+  if (result.error?.message) return result.error.message;
+  return `Codex model discovery exited with code ${result.code}`;
+}
+
+function copyNonEmptyString(source, sourceKey, target, targetKey) {
+  const value = source?.[sourceKey];
+  if (typeof value === "string" && value.trim()) target[targetKey] = value;
+}
+
+function stringArray(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim() !== "")
+    : [];
 }
 
 function assertCodexSessionId(value) {

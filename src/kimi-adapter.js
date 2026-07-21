@@ -3,6 +3,7 @@ import {
   assertMetadataString,
   defaultFromEnv,
   resolveUnifiedPermission,
+  runCommand,
   runVersionCommand,
 } from "./adapter-utils.js";
 
@@ -18,6 +19,9 @@ const AVAILABILITY_CACHE_MS = 30000;
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_KIMI_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_KIMI_EFFORT";
 const CHILD_EFFORT_ENV_KEY = "KIMI_MODEL_THINKING_EFFORT";
+const MODEL_DISCOVERY_SOURCE = "kimi-provider-list";
+const MODEL_DISCOVERY_TIMEOUT_MS = 5000;
+const MODEL_CATALOG_CACHE_MS = 30000;
 // Kimi session ids look like session_<uuid>; the official migrator from the
 // legacy kimi-cli registers migrated sessions as ses_<uuid>. The resume id is
 // an argv value, so anything else (for example "--help") would be parsed as a
@@ -31,6 +35,7 @@ const MIN_KIMI_VERSION = [0, 2, 0];
 const TAIL_LIMIT = 4000;
 
 let availabilityCache = null;
+const modelCatalogCache = new Map();
 
 // Kimi assigns the session id itself and reports it in the final
 // session.resume_hint meta event, so a new session starts with
@@ -273,14 +278,19 @@ export function interpretKimiExit({ code, signal, stdout, stderr }) {
   };
 }
 
-export async function listKimiAgent() {
+export async function listKimiAgent(options = {}) {
   const availability = await getKimiAvailability();
+  const catalog = availability.available
+    ? await getKimiModelCatalog(options)
+    : unavailableModelCatalog("agent CLI is unavailable");
   return {
     agent_id: KIMI_AGENT_ID,
     title: "Kimi Code",
     available: availability.available,
     version: availability.version,
     unavailable_reason: availability.available ? undefined : availability.reason,
+    models: catalog.models,
+    model_discovery: catalog.model_discovery,
     capabilities: {
       non_interactive: true,
       session_resume: true,
@@ -288,6 +298,99 @@ export async function listKimiAgent() {
       discussion: KIMI_DISCUSSION_CAPABILITIES,
     },
   };
+}
+
+export async function getKimiModelCatalog({ cwd = process.cwd(), env = process.env } = {}) {
+  const cacheKey = [cwd, env.KIMI_CODE_HOME ?? ""].join("\0");
+  const cached = modelCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAtMs < MODEL_CATALOG_CACHE_MS) {
+    return cached.value;
+  }
+  const result = await runCommand("kimi", ["provider", "list", "--json"], {
+    cwd,
+    env,
+    timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+  });
+  let value;
+  if (result.error || result.code !== 0) {
+    value = unavailableModelCatalog(commandFailureReason(result));
+  } else {
+    try {
+      value = availableModelCatalog(parseKimiModelCatalog(result.stdout));
+    } catch (error) {
+      value = unavailableModelCatalog(error.message);
+    }
+  }
+  modelCatalogCache.set(cacheKey, { checkedAtMs: Date.now(), value });
+  return value;
+}
+
+export function parseKimiModelCatalog(stdout) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(stdout ?? ""));
+  } catch {
+    throw new Error("Kimi model discovery returned invalid JSON");
+  }
+  if (!parsed?.models || typeof parsed.models !== "object" || Array.isArray(parsed.models)) {
+    throw new Error("Kimi model discovery response did not include a models object");
+  }
+  return Object.entries(parsed.models).flatMap(([id, raw]) => normalizeKimiModel(id, raw));
+}
+
+function normalizeKimiModel(id, raw) {
+  if (!id.trim() || !raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const model = {
+    id,
+    display_name:
+      typeof raw.displayName === "string" && raw.displayName.trim()
+        ? raw.displayName
+        : id,
+  };
+  copyNonEmptyString(raw, "model", model, "resolved_id");
+  copyNonEmptyString(raw, "defaultEffort", model, "default_effort");
+  if (Number.isInteger(raw.maxContextSize) && raw.maxContextSize > 0) {
+    model.context_window = raw.maxContextSize;
+  }
+  const efforts = stringArray(raw.supportEfforts);
+  if (efforts.length > 0) model.supported_efforts = efforts;
+  const capabilities = stringArray(raw.capabilities);
+  if (capabilities.length > 0) model.capabilities = capabilities;
+  return [model];
+}
+
+function availableModelCatalog(models) {
+  return {
+    models,
+    model_discovery: { status: "available", source: MODEL_DISCOVERY_SOURCE },
+  };
+}
+
+function unavailableModelCatalog(reason) {
+  return {
+    models: [],
+    model_discovery: {
+      status: "unavailable",
+      source: MODEL_DISCOVERY_SOURCE,
+      reason,
+    },
+  };
+}
+
+function commandFailureReason(result) {
+  if (result.error?.message) return result.error.message;
+  return `Kimi model discovery exited with code ${result.code}`;
+}
+
+function copyNonEmptyString(source, sourceKey, target, targetKey) {
+  const value = source?.[sourceKey];
+  if (typeof value === "string" && value.trim()) target[targetKey] = value;
+}
+
+function stringArray(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === "string" && item.trim() !== "")
+    : [];
 }
 
 function assertKimiSessionId(value) {
