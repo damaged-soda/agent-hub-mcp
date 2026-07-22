@@ -125,6 +125,7 @@ describe("codex adapter", () => {
     const command = buildCodexCommand({
       request: { metadata: {} },
       effectiveCliSessionRef: createCodexSessionRef(null),
+      env: {},
     });
 
     expect(command.argv).toEqual([
@@ -278,6 +279,7 @@ describe("codex adapter", () => {
         agent_id: "codex",
         native_session_id: THREAD_ID,
       }),
+      env: {},
     });
 
     expect(command.argv).toEqual([
@@ -304,6 +306,7 @@ describe("codex adapter", () => {
         agent_id: "codex",
         native_session_id: THREAD_ID,
       }),
+      env: {},
     });
 
     expect(command.argv).toContain('sandbox_mode="workspace-write"');

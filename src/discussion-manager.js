@@ -76,6 +76,7 @@ export class DiscussionManager {
     this.phaseDurations = { ...DEFAULT_PHASES, ...(options.phase_durations_ms ?? {}) };
     this.pollIntervalMs = options.poll_interval_ms ?? POLL_AFTER_MS;
     this.waitWindowMs = options.wait_window_ms ?? DEFAULT_WAIT_MS;
+    this.autoResume = options.auto_resume ?? true;
     this.runApi = {
       dispatch: options.run_api?.dispatch ?? dispatchToAgent,
       query: options.run_api?.query ?? queryAgentRunSnapshot,
@@ -89,16 +90,18 @@ export class DiscussionManager {
     this.cleanupTimer = null;
   }
 
-  async start() {
+  async start(options = {}) {
     await Promise.all([cleanupExpiredDiscussions(), cleanupExpiredRuns()]);
-    const ids = await listNonTerminalDiscussions();
-    for (const id of ids) {
-      try {
-        const state = await recoverDiscussionRecord(id);
-        if (state.preflight_complete) this.ensureRunning(id);
-        else await removeDiscussionRecord(id);
-      } catch (error) {
-        await markDiscussionUnknown(id, error).catch(() => undefined);
+    if (options.recover_existing !== false) {
+      const ids = await listNonTerminalDiscussions();
+      for (const id of ids) {
+        try {
+          const state = await recoverDiscussionRecord(id);
+          if (state.preflight_complete) this.ensureRunning(id);
+          else await removeDiscussionRecord(id);
+        } catch (error) {
+          await markDiscussionUnknown(id, error).catch(() => undefined);
+        }
       }
     }
     this.cleanupTimer = setInterval(() => {
@@ -223,6 +226,25 @@ export class DiscussionManager {
     return acceptedDiscussion(id);
   }
 
+  async resume(id) {
+    if (this.shuttingDown) {
+      throw codedError("daemon_shutting_down", "Discussion controller is shutting down");
+    }
+    const state = await recoverDiscussionRecord(id);
+    if (!DISCUSSION_FINAL_STATUSES.has(state.status) && state.preflight_complete) {
+      this.ensureRunning(id);
+    }
+    return state;
+  }
+
+  async waitForController(id) {
+    const state = await readDiscussionState(id);
+    if (DISCUSSION_FINAL_STATUSES.has(state.status)) return state;
+    const controller = this.ensureRunning(id);
+    if (controller) await controller;
+    return readDiscussionState(id);
+  }
+
   async query(input) {
     const id = input?.discussion_ref?.discussion_id;
     let state;
@@ -244,7 +266,11 @@ export class DiscussionManager {
         };
       }
     }
-    if (!DISCUSSION_FINAL_STATUSES.has(state.status) && state.preflight_complete) {
+    if (
+      this.autoResume &&
+      !DISCUSSION_FINAL_STATUSES.has(state.status) &&
+      state.preflight_complete
+    ) {
       this.ensureRunning(id);
     }
     const artifacts = await discussionArtifacts(id);
@@ -327,7 +353,7 @@ export class DiscussionManager {
         }),
       ),
     );
-    this.ensureRunning(id);
+    if (this.autoResume) this.ensureRunning(id);
     return this.query(input);
   }
 

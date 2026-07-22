@@ -37,12 +37,13 @@ Node.js、文件存储和 CLI adapter 原生实现，不引入新的多智能体
 - 复用并小幅扩展现有 run API：幂等派发、轻量快照查询、session lease/lineage 和
   可选 usage 归一化都属于底层 run 能力，不由 Discussion 绕过 adapter 自建。
 - 保持普通 run 的 prompt 原样透传语义不变。
-- Discussion 独立持久化，daemon 重启后可以恢复。
+- Discussion 独立持久化，coordinator worker 或可选 daemon 重启后可以恢复。
 - 每个参与者拥有独立 CLI session；同一个参与者的多轮发言优先复用 healthy session，
   失败、分支或 lineage 变化时按确定性规则重建。
 - 所有正式结论可以追溯到材料或具体发言事件。
 - 过程有明确的轮次、时间、重试和 quorum 边界。
-- Discussion 只运行在常驻 HTTP daemon 中，不依赖 MCP 请求或 stdio 进程的生存期。
+- Discussion coordinator 独立于发起请求：CLI 使用 detached worker，可选 HTTP 模式使用
+  process-wide manager；两者都不依赖单次请求的生存期。
 
 ## 3. 非目标
 
@@ -58,7 +59,7 @@ MVP 明确不做：
 - 对 adapter `auto` 模式产生的工作区副作用做检测、隔离或回滚。
 - 直接执行讨论结论，例如修改正式工作区、提交代码或发送外部消息。
 - 把 Discussion 记录当作永久知识库；记录仍按 7 天 TTL 清理。
-- 为已弃用的 stdio transport 增加 Discussion tools 或编排能力。
+- 为 MCP stdio transport 增加 Discussion tools；无 daemon 入口由正式 CLI 提供。
 
 ## 4. 核心原则
 
@@ -148,9 +149,8 @@ adapter 的 Discussion 运行边界由现有 capability 声明扩展，不在 co
 
 ```mermaid
 flowchart TD
-    Client["MCP client"] --> Tools["Discussion MCP tools"]
-    Tools --> Daemon["HTTP daemon"]
-    Daemon --> Manager["Process-wide DiscussionManager"]
+    Client["CLI or MCP client"] --> Entry["agenthub CLI or optional HTTP tools"]
+    Entry --> Manager["Detached worker or process-wide DiscussionManager"]
     Manager --> Store["Discussion store"]
     Manager --> Runs["Existing run API"]
     Runs --> A1["Claude adapter"]
@@ -172,17 +172,18 @@ flowchart TD
 - 零或一份正式 `DecisionRecord`。
 - 可选的 `parent_discussion_ref`，用于 follow-up。
 
-## 6. MCP 接口
+## 6. CLI 与 MCP 接口
 
-MVP 只在 `streamable-http` transport 注册四个新工具：
+`agenthub discussion` 提供四个主命令，并与 streamable HTTP 的四个工具共享输入输出：
 
 - `dispatch_discussion`
 - `query_discussion`
 - `wait_discussion`
 - `cancel_discussion`
 
-stdio transport 不注册这些工具，也不创建 DiscussionManager。MVP 不增加中途发言、
-邀请、踢人或暂停工具。
+MCP stdio transport 不注册这些工具。CLI dispatch 创建 detached DiscussionManager
+worker；HTTP transport 创建 process-wide manager。两条路径均不增加中途发言、邀请、
+踢人或暂停工具。
 
 ### 6.1 DiscussionRef
 
@@ -868,22 +869,23 @@ metadata 中，不能描述成强制只读。
 
 - 事件包含单调递增 sequence、author、type、timestamp 和 payload。
 - Material 和 prompt artifacts 记录 SHA-256。
-- Participant 不能直接写 `events.jsonl`；只有 daemon 中的 DiscussionManager 可以
+- Participant 不能直接写 `events.jsonl`；只有持有 lease 的 DiscussionManager 可以
   提交正式事件。
 - 状态投影从事件和已验证输出产生，participant 文本不能覆盖状态字段。
 
-## 13. Daemon 内编排与恢复
+## 13. Coordinator 编排与恢复
 
 ### 13.1 Process-wide DiscussionManager
 
-现有 HTTP transport 每个请求创建一个 MCP server/transport，但 DiscussionManager
-必须是 HTTP daemon 的进程级单例，不能属于某次请求。stdio 不实例化 manager：
+HTTP transport 每个请求创建一个 MCP server/transport，因此 DiscussionManager 是
+HTTP daemon 的进程级单例。CLI 模式则为每场 Discussion 启动 detached worker：
 
 ```text
-server process
-  ├── one DiscussionManager
-  ├── many short-lived MCP request handlers
-  └── many detached participant runs
+CLI dispatch process ──spawn──> detached DiscussionManager worker
+HTTP server process
+  ├── one process-wide DiscussionManager
+  └── many short-lived MCP request handlers
+either coordinator ──dispatch──> many detached participant runs
 ```
 
 建议职责：
@@ -895,17 +897,18 @@ server process
 - `cancel()`：持久化取消意图并取消活跃 runs。
 - `shutdown()`：停止派发新 turn，不取消 detached participant runs。
 
-daemon 启动时先创建 Discussion 根目录并扫描非终态记录，再开始监听 HTTP。全局目录
+HTTP daemon 启动时创建 Discussion 根目录并扫描非终态记录。CLI worker 只恢复指定
+Discussion；query/wait/cancel 为非终态记录按需启动恢复 worker。全局目录
 权限/配置故障会阻止启动；单场记录损坏只隔离该 Discussion，能重建就修复，不能重建
 就标记 unknown，不能拖垮整个 daemon。`start()` 只需挂接 controller task，不等待整场
 讨论结束。
 
 ### 13.2 单实例执行
 
-每场 Discussion 使用持久化 lease/owner 记录，防止误启动的多个 HTTP daemon 同时
+每场 Discussion 使用持久化 lease/owner 记录，防止多个 worker 或 HTTP daemon 同时
 恢复同一讨论：
 
-- 每个 daemon 启动生成随机 `process_instance_id`；PID 只用于诊断，不能单独证明身份。
+- 每个 coordinator 启动生成随机 `process_instance_id`；PID 只用于诊断，不能单独证明身份。
 - lease 包含 `owner_id`、单调递增 `generation` 和 `heartbeat_at`。
 - 每 5 秒续约；20 秒无心跳即可由另一个 daemon 在 discussion lock 内原子接管。
 - 每次提交事件、更新投影或派发 turn 前都验证 `owner_id + generation`；旧 controller
@@ -915,7 +918,7 @@ daemon 启动时先创建 Discussion 根目录并扫描非终态记录，再开�
 
 ### 13.3 恢复算法
 
-daemon 启动或 `ensureRunning` 时：
+coordinator 启动或 `ensureRunning` 时：
 
 1. 读取 `events.jsonl`，校验 sequence，并重建或核对 `state.json` 投影。
 2. 对全部 `active_run_refs` 查询底层快照，而不是假设只有一个 active run。
@@ -926,14 +929,14 @@ daemon 启动或 `ensureRunning` 时：
 6. run 丢失/失败：按该 turn 剩余 attempt 和失败分类决定重建 session、重试或失败。
 7. 从最后完成的协议阶段继续；deadline 已过时只接受截止前已完成的结果并立即结算。
 
-daemon 停止期间 Discussion 暂停编排，但已经派发的 detached run 可以继续。daemon
-重启后读取其终态并续会；停机时间不会暂停各阶段绝对 deadline。
+coordinator 停止期间 Discussion 暂停编排，但已经派发的 detached run 可以继续。新的
+worker 或 daemon 接管后读取其终态并续会；停机时间不会暂停各阶段绝对 deadline。
 
 ### 13.4 派发、取消与关闭竞态
 
 - Discussion 在派发前先提交 `turn.dispatch_requested`，其中包含逻辑 turn、attempt、
   request hash 和幂等键；底层 dispatch 返回后再提交 `turn.dispatched` 和 run_ref。
-- 底层 run API 持久化幂等键索引。即使 daemon 在两次提交之间崩溃，恢复也只能取回
+- 底层 run API 持久化幂等键索引。即使 coordinator 在两次提交之间崩溃，恢复也只能取回
   同一个 run，不会留下不可认领的孤儿 run。
 - 检查取消标志、登记 dispatch intent 和 active attempt 必须在同一 discussion lock
   内完成；dispatch 返回后重查取消状态并补取消，规则见 6.6。
@@ -1109,8 +1112,8 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 
 - 现有六个 MCP tools 的 schema、默认权限和正常非并发行为不变；对同一 native session
   的并发 continuation 新增明确 `session_busy` 失败，替代未定义的并发行为。
-- Discussion tools 只注册在 streamable HTTP；stdio 保留现有六个 run tools，标记为
-  deprecated，本次不删除，后续单独下线。
+- `agenthub discussion` 是无 daemon 主入口；Discussion MCP tools 继续只注册在
+  streamable HTTP。stdio 保留现有六个 run tools。
 - 现有 adapter prompt pass-through 不变。
 - `run_id` 和 `cli_session_ref.native_session_id` 继续保持分离。
 - 新 Discussion 只能通过现有 run API 启动 CLI，不能绕过 adapter、路径、环境或
@@ -1247,12 +1250,12 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 - 验证、修正和 DecisionRecord。
 - 重试、quorum、五阶段 deadline 和双维度结论质量。
 
-### 阶段四：HTTP daemon 生命周期
+### 阶段四：Coordinator 生命周期
 
-- Process-wide DiscussionManager。
-- 启动扫描、幂等恢复和 running run 重新挂接。
+- CLI detached worker 与 HTTP process-wide DiscussionManager。
+- 启动扫描/按 ID 恢复、幂等恢复和 running run 重新挂接。
 - wait/query/cancel、lease、shutdown 和崩溃边界测试。
-- Discussion tools 仅 HTTP 注册，stdio 弃用说明。
+- Discussion CLI 主入口；MCP tools 仅 HTTP 注册。
 
 ### 阶段五：follow-up 和评测
 
@@ -1283,8 +1286,8 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 - capability 配置为 auto 的 adapter 仍可能产生副作用；MVP 只披露，不检测或回滚。
 - 没有全局并发限制，发起者可以创建过多 participant 或 Discussion。
 - 结构化 JSON 依赖模型遵守格式；MVP 只允许一次修复。
-- 本地文件事件存储适合单机 daemon，不是分布式共识系统。
-- Discussion 只支持 HTTP daemon；stdio 不获得新功能并将逐步下线。
+- 本地文件事件存储适合单机 coordinator，不是分布式共识系统。
+- Discussion 支持 CLI worker 和 HTTP daemon；MCP stdio 不获得 Discussion tools。
 - 工作区本身不做完整快照；只有显式材料包是冻结和可复现的。
 - Discussion 只保留 7 天，不替代项目文档或长期决策日志。
 - 同一个底层模型的多个 session 可能产生相关判断；系统只披露，不阻止。

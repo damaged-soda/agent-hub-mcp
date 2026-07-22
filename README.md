@@ -1,6 +1,6 @@
-# Agent Hub MCP
+# Agent Hub
 
-Agent Hub MCP is a local MCP daemon for running agent CLIs and durable multi-agent discussions. It ships three adapters — Claude Code (`claude-code`), Codex CLI (`codex`), and Kimi Code (`kimi-code`) — and runs them in non-interactive mode while Agent Hub owns run state, session lineage, logs, waiting, cancellation, and local artifacts.
+Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus the bundled Codex Skill. It ships three adapters — Claude Code (`claude-code`), Codex CLI (`codex`), and Kimi Code (`kimi-code`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
 
 ## Quick Start
 
@@ -10,11 +10,15 @@ Prerequisites:
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, and/or Kimi Code CLI available as `kimi`.
 - CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`).
 
-Install dependencies:
+Install dependencies, the local CLI, and the Skill:
 
 ```sh
 npm install
+npm run install:local
 ```
+
+`npm run install:local` links `agenthub` into the active npm prefix and installs the
+versioned Skill at `${CODEX_HOME:-~/.codex}/skills/agent-hub`.
 
 Run the test suite:
 
@@ -22,10 +26,10 @@ Run the test suite:
 npm test
 ```
 
-List available adapters through the local MCP client:
+List available adapters in the current workspace:
 
 ```sh
-node scripts/mcp-client.js list_agents
+agenthub agents --cwd "$PWD"
 ```
 
 `list_agents` includes the selectable model catalog reported by each available CLI. Pass
@@ -33,7 +37,7 @@ an absolute `cwd` when model availability depends on workspace-specific authenti
 settings:
 
 ```sh
-node scripts/mcp-client.js list_agents --json '{"cwd":"/absolute/path/to/project"}'
+agenthub agents --cwd /absolute/path/to/project
 ```
 
 Each agent has a normalized `models` array and a `model_discovery` status. Model discovery
@@ -43,41 +47,50 @@ is best-effort: if a CLI cannot return its catalog, the agent remains available 
 Dispatch a smoke prompt:
 
 ```sh
-node scripts/mcp-client.js dispatch_to_agent --json '{
-  "agent_id": "claude-code",
-  "prompt": "Reply with OK.",
-  "cwd": "/absolute/path/to/project",
-  "cli_session_ref": null,
-  "metadata": {
-    "claude": {
-      "model": "sonnet",
-      "effort": "medium"
-    }
-  }
-}'
+agenthub dispatch \
+  --agent claude-code \
+  --cwd /absolute/path/to/project \
+  --metadata '{"claude":{"model":"sonnet","effort":"medium"}}' \
+  --prompt 'Reply with OK.'
 ```
 
 The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, and for Kimi Code with `"agent_id": "kimi-code"` and `metadata["kimi-code"]` (see the [integration guide](docs/integration-guide.md)). For a new Codex or Kimi session the dispatch response has `cli_session_ref: null`; the session id appears on the terminal snapshot once the CLI reports it.
 
-Use the returned `run_ref` with `wait_agent_run` until the run reaches a terminal state. The server waits up to 10 minutes by default; if the MCP client times out first, keep the `run_ref` and call `query_agent_run` or `wait_agent_run` again. `run_agent` is still available for short tasks that should finish inside the MCP client's tool timeout.
+Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
 
-`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for all adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi has no permission flags in prompt mode, so `read-only`/`full` are rejected there rather than silently remapped). Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` server defaults).
+Every CLI invocation inherits the caller's login, environment, and macOS Keychain context. The dispatch command exits after creating a detached runner; later `query`, `wait`, and `cancel` commands reopen the same private on-disk state, so no Agent Hub daemon has to remain alive.
 
-## MCP Server
+`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for all adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi has no permission flags in prompt mode, so `read-only`/`full` are rejected there rather than silently remapped). Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` environment defaults).
 
-The legacy server runs on stdio:
+## Structured Discussions
+
+Create a Discussion request JSON file and dispatch it from the CLI:
+
+```sh
+agenthub discussion dispatch --json-file /absolute/path/discussion.json
+agenthub discussion wait DISCUSSION_ID
+```
+
+Discussion dispatch starts a detached coordinator that survives the dispatching CLI process.
+Query and wait commands restart recovery on demand if an earlier coordinator disappeared. A normal
+discussion runs the fixed five-phase protocol: independent memo, moderation, challenge, revision,
+and synthesis.
+
+## Optional MCP Server
+
+MCP clients may still launch an ephemeral stdio server for the six run tools:
 
 ```sh
 npm start
 ```
 
-It can also run as a long-lived local streamable HTTP daemon:
+The optional streamable HTTP daemon exposes both run and Discussion tools:
 
 ```sh
 node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
 ```
 
-The HTTP transport is the supported surface for new functionality, including Discussions. It is intended for local loopback use only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. The stdio transport remains available for the six original run tools but is deprecated and does not expose Discussion tools.
+The HTTP transport is intended for local loopback compatibility only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. Prefer the CLI/Skill path when inheriting the caller's credential context matters.
 
 MCP clients should launch the server process, for example:
 
@@ -126,7 +139,7 @@ node scripts/mcp-client.js dispatch_discussion --url http://127.0.0.1:8700/mcp -
 }'
 ```
 
-The caller chooses the host and complete participant roster before dispatch. The daemon then runs an uninterruptible five-phase protocol (independent memo, moderation, challenge, revision, synthesis). Use the returned `discussion_ref` with `wait_discussion`; after completion, a follow-up may add a question and new materials but keeps the original roster. Discussion permissions come from adapter capabilities: Claude/Codex currently prefer read-only and Kimi uses auto. This is best-effort only, not a security boundary.
+The caller chooses the host and complete participant roster before dispatch. The coordinator then runs the five-phase protocol. After completion, a follow-up may add a question and new materials but keeps the original roster. Discussion permissions come from adapter capabilities: Claude/Codex currently prefer read-only and Kimi uses auto. This is best-effort only, not a security boundary.
 
 ## Configuration
 
@@ -152,7 +165,7 @@ Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cac
 
 - [Architecture](docs/architecture.md) explains run/session boundaries, state files, process groups, and adapter behavior.
 - [Discussion feature design](docs/discussion-design.md) specifies the durable, structured multi-agent discussion workflow and its invariants.
-- [Integration guide](docs/integration-guide.md) shows how MCP clients should call the tools.
+- [Integration guide](docs/integration-guide.md) documents the CLI and optional MCP surfaces.
 - [Operator runbook](docs/operator-runbook.md) covers configuration, smoke tests, storage, and troubleshooting.
 
 ## Development
@@ -161,6 +174,7 @@ Useful commands:
 
 ```sh
 npm test
+npm run cli -- --help
 npm run selftest:mcp
 npm run review:self
 ```

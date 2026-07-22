@@ -7,6 +7,7 @@ import {
   appendDiscussionEvent,
   createDiscussionRecord,
   discussionDirFor,
+  discussionLeaseIsLive,
   readDiscussionEvents,
   readDiscussionState,
   recoverDiscussionRecord,
@@ -72,6 +73,26 @@ describe("discussion store", () => {
     ).rejects.toMatchObject({ code: "discussion_lease_lost" });
     expect((await readDiscussionState("discussion-two")).committed_event_sequence).toBe(1);
     await releaseDiscussionLease("discussion-two", lease);
+  });
+
+  it("reports whether the lease owner process is still live", async () => {
+    await createDiscussionRecord(baseState("discussion-three"), { kind: "new" });
+    const lease = await acquireDiscussionLease("discussion-three", "owner-one");
+    expect(await discussionLeaseIsLive("discussion-three")).toBe(true);
+    await releaseDiscussionLease("discussion-three", lease);
+    expect(await discussionLeaseIsLive("discussion-three")).toBe(false);
+  });
+
+  it("reclaims an ownerless filesystem lock only after the stale window", async () => {
+    await createDiscussionRecord(baseState("discussion-four"), { kind: "new" });
+    const lockDir = path.join(discussionDirFor("discussion-four"), ".discussion.lock");
+    await fsp.mkdir(lockDir, { mode: 0o700 });
+    const staleAt = new Date(Date.now() - 21_000);
+    await fsp.utimes(lockDir, staleAt, staleAt);
+
+    const lease = await acquireDiscussionLease("discussion-four", "owner-two");
+    expect(lease.owner_id).toBe("owner-two");
+    await releaseDiscussionLease("discussion-four", lease);
   });
 });
 

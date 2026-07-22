@@ -236,7 +236,12 @@ export async function acquireDiscussionLease(id, ownerId) {
       return renewed;
     }
     const heartbeat = Date.parse(current?.heartbeat_at ?? "");
-    if (current && Number.isFinite(heartbeat) && now - heartbeat < LEASE_STALE_MS) {
+    if (
+      current &&
+      Number.isFinite(heartbeat) &&
+      now - heartbeat < LEASE_STALE_MS &&
+      leaseOwnerProcessIsLive(current)
+    ) {
       throw codedError("discussion_lease_held", `Discussion lease is held by ${current.owner_id}`);
     }
     const lease = {
@@ -249,6 +254,17 @@ export async function acquireDiscussionLease(id, ownerId) {
     await atomicWriteJson(leasePath, lease);
     return lease;
   });
+}
+
+export async function discussionLeaseIsLive(id) {
+  const current = await readJsonIfExists(path.join(discussionDirFor(id), "lease.json"));
+  const heartbeat = Date.parse(current?.heartbeat_at ?? "");
+  return Boolean(
+    current &&
+      Number.isFinite(heartbeat) &&
+      Date.now() - heartbeat < LEASE_STALE_MS &&
+      leaseOwnerProcessIsLive(current),
+  );
 }
 
 export async function heartbeatDiscussionLease(id, lease) {
@@ -375,7 +391,14 @@ export async function withDiscussionLock(id, fn) {
       if (error?.code !== "EEXIST") throw error;
       const owner = await readJsonIfExists(path.join(lockDir, "owner.json")).catch(() => null);
       const createdAt = Date.parse(owner?.created_at ?? "");
-      if (Number.isFinite(createdAt) && Date.now() - createdAt > LEASE_STALE_MS) {
+      const lockStat = owner ? null : await fsp.stat(lockDir).catch(() => null);
+      const abandonedBeforeOwnerWrite =
+        !owner && lockStat && Date.now() - lockStat.mtimeMs > LEASE_STALE_MS;
+      if (
+        abandonedBeforeOwnerWrite ||
+        (owner && !leaseOwnerProcessIsLive(owner)) ||
+        (Number.isFinite(createdAt) && Date.now() - createdAt > LEASE_STALE_MS)
+      ) {
         await fsp.rm(lockDir, { recursive: true, force: true });
         continue;
       }
@@ -400,6 +423,17 @@ function assertLeaseMatches(current, expected) {
     current.generation !== expected.generation
   ) {
     throw codedError("discussion_lease_lost", "Discussion controller no longer owns the lease");
+  }
+}
+
+function leaseOwnerProcessIsLive(lease) {
+  if (!Number.isSafeInteger(lease?.pid) || lease.pid <= 0) return true;
+  try {
+    process.kill(lease.pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    return true;
   }
 }
 
