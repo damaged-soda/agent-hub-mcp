@@ -56,6 +56,14 @@ describe("agenthub CLI", () => {
   });
 
   it("runs a durable discussion from a detached CLI worker", async () => {
+    const staleCommandDir = path.join(
+      env.AGENT_HUB_DISCUSSION_DIR,
+      ".cli-commands",
+      "stale-command",
+    );
+    await fsp.mkdir(staleCommandDir, { recursive: true });
+    const staleAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fsp.utimes(staleCommandDir, staleAt, staleAt);
     const requestPath = path.join(root, "discussion.json");
     await fsp.writeFile(
       requestPath,
@@ -92,6 +100,7 @@ describe("agenthub CLI", () => {
       env,
     );
     expect(accepted.status).toBe("accepted");
+    await expect(fsp.access(staleCommandDir)).rejects.toThrow();
 
     const completed = await runCli(
       [
@@ -109,7 +118,102 @@ describe("agenthub CLI", () => {
     expect(completed.protocol_integrity).toBe("complete");
     expect(completed.run_refs).toHaveLength(8);
   }, 40000);
+
+  it("resumes a discussion after its detached coordinator is killed", async () => {
+    const requestPath = path.join(root, "recoverable-discussion.json");
+    await writeDiscussionRequest(requestPath, workspace);
+    const delayedEnv = { ...env, FAKE_CLAUDE_DELAY_MS: "300" };
+    const accepted = await runCli(
+      ["discussion", "dispatch", "--json-file", requestPath],
+      delayedEnv,
+    );
+    const discussionId = accepted.discussion_ref.discussion_id;
+    const leasePath = path.join(
+      delayedEnv.AGENT_HUB_DISCUSSION_DIR,
+      discussionId,
+      "lease.json",
+    );
+    const lease = await waitForJson(leasePath);
+    process.kill(lease.pid, "SIGKILL");
+    await waitForProcessExit(lease.pid);
+
+    const completed = await runCli(
+      ["discussion", "wait", discussionId, "--timeout-ms", "30000"],
+      delayedEnv,
+      40000,
+    );
+    if (completed.status !== "completed") {
+      const workerLog = await fsp
+        .readFile(path.join(delayedEnv.AGENT_HUB_DISCUSSION_DIR, ".workers.log"), "utf8")
+        .catch(() => "<missing worker log>");
+      throw new Error(
+        `Recovered discussion stayed ${completed.status}: ${JSON.stringify(completed.error)}\n${workerLog}`,
+      );
+    }
+    expect(completed.status).toBe("completed");
+    expect(completed.protocol_integrity).toBe("complete");
+    expect(completed.run_refs).toHaveLength(8);
+  }, 45000);
 });
+
+async function writeDiscussionRequest(target, workspace) {
+  await fsp.writeFile(
+    target,
+    JSON.stringify({
+      kind: "new",
+      objective: "validate CLI discussion recovery",
+      question: "Does the detached coordinator recover?",
+      cwd: workspace,
+      materials: [],
+      host: { agent_id: "claude-code", metadata: {} },
+      participants: [
+        {
+          participant_id: "reviewer-a",
+          agent_id: "claude-code",
+          role: "reliability reviewer",
+          focus: "process lifecycle",
+          metadata: {},
+        },
+        {
+          participant_id: "reviewer-b",
+          agent_id: "claude-code",
+          role: "protocol reviewer",
+          focus: "durability",
+          metadata: {},
+        },
+      ],
+      quorum: 2,
+    }),
+    { mode: 0o600 },
+  );
+}
+
+async function waitForJson(target, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await fsp.readFile(target, "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  throw new Error(`Timed out waiting for JSON file: ${target}`);
+}
+
+async function waitForProcessExit(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for process ${pid} to exit`);
+}
 
 async function runCli(args, childEnv, timeoutMs = 15000) {
   const child = spawn(process.execPath, [CLI_PATH, ...args], {
@@ -154,7 +258,8 @@ const outputIndex = args.indexOf("--output-format");
 const streamJson = outputIndex >= 0 && args[outputIndex + 1] === "stream-json";
 let input = "";
 process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
+process.stdin.on("end", async () => {
+  await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_CLAUDE_DELAY_MS ?? 0)));
   let controlRequest = null;
   try { controlRequest = JSON.parse(input.trim()); } catch {}
   if (controlRequest?.type === "control_request") {

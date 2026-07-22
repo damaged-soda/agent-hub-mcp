@@ -7,6 +7,7 @@ import {
   appendDiscussionEvent,
   createDiscussionRecord,
   discussionDirFor,
+  discussionLeaseIsLive,
   readDiscussionEvents,
   readDiscussionState,
   recoverDiscussionRecord,
@@ -72,6 +73,14 @@ describe("discussion store", () => {
     ).rejects.toMatchObject({ code: "discussion_lease_lost" });
     expect((await readDiscussionState("discussion-two")).committed_event_sequence).toBe(1);
     await releaseDiscussionLease("discussion-two", lease);
+  });
+
+  it("reports whether the lease owner process is still live", async () => {
+    await createDiscussionRecord(baseState("discussion-three"), { kind: "new" });
+    const lease = await acquireDiscussionLease("discussion-three", "owner-one");
+    expect(await discussionLeaseIsLive("discussion-three")).toBe(true);
+    await releaseDiscussionLease("discussion-three", lease);
+    expect(await discussionLeaseIsLive("discussion-three")).toBe(false);
   });
 });
 

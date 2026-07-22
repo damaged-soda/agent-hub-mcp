@@ -7,15 +7,17 @@ import { atomicWriteJson, readJsonIfExists } from "./fs-store.js";
 import { DiscussionManager } from "./discussion-manager.js";
 import {
   DISCUSSION_FINAL_STATUSES,
+  discussionLeaseIsLive,
   ensureDiscussionRoot,
   readDiscussionState,
 } from "./discussion-store.js";
 
 const WORKER_PATH = fileURLToPath(new URL("./discussion-worker.js", import.meta.url));
 const DISPATCH_ACK_TIMEOUT_MS = 30000;
+const CLI_COMMAND_TTL_MS = 60 * 60 * 1000;
 
 export async function dispatchDiscussionFromCli(input, options = {}) {
-  const root = await ensureDiscussionRoot();
+  const root = await prepareDiscussionCliRoot();
   const commandDir = path.join(root, ".cli-commands", crypto.randomUUID());
   const requestPath = path.join(commandDir, "request.json");
   const responsePath = path.join(commandDir, "response.json");
@@ -72,9 +74,40 @@ async function withPassiveManager(fn, options = {}) {
 }
 
 async function ensureDiscussionWorker(id) {
+  await prepareDiscussionCliRoot();
   const state = await readDiscussionState(id);
-  if (DISCUSSION_FINAL_STATUSES.has(state.status) || !state.preflight_complete) return;
+  if (
+    DISCUSSION_FINAL_STATUSES.has(state.status) ||
+    !state.preflight_complete ||
+    (await discussionLeaseIsLive(id))
+  ) {
+    return;
+  }
   await spawnDiscussionWorker(["resume", id]);
+}
+
+async function prepareDiscussionCliRoot() {
+  const root = await ensureDiscussionRoot();
+  const commandRoot = path.join(root, ".cli-commands");
+  let entries;
+  try {
+    entries = await fsp.readdir(commandRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return root;
+    throw error;
+  }
+  const cutoff = Date.now() - CLI_COMMAND_TTL_MS;
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory()) return;
+      const target = path.join(commandRoot, entry.name);
+      const stat = await fsp.stat(target).catch(() => null);
+      if (stat && stat.mtimeMs < cutoff) {
+        await fsp.rm(target, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }),
+  );
+  return root;
 }
 
 async function spawnDiscussionWorker(args) {
