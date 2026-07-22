@@ -393,7 +393,7 @@ export async function withDiscussionLock(id, fn) {
       const createdAt = Date.parse(owner?.created_at ?? "");
       const lockStat = owner ? null : await fsp.stat(lockDir).catch(() => null);
       const abandonedBeforeOwnerWrite =
-        !owner && lockStat && Date.now() - lockStat.mtimeMs > 1000;
+        !owner && lockStat && Date.now() - lockStat.mtimeMs > LEASE_STALE_MS;
       if (
         abandonedBeforeOwnerWrite ||
         (owner && !leaseOwnerProcessIsLive(owner)) ||
