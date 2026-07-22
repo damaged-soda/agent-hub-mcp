@@ -55,6 +55,23 @@ describe("agenthub CLI", () => {
     expect(completed.content[0].text).toBe("fake result: review this");
   });
 
+  it("returns structured errors for invalid CLI input", async () => {
+    const invalidTimeout = await runCliFailure(
+      ["wait", "not-used", "--timeout-ms", "0"],
+      env,
+    );
+    expect(invalidTimeout).toEqual({
+      error: {
+        code: "invalid_cli_usage",
+        message: "--timeout-ms must be a positive integer",
+      },
+    });
+
+    const invalidJson = await runCliFailure(["dispatch", "--json", "{"], env);
+    expect(invalidJson.error.code).toBe("invalid_cli_usage");
+    expect(invalidJson.error.message).toMatch(/^--json is invalid:/);
+  });
+
   it("runs a durable discussion from a detached CLI worker", async () => {
     const staleCommandDir = path.join(
       env.AGENT_HUB_DISCUSSION_DIR,
@@ -216,6 +233,18 @@ async function waitForProcessExit(pid, timeoutMs = 5000) {
 }
 
 async function runCli(args, childEnv, timeoutMs = 15000) {
+  const { code, out, err } = await invokeCli(args, childEnv, timeoutMs);
+  if (code !== 0) throw new Error(`CLI exited ${code}\nstdout:\n${out}\nstderr:\n${err}`);
+  return JSON.parse(out);
+}
+
+async function runCliFailure(args, childEnv, timeoutMs = 15000) {
+  const { code, out, err } = await invokeCli(args, childEnv, timeoutMs);
+  if (code === 0) throw new Error(`CLI unexpectedly succeeded\nstdout:\n${out}`);
+  return JSON.parse(err);
+}
+
+async function invokeCli(args, childEnv, timeoutMs) {
   const child = spawn(process.execPath, [CLI_PATH, ...args], {
     cwd: path.dirname(path.dirname(CLI_PATH)),
     env: childEnv,
@@ -241,8 +270,7 @@ async function runCli(args, childEnv, timeoutMs = 15000) {
   });
   const out = Buffer.concat(stdout).toString("utf8");
   const err = Buffer.concat(stderr).toString("utf8");
-  if (code !== 0) throw new Error(`CLI exited ${code}\nstdout:\n${out}\nstderr:\n${err}`);
-  return JSON.parse(out);
+  return { code, out, err };
 }
 
 async function writeFakeClaude(target) {
