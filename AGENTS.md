@@ -2,19 +2,20 @@
 
 ## Collaboration Routing
 
-- When the user asks to collaborate with another agent, use the configured `agent_hub` MCP by default.
-- For Claude Code collaboration, call `mcp__agent_hub.list_agents` and then dispatch to the `claude-code` agent with `mcp__agent_hub.dispatch_to_agent`.
-- Do not use Codex `multi_agent_v1` sub-agents unless the user explicitly asks for Codex sub-agents or `agent_hub` is unavailable.
+- When the user asks to collaborate with another agent, use the `agenthub` CLI through the bundled `agent-hub` Skill by default.
+- For Claude Code collaboration, run `agenthub agents --cwd "$PWD"`, then `agenthub dispatch --agent claude-code …` and retain the run ID for `agenthub wait`.
+- Do not use Codex `multi_agent_v1` sub-agents unless the user explicitly asks for Codex sub-agents or `agenthub` is unavailable. The optional `agent_hub` MCP is a compatibility fallback, not the primary route.
 
 ## Project Shape
 
-This repository implements a local MCP bridge and HTTP Discussion daemon. It maps MCP tool calls to non-interactive agent CLI runs (Claude Code, Codex, and Kimi Code), stores local artifacts, and coordinates durable structured discussions.
+This repository implements a daemon-free Agent Hub CLI and Skill, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, and Kimi Code), stores local artifacts, and coordinates durable structured discussions.
 
 Key files:
 
 | Path | Purpose |
 |---|---|
-| `src/server.js` | MCP stdio/HTTP server and tool schemas; Discussion tools are HTTP-only. |
+| `src/cli.js` | Primary `agenthub` command surface. |
+| `src/server.js` | Optional MCP stdio/HTTP compatibility server. |
 | `src/runs.js` | Tool behavior, run lifecycle, waiting, cancellation, snapshots. |
 | `src/runner.js` | Detached runner that launches the agent CLI and writes terminal results. |
 | `src/adapters.js` | Adapter registry keyed by `agent_id`. |
@@ -25,6 +26,8 @@ Key files:
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |
+| `src/discussion-cli.js` | CLI Discussion dispatch, passive query/wait/cancel, and worker startup. |
+| `src/discussion-worker.js` | Detached per-Discussion coordinator process. |
 | `src/discussion-protocol.js` | Discussion input/output schemas, limits, and provenance validation. |
 | `src/discussion-store.js` | Discussion events, projections, leases, artifacts, and TTL cleanup. |
 | `src/discussion-materials.js` | Frozen material bundles, file validation, hashing, and handoff data. |
@@ -33,16 +36,19 @@ Key files:
 | `src/security.js` | `cwd` and `add_dirs` validation. |
 | `src/env.js` | Environment allowlist and forwarding. |
 | `scripts/mcp-client.js` | Local MCP smoke-test client. |
+| `skills/agent-hub/` | Versioned Codex Skill for CLI collaboration workflows. |
 
 ## Commands
 
 ```sh
 npm test
+npm run install:local
+npm run cli -- --help
 npm run selftest:mcp
 npm run review:self
 ```
 
-Use Node.js 20 or newer. `npm start` / `node src/server.js` is the deprecated stdio surface; new functionality uses `node src/server.js --transport streamable-http`.
+Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are optional MCP compatibility surfaces.
 
 ## Behavioral Rules
 
@@ -68,12 +74,12 @@ Use Node.js 20 or newer. `npm start` / `node src/server.js` is the deprecated st
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Exact comma-separated browser origins allowed to call the loopback HTTP daemon. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to the agent CLI. |
-| `AGENT_HUB_CLAUDE_MODEL` | Server-side default model for Claude runs. |
-| `AGENT_HUB_CODEX_MODEL` | Server-side default model for Codex runs. |
-| `AGENT_HUB_CLAUDE_EFFORT` | Server-side default effort for Claude runs. |
-| `AGENT_HUB_CODEX_EFFORT` | Server-side default effort for Codex runs. |
-| `AGENT_HUB_KIMI_MODEL` | Server-side default model for Kimi runs. |
-| `AGENT_HUB_KIMI_EFFORT` | Server-side default effort for Kimi runs. |
+| `AGENT_HUB_CLAUDE_MODEL` | Default model for Claude runs. |
+| `AGENT_HUB_CODEX_MODEL` | Default model for Codex runs. |
+| `AGENT_HUB_CLAUDE_EFFORT` | Default effort for Claude runs. |
+| `AGENT_HUB_CODEX_EFFORT` | Default effort for Codex runs. |
+| `AGENT_HUB_KIMI_MODEL` | Default model for Kimi runs. |
+| `AGENT_HUB_KIMI_EFFORT` | Default effort for Kimi runs. |
 | `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
 
 ## Workspace Namespace Resolution
@@ -91,7 +97,7 @@ or direnv is unavailable, inherited namespace keys are cleared.
 
 | Document | Use when |
 |---|---|
-| `README.md` | Installing, smoke testing, or wiring the MCP server into a client. |
+| `README.md` | Installing, smoke testing, or wiring the CLI/Skill and optional MCP server. |
 | `docs/integration-guide.md` | Implementing a client call flow or understanding request/response shapes. |
 | `docs/operator-runbook.md` | Operating, configuring, or troubleshooting local runs. |
 | `docs/architecture.md` | Changing lifecycle, storage, adapter, or process-group behavior. |

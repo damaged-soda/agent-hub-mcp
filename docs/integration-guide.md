@@ -1,8 +1,26 @@
-# Agent Hub MCP Integration Guide
+# Agent Hub Integration Guide
 
-This guide is for MCP clients that want to call local agent CLIs through Agent Hub MCP. Agent Hub is a stdio MCP server; clients launch `src/server.js` and call tools with JSON arguments.
+The primary integration is the `agenthub` CLI. It launches from the caller's current process context, persists runs on disk, and does not require a resident daemon. The stdio and streamable HTTP MCP transports remain optional compatibility surfaces.
 
-## Server Registration
+## CLI Registration
+
+Install the local package and bundled Codex Skill:
+
+```sh
+npm run install:local
+```
+
+All successful CLI commands print the direct structured result as JSON. The normal long-running flow is:
+
+```sh
+agenthub agents --cwd "$PWD"
+agenthub dispatch --agent claude-code --cwd "$PWD" --prompt "Review the current diff."
+agenthub wait RUN_ID
+```
+
+Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.
+
+## Optional MCP Server Registration
 
 ```json
 {
@@ -27,7 +45,7 @@ startup_timeout_sec = 30
 tool_timeout_sec = 660
 ```
 
-## Typical Flow
+## Typical Run Flow
 
 1. Call `list_agents`.
 2. For long-running or agentic work, call `dispatch_to_agent` and then `wait_agent_run`.
@@ -156,9 +174,18 @@ Requests cancellation of the run process group:
 }
 ```
 
-## Discussions (streamable HTTP only)
+## Discussions
 
-The stdio transport is deprecated and intentionally exposes only the original run tools. Start the long-lived HTTP daemon before using Discussions:
+The CLI starts a detached coordinator for each Discussion, so no HTTP daemon is required:
+
+```sh
+agenthub discussion dispatch --json-file /absolute/path/discussion.json
+agenthub discussion wait DISCUSSION_ID
+```
+
+`discussion query`, `wait`, and `cancel` recover a nonterminal record on demand. A lease prevents concurrent coordinators from advancing the same record.
+
+For MCP compatibility, Discussion tools are also available from the optional HTTP daemon:
 
 ```sh
 node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
@@ -250,7 +277,7 @@ Top-level `metadata` fields work for every adapter; the adapter translates them 
 | `permission` | `read-only`, `auto` (default), or `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write` + network / `danger-full-access` | Only `auto` is accepted: kimi `-p` always runs with built-in auto approval and has no permission flags, so other values are rejected instead of silently remapped. |
 | `add_dirs` | Extra writable directories (resolved and allowlist-checked) | `--add-dir` | `--add-dir` | `--add-dir` |
 
-Effort is deliberately not unified: each CLI has its own evolving value vocabulary, so Agent Hub does not enumerate valid values — it passes the string through and lets the target CLI accept or reject it (rejections surface through the normal failure path). Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort` / `metadata["kimi-code"].effort`) or configure server-side defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT` / `AGENT_HUB_KIMI_EFFORT`. The codex-side `[A-Za-z0-9_-]+` check is TOML-injection hygiene for the `-c` override, not a value assumption; the kimi value travels in the child process's `KIMI_MODEL_THINKING_EFFORT` environment variable and needs no such check.
+Effort is deliberately not unified: each CLI has its own evolving value vocabulary, so Agent Hub does not enumerate valid values — it passes the string through and lets the target CLI accept or reject it (rejections surface through the normal failure path). Set it per request in the adapter namespace (`metadata.claude.effort` / `metadata.codex.effort` / `metadata["kimi-code"].effort`) or configure environment defaults with `AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT` / `AGENT_HUB_KIMI_EFFORT`. The codex-side `[A-Za-z0-9_-]+` check is TOML-injection hygiene for the `-c` override, not a value assumption; the kimi value travels in the child process's `KIMI_MODEL_THINKING_EFFORT` environment variable and needs no such check.
 
 With the default `permission: "auto"`, all adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
 

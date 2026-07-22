@@ -294,7 +294,7 @@ async function main() {
     const server = createAgentHubServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("agent-hub-mcp listening on stdio (deprecated; discussion tools are HTTP-only)");
+    console.error("agent-hub-mcp listening on stdio (optional compatibility transport)");
     return;
   }
 

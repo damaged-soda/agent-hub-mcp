@@ -2,17 +2,30 @@
 
 ## 目标
 
-Agent Hub MCP 是一个本地 MCP bridge。它把 MCP tool call 映射成本机 agent CLI
-的一次非交互执行，并用本机文件保存 run 状态、日志和结果。
+Agent Hub 是一个本地 agent CLI bridge。主入口是短生命周期 `agenthub` CLI；可选 MCP
+server 复用同一核心 API。两种入口都把请求映射成本机 agent CLI 的一次非交互执行，
+并用本机文件保存 run 状态、日志和结果。
 
 核心目标：
 
-- MCP 层保持薄封装，只负责 CLI 启动、状态记录、查询、等待和取消。
+- CLI/MCP 入口保持薄封装，只负责 CLI 启动、状态记录、查询、等待和取消。
 - 普通 run 的用户输入原样传给目标 CLI；Discussion turn 使用独立的版本化 coordinator prompt。
 - 每次执行都有独立 run 目录，状态和结果保存在本机专用目录。
 - run 终态后默认保留 7 天。
 - 多轮对话复用 CLI 自身的 session/resume 能力。
 - 提供 blocking wait tool，让调用方一次等待 run 结束。
+
+### 无 daemon 执行模型
+
+`agenthub dispatch` 在调用者现场进程中解析 workspace namespace，再启动 detached runner。
+dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
+命令可以由全新的 CLI 进程继续。这样目标 agent CLI 继承现场调用者的登录与 macOS
+Keychain 上下文，而不是常驻 launchd 服务的安全上下文。
+
+Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
+`agenthub discussion dispatch` 启动一个 detached Discussion worker；query/wait/cancel
+会为非终态记录按需触发恢复，Discussion lease 保证只有一个 worker 真正取得控制权。
+streamable HTTP daemon 仍可作为可选 coordinator，但不再是 Discussion 的唯一入口。
 
 ## 架构原则
 
@@ -115,7 +128,7 @@ Session ID 的产生方式由 adapter 决定：
   `null`；终态快照携带可用于 continuation 的 `cli_session_ref`。与 Codex 不同，kimi
   只在结束时上报，因此取消的 run 没有可 resume 的 session ref。
 
-## MCP Tools
+## CLI Commands 与 MCP Tools
 
 ### list_agents
 

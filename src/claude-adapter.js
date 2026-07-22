@@ -132,7 +132,7 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
   }
 
   // Effort vocabularies are CLI-specific, so the value stays in the adapter
-  // namespace and falls back to a server-side default instead of a unified field.
+  // namespace and falls back to an environment default instead of a unified field.
   const effort =
     assertMetadataString(claude.effort, "metadata.claude.effort") ??
     defaultFromEnv(env, DEFAULT_EFFORT_ENV_KEY);

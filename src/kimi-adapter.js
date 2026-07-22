@@ -145,7 +145,7 @@ export function buildKimiCommand({ request, effectiveCliSessionRef, env = proces
   }
 
   // Effort vocabularies are CLI-specific, so the value stays in the adapter
-  // namespace and falls back to a server-side default instead of a unified field.
+  // namespace and falls back to an environment default instead of a unified field.
   // kimi has no effort flag; the child process reads KIMI_MODEL_THINKING_EFFORT.
   // The value is passed through unvalidated (env values carry no injection risk);
   // kimi rejects unknown values with a normal agent_error failure.

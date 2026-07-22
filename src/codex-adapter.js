@@ -120,7 +120,7 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
   }
 
   // Effort vocabularies are CLI-specific, so the value stays in the adapter
-  // namespace and falls back to a server-side default instead of a unified field.
+  // namespace and falls back to an environment default instead of a unified field.
   const effort =
     assertMetadataString(codex.effort, "metadata.codex.effort") ??
     defaultFromEnv(env, DEFAULT_EFFORT_ENV_KEY);
