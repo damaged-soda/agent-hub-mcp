@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeCommand,
+  interpretClaudeExit,
   parseClaudeModelCatalog,
   parseClaudeJson,
   parseClaudeOutput,
@@ -316,5 +317,77 @@ describe("claude adapter", () => {
       "json",
     );
     expect(parsed.resultText).toBe("legacy");
+  });
+
+  it("preserves a structured authentication failure when Claude exits nonzero", () => {
+    const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+    const stdout = [
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: sessionId,
+      }),
+      JSON.stringify({
+        type: "assistant",
+        error: "authentication_failed",
+        session_id: sessionId,
+        message: {
+          content: [
+            {
+              type: "text",
+              text: "Failed to authenticate: OAuth session expired and could not be refreshed",
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: "result",
+        is_error: true,
+        result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+        session_id: sessionId,
+      }),
+    ].join("\n");
+
+    const outcome = interpretClaudeExit({
+      code: 1,
+      signal: null,
+      stdout,
+      stderr: "",
+      outputFormat: "stream-json",
+    });
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toMatchObject({
+      code: "agent_error",
+      agent_error_code: "authentication_failed",
+      message: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      result_text: "Failed to authenticate: OAuth session expired and could not be refreshed",
+      retryable: false,
+      exit_code: 1,
+      cli_session_ref: {
+        agent_id: "claude-code",
+        native_session_id: sessionId,
+      },
+    });
+  });
+
+  it("keeps a generic nonzero exit when Claude did not emit a result event", () => {
+    const outcome = interpretClaudeExit({
+      code: 1,
+      signal: null,
+      stdout: "startup failed",
+      stderr: "bad flags",
+      outputFormat: "stream-json",
+    });
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      error: {
+        code: "cli_exit_nonzero",
+        message: "Claude exited with code 1",
+        stderr_tail: "bad flags",
+        stdout_tail: "startup failed",
+      },
+    });
   });
 });

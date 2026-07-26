@@ -10,6 +10,7 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "AGENT_HUB_FORWARD_ENV",
   "AGENT_HUB_KIMI_EFFORT",
   "AGENT_HUB_KIMI_MODEL",
+  "AGENT_HUB_REQUIRE_NAMESPACE",
   "AGENT_HUB_RUN_TTL_SECONDS",
   "AWS_ACCESS_KEY_ID",
   "AWS_REGION",
@@ -69,6 +70,22 @@ function clearedNamespaceEnv() {
   return Object.fromEntries(NAMESPACE_ENV_KEYS.map((key) => [key, undefined]));
 }
 
+function namespaceRequired(source) {
+  return /^(?:1|true|yes)$/i.test(source.AGENT_HUB_REQUIRE_NAMESPACE ?? "");
+}
+
+function unresolvedNamespaceEnv(cwd, source, reason) {
+  if (!namespaceRequired(source)) {
+    return clearedNamespaceEnv();
+  }
+  const error = new Error(
+    `Namespace is required, but cwd ${cwd} did not resolve a complete direnv declaration: ${reason}`,
+  );
+  error.code = "namespace_unresolved";
+  error.retryable = false;
+  throw error;
+}
+
 // Namespace rule (~/work/meta/charter/NAMESPACE.md): the environment always follows
 // position — derive the workspace namespace from the run's cwd via direnv, regardless
 // of what the server process inherited. Stale DIRENV_* bookkeeping is stripped so the
@@ -100,16 +117,16 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
       if (error?.code === "ENOENT") {
         continue;
       }
-      return clearedNamespaceEnv();
+      return unresolvedNamespaceEnv(cwd, source, error?.message ?? "direnv probe failed");
     }
     if (!stdout || !stdout.trim()) {
-      return clearedNamespaceEnv();
+      return unresolvedNamespaceEnv(cwd, source, "direnv returned no environment");
     }
     let parsed;
     try {
       parsed = JSON.parse(stdout);
     } catch {
-      return clearedNamespaceEnv();
+      return unresolvedNamespaceEnv(cwd, source, "direnv returned invalid JSON");
     }
     const env = clearedNamespaceEnv();
     for (const key of NAMESPACE_ENV_KEYS) {
@@ -121,9 +138,21 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
         env[key] = undefined;
       }
     }
+    if (namespaceRequired(source)) {
+      const missing = NAMESPACE_ENV_KEYS.filter(
+        (key) => typeof env[key] !== "string" || env[key].trim() === "",
+      );
+      if (missing.length > 0) {
+        return unresolvedNamespaceEnv(
+          cwd,
+          source,
+          `missing ${missing.join(", ")}`,
+        );
+      }
+    }
     return env;
   }
-  return clearedNamespaceEnv();
+  return unresolvedNamespaceEnv(cwd, source, "direnv executable is unavailable");
 }
 
 export function buildAgentEnv(source = process.env) {

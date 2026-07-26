@@ -62,6 +62,10 @@ Every CLI invocation inherits the caller's login, environment, and macOS Keychai
 
 `cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for all adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi has no permission flags in prompt mode, so `read-only`/`full` are rejected there rather than silently remapped). Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` environment defaults).
 
+Workspace deployments can set `AGENT_HUB_REQUIRE_NAMESPACE=1` to require `cwd` to
+resolve a complete direnv namespace. An unresolved declaration then fails with
+`namespace_unresolved` instead of silently using default Claude/Codex/Kimi config roots.
+
 ## Structured Discussions
 
 Create a Discussion request JSON file and dispatch it from the CLI:

@@ -24,6 +24,7 @@ describe("agenthub CLI", () => {
       AGENT_HUB_RUN_DIR: path.join(root, "runs"),
       AGENT_HUB_DISCUSSION_DIR: path.join(root, "discussions"),
       AGENT_HUB_CWD_ALLOWLIST: workspace,
+      AGENT_HUB_REQUIRE_NAMESPACE: "",
     };
   });
 

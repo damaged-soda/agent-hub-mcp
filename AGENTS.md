@@ -81,6 +81,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 | `AGENT_HUB_KIMI_MODEL` | Default model for Kimi runs. |
 | `AGENT_HUB_KIMI_EFFORT` | Default effort for Kimi runs. |
 | `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
+| `AGENT_HUB_REQUIRE_NAMESPACE` | When `1`/`true`/`yes`, reject a cwd whose direnv declaration is missing or incomplete instead of using default config roots. |
 
 ## Workspace Namespace Resolution
 
@@ -90,8 +91,9 @@ spawning the agent CLI, the runner derives the workspace namespace (`NS`,
 `KIMI_CODE_HOME`) from the run's `cwd` via
 `direnv export json`. The probe removes inherited namespace keys first, so values
 and removals derived from `cwd` both take precedence over the server process.
-`DIRENV_*` bookkeeping is never forwarded. If the `cwd` is outside any workspace
-or direnv is unavailable, inherited namespace keys are cleared.
+`DIRENV_*` bookkeeping is never forwarded. By default, a `cwd` outside any workspace
+or an unavailable direnv clears inherited namespace keys. Deployments that set
+`AGENT_HUB_REQUIRE_NAMESPACE=1` fail with `namespace_unresolved` instead.
 
 ## Documentation Map
 

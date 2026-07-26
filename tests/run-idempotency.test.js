@@ -36,10 +36,12 @@ process.stdin.on("end", () => {
       PATH: process.env.PATH,
       AGENT_HUB_RUN_DIR: process.env.AGENT_HUB_RUN_DIR,
       AGENT_HUB_CWD_ALLOWLIST: process.env.AGENT_HUB_CWD_ALLOWLIST,
+      AGENT_HUB_REQUIRE_NAMESPACE: process.env.AGENT_HUB_REQUIRE_NAMESPACE,
     };
     process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
     process.env.AGENT_HUB_RUN_DIR = path.join(root, "runs");
     process.env.AGENT_HUB_CWD_ALLOWLIST = workspace;
+    delete process.env.AGENT_HUB_REQUIRE_NAMESPACE;
   });
 
   afterEach(async () => {

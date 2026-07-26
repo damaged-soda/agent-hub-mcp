@@ -40,12 +40,20 @@ describe("agent environment", () => {
       AGENT_HUB_CODEX_EFFORT: "xhigh",
       AGENT_HUB_KIMI_EFFORT: "medium",
       AGENT_HUB_KIMI_MODEL: "k2",
+      AGENT_HUB_REQUIRE_NAMESPACE: "1",
     });
 
     expect(env.AGENT_HUB_CLAUDE_EFFORT).toBe("high");
     expect(env.AGENT_HUB_CODEX_EFFORT).toBe("xhigh");
     expect(env.AGENT_HUB_KIMI_EFFORT).toBe("medium");
     expect(env.AGENT_HUB_KIMI_MODEL).toBe("k2");
+    expect(env.AGENT_HUB_REQUIRE_NAMESPACE).toBe("1");
+  });
+
+  it("omits namespace keys that were explicitly cleared from command metadata", () => {
+    expect(currentEnvKeys({ PATH: "/bin", NS: undefined, CLAUDE_CONFIG_DIR: undefined })).toEqual([
+      "PATH",
+    ]);
   });
 
   it("forwards namespace redirect vars when present in the server env", () => {
@@ -157,5 +165,21 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       CODEX_HOME: undefined,
       KIMI_CODE_HOME: undefined,
     });
+  });
+
+  it("fails loud when deployment policy requires a namespace but cwd resolves none", () => {
+    expect(() =>
+      resolveNamespaceEnv(stubDir, {
+        PATH: "/bin",
+        NS: "personal",
+        AGENT_HUB_REQUIRE_NAMESPACE: "1",
+        AGENT_HUB_DIRENV_BIN: unsetStubBin,
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: "namespace_unresolved",
+        retryable: false,
+      }),
+    );
   });
 });

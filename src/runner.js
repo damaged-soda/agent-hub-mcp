@@ -571,8 +571,9 @@ main().catch(async (error) => {
     try {
       syncAppend(path.join(runDir, "stderr.log"), `${message}\n`);
       await failRun(runDir, {
-        code: "runner_exception",
+        code: error?.code ?? "runner_exception",
         message,
+        retryable: error?.retryable,
       });
     } catch (innerError) {
       const inner = innerError instanceof Error ? innerError.stack || innerError.message : String(innerError);

@@ -468,7 +468,9 @@ export function currentEnvKeys(env = process.env) {
     "SECRET",
     "TOKEN",
   ];
-  return Object.keys(env)
+  return Object.entries(env)
+    .filter(([, value]) => typeof value === "string")
+    .map(([key]) => key)
     .filter((key) => {
       const upper = key.toUpperCase();
       return !sensitiveFragments.some((fragment) => upper.includes(fragment));
