@@ -421,6 +421,12 @@ function looksLikeSessionResumeFailure(error) {
     .filter(Boolean)
     .join("\n")
     .toLowerCase();
+  if (
+    error?.agent_error_code === "authentication_failed" ||
+    /(?:failed to authenticate|authentication failed|oauth)/.test(text)
+  ) {
+    return false;
+  }
   return /(?:session|thread|conversation).*(?:not found|does not exist|unknown|expired)|(?:cannot|failed to) resume/.test(
     text,
   );

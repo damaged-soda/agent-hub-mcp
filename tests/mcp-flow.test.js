@@ -784,6 +784,34 @@ describe("MCP flow", () => {
     expect(command.argv).toContain(FAKE_KIMI_SESSION_ID);
   });
 
+  it("preserves Claude structured authentication failures across runner exit", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "claude-code",
+        prompt: "auth-error",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { claude: {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+
+    expect(result.structuredContent.status).toBe("failed");
+    expect(result.structuredContent.error).toMatchObject({
+      code: "agent_error",
+      agent_error_code: "authentication_failed",
+      message: "Failed to authenticate: OAuth session expired",
+      retryable: false,
+    });
+    expect(result.content[0].text).toBe("Failed to authenticate: OAuth session expired");
+    expect(result.structuredContent.cli_session_ref.native_session_id).toMatch(
+      /^[0-9a-f-]{36}$/,
+    );
+  });
+
   it("maps kimi prompt failures onto agent_error", async () => {
     const result = await callAgentHubTool(
       "run_agent",
@@ -1277,6 +1305,24 @@ process.stdin.on("end", () => {
   if (input.trim() === "error") {
     writeAssistant("fake failure");
     writeResult("fake failure", true);
+    return;
+  }
+  if (input.trim() === "auth-error") {
+    writeJson({
+      type: "assistant",
+      error: "authentication_failed",
+      message: {
+        content: [
+          {
+            type: "text",
+            text: "Failed to authenticate: OAuth session expired"
+          }
+        ]
+      },
+      session_id: sessionId
+    });
+    writeResult("Failed to authenticate: OAuth session expired", true);
+    process.exitCode = 1;
     return;
   }
   if (input.includes("AGENT_HUB_DISCUSSION_PROTOCOL_V1")) {

@@ -325,6 +325,7 @@ describe("claude adapter", () => {
       JSON.stringify({
         type: "system",
         subtype: "init",
+        error: "unrelated_system_warning",
         session_id: sessionId,
       }),
       JSON.stringify({

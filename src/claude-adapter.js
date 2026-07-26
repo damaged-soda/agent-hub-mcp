@@ -349,7 +349,11 @@ export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat
 function findClaudeAgentErrorCode(parsed) {
   if (Array.isArray(parsed?.raw)) {
     for (let index = parsed.raw.length - 1; index >= 0; index -= 1) {
-      const code = parsed.raw[index]?.error;
+      const event = parsed.raw[index];
+      if (event?.type !== "assistant") {
+        continue;
+      }
+      const code = event.error;
       if (typeof code === "string" && code.trim() !== "") {
         return code;
       }
