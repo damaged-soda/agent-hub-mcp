@@ -17,10 +17,12 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 
 ### 无 daemon 执行模型
 
-`agenthub dispatch` 在调用者现场进程中解析 workspace namespace，再启动 detached runner。
-dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
-命令可以由全新的 CLI 进程继续。这样目标 agent CLI 继承现场调用者的登录与 macOS
-Keychain 上下文，而不是常驻 launchd 服务的安全上下文。
+`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略与
+Keychain 上下文，但会清空 namespace redirect，再按 run cwd 从空基线执行
+`direnv export json`。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续
+`query`、`wait`、`cancel` 命令可以由全新的 CLI 进程继续。设置
+`AGENT_HUB_REQUIRE_NAMESPACE=1` 的部署在 cwd 声明缺失或不完整时直接以
+`namespace_unresolved` 失败，不允许目标 CLI 落进默认配置根。
 
 Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
 `agenthub discussion dispatch` 启动一个 detached Discussion worker；query/wait/cancel
@@ -423,7 +425,7 @@ AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE
 ```
 
 这些变量值会传给目标 CLI，但 `command.json` 只记录经过敏感关键字过滤后的 env key，
-不记录 env value。
+不记录 env value；值为 `undefined` 的已清除键也不记为“存在”。
 
 ### stdout.log / stderr.log / events.jsonl
 
@@ -511,6 +513,8 @@ Claude stdout 处理规则：
 - `result` 字段写入 `result.txt`。
 - `session_id` 字段写回终态 `state.json`。
 - `is_error` 为 true 时状态为 `failed`。
+- 即使 Claude 同时返回非零 exit code，仍优先解析完整的 JSON/JSONL result；若
+  `is_error=true`，保留原生错误文本与错误分类并记为 `agent_error`。认证失败不可重试。
 - 缺少字符串类型的 `result` 或 `session_id` 时状态为 `failed`。
 - JSON/JSONL 解析失败时状态为 `failed`。
 

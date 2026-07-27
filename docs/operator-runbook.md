@@ -55,6 +55,7 @@ namespace depends on the target workspace. A model catalog failure is reported t
 | `AGENT_HUB_CODEX_EFFORT` | unset | Default `model_reasoning_effort` for Codex runs when the request omits `metadata.codex.effort`. |
 | `AGENT_HUB_KIMI_MODEL` | unset | Default `-m` for Kimi runs when the request omits `metadata["kimi-code"].model`. |
 | `AGENT_HUB_KIMI_EFFORT` | unset | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when the request omits `metadata["kimi-code"].effort`. |
+| `AGENT_HUB_REQUIRE_NAMESPACE` | unset | Set to `1`, `true`, or `yes` to reject a cwd whose direnv namespace is missing or incomplete instead of clearing redirects and using default config roots. |
 
 The runner forwards a small default environment allowlist for Claude, Codex, and Kimi auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`), namespace Git/GitHub routing (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
 
@@ -144,6 +145,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `codex` appears under `unavailable_agents` | `codex --version` failed. | Fix PATH or Codex CLI installation. |
 | `kimi-code` appears under `unavailable_agents` | `kimi --version` failed. | Fix PATH or Kimi Code CLI installation. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
+| `namespace_unresolved` | `AGENT_HUB_REQUIRE_NAMESPACE` is enabled, but the run cwd did not yield all namespace redirect variables through direnv. | Restore/allow the workspace `.envrc`; for managed Codex worktrees rerun the namespace's `install-<ns>-codex-environment`. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |
 | `status: "running"` with `timed_out: true` | Agent Hub's wait window expired while the CLI was still running. | Call `query_agent_run` or `wait_agent_run` again with the same `run_ref`; cancel only if the user wants to stop it. |

@@ -318,10 +318,14 @@ function usageError(message) {
 }
 
 function serializeError(error) {
-  return {
+  const serialized = {
     code: error?.code ?? "agenthub_error",
     message: error instanceof Error ? error.message : String(error),
   };
+  if (typeof error?.retryable === "boolean") {
+    serialized.retryable = error.retryable;
+  }
+  return serialized;
 }
 
 function defaultIo() {

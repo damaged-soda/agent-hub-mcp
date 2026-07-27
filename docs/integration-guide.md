@@ -83,6 +83,13 @@ Model discovery failure does not make the adapter unavailable. In that case `mod
 empty array, while normal dispatch remains usable. Results are cached for 30 seconds per
 workspace namespace.
 
+When the deployment sets `AGENT_HUB_REQUIRE_NAMESPACE=1`, `list_agents` and runs reject
+a cwd whose direnv declaration does not provide `NS`, `GH_CONFIG_DIR`,
+`GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `KIMI_CODE_HOME`. The error
+code is `namespace_unresolved` with `retryable: false` in both direct CLI errors and run
+failures; callers should repair or allow the declaration rather than retry against
+default config roots.
+
 ### run_agent
 
 Dispatches a run and waits until it reaches a terminal state or the timeout expires. This is a convenience wrapper for short work; long-running tasks should use `dispatch_to_agent` plus polling.
@@ -281,7 +288,7 @@ Effort is deliberately not unified: each CLI has its own evolving value vocabula
 
 With the default `permission: "auto"`, all adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
 
-Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt` on stderr); the native detail stays in `error.message` and `result.txt`. `cli_exit_nonzero` and `stdout_parse_failed` are adapter-independent as before.
+Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt` on stderr); the native detail stays in `error.message` and `result.txt`. Claude structured failures are preserved even when its process also exits nonzero, so authentication failures no longer collapse to a generic exit-code message. `cli_exit_nonzero` and `stdout_parse_failed` are adapter-independent as before.
 
 ## Claude Metadata
 

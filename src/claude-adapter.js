@@ -287,6 +287,33 @@ function findSessionId(resultEvent, events) {
 }
 
 export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat }) {
+  let parsed;
+  let parseError;
+  try {
+    parsed = parseClaudeOutput(stdout, outputFormat);
+  } catch (error) {
+    parseError = error;
+  }
+  if (parsed?.isError) {
+    const agentErrorCode = findClaudeAgentErrorCode(parsed);
+    const authenticationFailed =
+      agentErrorCode === "authentication_failed" ||
+      /failed to authenticate|oauth session expired/i.test(parsed.resultText);
+    return {
+      status: "failed",
+      error: {
+        code: "agent_error",
+        message: parsed.resultText || "Claude returned is_error=true",
+        agent_error_code: agentErrorCode,
+        result_text: parsed.resultText || "Claude returned is_error=true",
+        result_json: parsed.resultJson,
+        exit_code: code,
+        signal,
+        cli_session_ref: parsed.cliSessionRef,
+        retryable: authenticationFailed ? false : undefined,
+      },
+    };
+  }
   if (code !== 0) {
     return {
       status: "failed",
@@ -296,33 +323,18 @@ export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat
         exit_code: code,
         signal,
         stderr_tail: String(stderr ?? "").trimEnd().slice(-4000),
-      },
-    };
-  }
-  let parsed;
-  try {
-    parsed = parseClaudeOutput(stdout, outputFormat);
-  } catch (error) {
-    return {
-      status: "failed",
-      error: {
-        code: "stdout_parse_failed",
-        message: error instanceof Error ? error.message : String(error),
-        exit_code: code,
         stdout_tail: String(stdout ?? "").trimEnd().slice(-4000),
       },
     };
   }
-  if (parsed.isError) {
+  if (parseError) {
     return {
       status: "failed",
       error: {
-        code: "agent_error",
-        message: "Claude returned is_error=true",
-        result_text: parsed.resultText || "Claude returned is_error=true",
-        result_json: parsed.resultJson,
+        code: "stdout_parse_failed",
+        message: parseError instanceof Error ? parseError.message : String(parseError),
         exit_code: code,
-        cli_session_ref: parsed.cliSessionRef,
+        stdout_tail: String(stdout ?? "").trimEnd().slice(-4000),
       },
     };
   }
@@ -332,6 +344,23 @@ export function interpretClaudeExit({ code, signal, stdout, stderr, outputFormat
     resultJson: parsed.resultJson,
     cliSessionRef: parsed.cliSessionRef,
   };
+}
+
+function findClaudeAgentErrorCode(parsed) {
+  if (Array.isArray(parsed?.raw)) {
+    for (let index = parsed.raw.length - 1; index >= 0; index -= 1) {
+      const event = parsed.raw[index];
+      if (event?.type !== "assistant") {
+        continue;
+      }
+      const code = event.error;
+      if (typeof code === "string" && code.trim() !== "") {
+        return code;
+      }
+    }
+  }
+  const code = parsed?.raw?.error;
+  return typeof code === "string" && code.trim() !== "" ? code : undefined;
 }
 
 export async function listClaudeAgent(options = {}) {
