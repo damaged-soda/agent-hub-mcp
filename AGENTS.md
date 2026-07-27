@@ -88,11 +88,12 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 The environment always follows position (`~/work/meta/charter/NAMESPACE.md`): before
 spawning the agent CLI, the runner derives the workspace namespace (`NS`,
 `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
-`KIMI_CODE_HOME`) from the run's `cwd` via
+`CLAUDE_SECURESTORAGE_CONFIG_DIR`, `KIMI_CODE_HOME`) from the run's `cwd` via
 `direnv export json`. The probe removes inherited namespace keys first, so values
 and removals derived from `cwd` both take precedence over the server process.
 `DIRENV_*` bookkeeping is never forwarded. By default, a `cwd` outside any workspace
-or an unavailable direnv clears inherited namespace keys. Deployments that set
+or an unavailable direnv clears inherited namespace-specific keys while retaining
+the global Claude secure-storage redirect. Deployments that set
 `AGENT_HUB_REQUIRE_NAMESPACE=1` fail with `namespace_unresolved` instead.
 
 ## Documentation Map

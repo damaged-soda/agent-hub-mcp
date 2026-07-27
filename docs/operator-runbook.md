@@ -57,7 +57,7 @@ namespace depends on the target workspace. A model catalog failure is reported t
 | `AGENT_HUB_KIMI_EFFORT` | unset | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when the request omits `metadata["kimi-code"].effort`. |
 | `AGENT_HUB_REQUIRE_NAMESPACE` | unset | Set to `1`, `true`, or `yes` to reject a cwd whose direnv namespace is missing or incomplete instead of clearing redirects and using default config roots. |
 
-The runner forwards a small default environment allowlist for Claude, Codex, and Kimi auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`), namespace Git/GitHub routing (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
+The runner forwards a small default environment allowlist for Claude, Codex, and Kimi auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`), namespace Git/GitHub routing (`GIT_CONFIG_GLOBAL`, `GH_CONFIG_DIR`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
 
 ```sh
 AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE agenthub dispatch …

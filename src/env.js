@@ -19,6 +19,7 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
   "CLAUDE_CONFIG_DIR",
+  "CLAUDE_SECURESTORAGE_CONFIG_DIR",
   "CODEX_HOME",
   "COLORTERM",
   "DISABLE_AUTO_UPDATE",
@@ -54,9 +55,12 @@ const NAMESPACE_ENV_KEYS = [
   "GH_CONFIG_DIR",
   "GIT_CONFIG_GLOBAL",
   "CLAUDE_CONFIG_DIR",
+  "CLAUDE_SECURESTORAGE_CONFIG_DIR",
   "CODEX_HOME",
   "KIMI_CODE_HOME",
 ];
+
+const SHARED_REDIRECT_ENV_KEYS = ["CLAUDE_SECURESTORAGE_CONFIG_DIR"];
 
 const DIRENV_CANDIDATES = [
   "direnv",
@@ -76,7 +80,13 @@ function namespaceRequired(source) {
 
 function unresolvedNamespaceEnv(cwd, source, reason) {
   if (!namespaceRequired(source)) {
-    return clearedNamespaceEnv();
+    const env = clearedNamespaceEnv();
+    for (const key of SHARED_REDIRECT_ENV_KEYS) {
+      if (typeof source[key] === "string") {
+        env[key] = source[key];
+      }
+    }
+    return env;
   }
   const error = new Error(
     `Namespace is required, but cwd ${cwd} did not resolve a complete direnv declaration: ${reason}`,
