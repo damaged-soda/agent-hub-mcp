@@ -85,7 +85,8 @@ workspace namespace.
 
 When the deployment sets `AGENT_HUB_REQUIRE_NAMESPACE=1`, `list_agents` and runs reject
 a cwd whose direnv declaration does not provide `NS`, `GH_CONFIG_DIR`,
-`GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `KIMI_CODE_HOME`. The error
+`GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`,
+`CODEX_HOME`, and `KIMI_CODE_HOME`. The error
 code is `namespace_unresolved` with `retryable: false` in both direct CLI errors and run
 failures; callers should repair or allow the declaration rather than retry against
 default config roots.

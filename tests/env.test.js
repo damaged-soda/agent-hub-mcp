@@ -63,6 +63,7 @@ describe("agent environment", () => {
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       CODEX_HOME: "/home/u/ns/personal/codex",
       KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
     });
@@ -71,6 +72,9 @@ describe("agent environment", () => {
     expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/github/runtime");
     expect(env.GIT_CONFIG_GLOBAL).toBe("/home/u/ns/personal/github/config/gitconfig");
     expect(env.CLAUDE_CONFIG_DIR).toBe("/home/u/ns/personal/claude");
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(
+      "/home/u/.local/state/claude-code-secure-storage",
+    );
     expect(env.CODEX_HOME).toBe("/home/u/ns/personal/codex");
     expect(env.KIMI_CODE_HOME).toBe("/home/u/ns/personal/kimi");
   });
@@ -83,14 +87,14 @@ describe("namespace resolution from run cwd", () => {
   fs.writeFileSync(
     stubBin,
     `#!/bin/sh
-echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CODEX_HOME":"/home/u/ns/personal/codex","KIMI_CODE_HOME":"/home/u/ns/personal/kimi","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
+echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CLAUDE_SECURESTORAGE_CONFIG_DIR":"/home/u/.local/state/claude-code-secure-storage","CODEX_HOME":"/home/u/ns/personal/codex","KIMI_CODE_HOME":"/home/u/ns/personal/kimi","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
 `,
     { mode: 0o755 },
   );
   fs.writeFileSync(
     unsetStubBin,
     `#!/bin/sh
-echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex","KIMI_CODE_HOME":null}'
+echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CLAUDE_SECURESTORAGE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex","KIMI_CODE_HOME":null}'
 `,
     { mode: 0o755 },
   );
@@ -111,6 +115,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       CODEX_HOME: "/home/u/ns/personal/codex",
       KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
     });
@@ -127,6 +132,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       CODEX_HOME: "/home/u/ns/personal/codex",
       KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
     });
@@ -138,6 +144,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
       GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
       CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       CODEX_HOME: "/home/u/ns/personal/codex",
       KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
       AGENT_HUB_DIRENV_BIN: unsetStubBin,
@@ -147,6 +154,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GH_CONFIG_DIR: undefined,
       GIT_CONFIG_GLOBAL: undefined,
       CLAUDE_CONFIG_DIR: undefined,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
       CODEX_HOME: "/home/u/.codex",
       KIMI_CODE_HOME: undefined,
     });
@@ -155,6 +163,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
   it("clears namespace keys when direnv is unavailable", () => {
     const env = resolveNamespaceEnv(stubDir, {
       PATH: "/bin",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       AGENT_HUB_DIRENV_BIN: path.join(stubDir, "missing-binary"),
     });
     expect(env).toEqual({
@@ -162,6 +171,7 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GH_CONFIG_DIR: undefined,
       GIT_CONFIG_GLOBAL: undefined,
       CLAUDE_CONFIG_DIR: undefined,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       CODEX_HOME: undefined,
       KIMI_CODE_HOME: undefined,
     });
