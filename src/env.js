@@ -12,6 +12,7 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "AGENT_HUB_KIMI_MODEL",
   "AGENT_HUB_REQUIRE_NAMESPACE",
   "AGENT_HUB_RUN_TTL_SECONDS",
+  "BASH_ENV",
   "AWS_ACCESS_KEY_ID",
   "AWS_REGION",
   "AWS_SECRET_ACCESS_KEY",
@@ -50,6 +51,10 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "XDG_DATA_HOME",
 ]);
 
+// Overlay keys: probed from the run cwd's direnv declaration and force-cleared
+// otherwise, so stale values inherited by the server process never leak into
+// agents. Includes retired legacy keys (charter 2026-08-20 单根裁决之前的
+// per-domain 容器变量) precisely so old-world residue gets scrubbed.
 const NAMESPACE_ENV_KEYS = [
   "NS",
   "GH_CONFIG_DIR",
@@ -60,7 +65,10 @@ const NAMESPACE_ENV_KEYS = [
   "KIMI_CODE_HOME",
 ];
 
-const SHARED_REDIRECT_ENV_KEYS = ["CLAUDE_SECURESTORAGE_CONFIG_DIR"];
+// Namespace contract (charter ARCHITECTURE 会话轴)：a namespace declaration is
+// `NS` itself. Container roots are machine-level singletons and credentials are
+// account slots — neither is per-namespace anymore, so only NS is required.
+const REQUIRED_NAMESPACE_ENV_KEYS = ["NS"];
 
 const DIRENV_CANDIDATES = [
   "direnv",
@@ -80,13 +88,7 @@ function namespaceRequired(source) {
 
 function unresolvedNamespaceEnv(cwd, source, reason) {
   if (!namespaceRequired(source)) {
-    const env = clearedNamespaceEnv();
-    for (const key of SHARED_REDIRECT_ENV_KEYS) {
-      if (typeof source[key] === "string") {
-        env[key] = source[key];
-      }
-    }
-    return env;
+    return clearedNamespaceEnv();
   }
   const error = new Error(
     `Namespace is required, but cwd ${cwd} did not resolve a complete direnv declaration: ${reason}`,
@@ -149,7 +151,7 @@ export function resolveNamespaceEnv(cwd, source = process.env) {
       }
     }
     if (namespaceRequired(source)) {
-      const missing = NAMESPACE_ENV_KEYS.filter(
+      const missing = REQUIRED_NAMESPACE_ENV_KEYS.filter(
         (key) => typeof env[key] !== "string" || env[key].trim() === "",
       );
       if (missing.length > 0) {

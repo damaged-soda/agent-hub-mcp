@@ -66,8 +66,10 @@ describe("agent environment", () => {
       CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
       CODEX_HOME: "/home/u/ns/personal/codex",
       KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
+      BASH_ENV: "/home/u/work/meta/charter/glue/ns-birth.bash",
     });
 
+    expect(env.BASH_ENV).toBe("/home/u/work/meta/charter/glue/ns-birth.bash");
     expect(env.NS).toBe("personal");
     expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/github/runtime");
     expect(env.GIT_CONFIG_GLOBAL).toBe("/home/u/ns/personal/github/config/gitconfig");
@@ -171,7 +173,39 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
       GH_CONFIG_DIR: undefined,
       GIT_CONFIG_GLOBAL: undefined,
       CLAUDE_CONFIG_DIR: undefined,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
+      CODEX_HOME: undefined,
+      KIMI_CODE_HOME: undefined,
+    });
+  });
+
+  it("accepts the single-root contract: NS alone satisfies a required namespace and stale legacy keys are scrubbed", () => {
+    const minimalStub = path.join(stubDir, "direnv-minimal-stub");
+    fs.writeFileSync(
+      minimalStub,
+      `#!/bin/sh
+echo '{"NS":"meta"}'
+`,
+      { mode: 0o755 },
+    );
+    const env = resolveNamespaceEnv(stubDir, {
+      PATH: "/bin",
+      AGENT_HUB_REQUIRE_NAMESPACE: "1",
+      AGENT_HUB_DIRENV_BIN: minimalStub,
+      // 祖先进程带着旧世界的全部残值：必须被清除而非透传
+      GH_CONFIG_DIR: "/home/u/ns/meta/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/meta/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/meta/claude",
       CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
+      CODEX_HOME: "/home/u/ns/meta/codex",
+      KIMI_CODE_HOME: "/home/u/ns/meta/kimi",
+    });
+    expect(env).toEqual({
+      NS: "meta",
+      GH_CONFIG_DIR: undefined,
+      GIT_CONFIG_GLOBAL: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
       CODEX_HOME: undefined,
       KIMI_CODE_HOME: undefined,
     });
