@@ -92,9 +92,10 @@ probes `direnv export json` at the run's `cwd` with inherited namespace keys
 stripped, so values and removals derived from `cwd` take precedence over the
 server process. The overlay list still covers retired per-domain container keys
 (`GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`,
-`CODEX_HOME`, `KIMI_CODE_HOME`) purely to scrub old-world residue — they are
-cleared, never required（charter 2026-08-20 单根裁决：容器归机器轴，凭据按
-账号槽）。`DIRENV_*` bookkeeping is never forwarded. By default, a `cwd`
+`CODEX_HOME`, `KIMI_CODE_HOME`)：ancestor-process residue is scrubbed, but a
+value the target cwd's declaration explicitly exports still overlays through —
+it is an overlay, not a blocklist; the keys are simply never required（charter
+2026-08-20 单根裁决：容器归机器轴，凭据按账号槽）。`DIRENV_*` bookkeeping is never forwarded. By default, a `cwd`
 outside any workspace or an unavailable direnv clears namespace keys and runs
 namespace-less; deployments that set `AGENT_HUB_REQUIRE_NAMESPACE=1` fail with
 `namespace_unresolved` when `NS` does not resolve.

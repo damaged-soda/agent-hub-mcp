@@ -84,9 +84,9 @@ empty array, while normal dispatch remains usable. Results are cached for 30 sec
 workspace namespace.
 
 When the deployment sets `AGENT_HUB_REQUIRE_NAMESPACE=1`, `list_agents` and runs reject
-a cwd whose direnv declaration does not provide `NS`, `GH_CONFIG_DIR`,
-`GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`,
-`CODEX_HOME`, and `KIMI_CODE_HOME`. The error
+a cwd whose direnv declaration does not export `NS`. Container roots
+(Claude/Codex/Kimi) are machine-level singletons and no longer part of the
+namespace contract; legacy per-domain keys are scrubbed, never required. The error
 code is `namespace_unresolved` with `retryable: false` in both direct CLI errors and run
 failures; callers should repair or allow the declaration rather than retry against
 default config roots.

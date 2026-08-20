@@ -179,12 +179,12 @@ echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DI
     });
   });
 
-  it("accepts the single-root contract: NS alone satisfies a required namespace", () => {
+  it("accepts the single-root contract: NS alone satisfies a required namespace and stale legacy keys are scrubbed", () => {
     const minimalStub = path.join(stubDir, "direnv-minimal-stub");
     fs.writeFileSync(
       minimalStub,
       `#!/bin/sh
-echo '{"NS":"meta","GH_CONFIG_DIR":"/home/u/ns/base/github/accounts/acct"}'
+echo '{"NS":"meta"}'
 `,
       { mode: 0o755 },
     );
@@ -192,11 +192,23 @@ echo '{"NS":"meta","GH_CONFIG_DIR":"/home/u/ns/base/github/accounts/acct"}'
       PATH: "/bin",
       AGENT_HUB_REQUIRE_NAMESPACE: "1",
       AGENT_HUB_DIRENV_BIN: minimalStub,
+      // 祖先进程带着旧世界的全部残值：必须被清除而非透传
+      GH_CONFIG_DIR: "/home/u/ns/meta/github/runtime",
+      GIT_CONFIG_GLOBAL: "/home/u/ns/meta/github/config/gitconfig",
+      CLAUDE_CONFIG_DIR: "/home/u/ns/meta/claude",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
+      CODEX_HOME: "/home/u/ns/meta/codex",
+      KIMI_CODE_HOME: "/home/u/ns/meta/kimi",
     });
-    expect(env.NS).toBe("meta");
-    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/base/github/accounts/acct");
-    expect(env.CODEX_HOME).toBeUndefined();
-    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(env).toEqual({
+      NS: "meta",
+      GH_CONFIG_DIR: undefined,
+      GIT_CONFIG_GLOBAL: undefined,
+      CLAUDE_CONFIG_DIR: undefined,
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
+      CODEX_HOME: undefined,
+      KIMI_CODE_HOME: undefined,
+    });
   });
 
   it("fails loud when deployment policy requires a namespace but cwd resolves none", () => {
