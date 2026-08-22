@@ -51,43 +51,21 @@ describe("agent environment", () => {
     ]);
   });
 
-  it("forwards namespace redirect vars when present in the server env", () => {
-    const env = buildAgentEnv({
-      PATH: "/bin",
-      NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
-      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
-      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
-      CODEX_HOME: "/home/u/ns/personal/codex",
-      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
-      BASH_ENV: "/home/u/work/meta/charter/glue/ns-birth.bash",
-    });
-
-    expect(env.BASH_ENV).toBe("/home/u/work/meta/charter/glue/ns-birth.bash");
-    expect(env.NS).toBe("personal");
-    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/personal/github/runtime");
-    expect(env.GIT_CONFIG_GLOBAL).toBe("/home/u/ns/personal/github/config/gitconfig");
-    expect(env.CLAUDE_CONFIG_DIR).toBe("/home/u/ns/personal/claude");
-    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(
-      "/home/u/.local/state/claude-code-secure-storage",
-    );
-    expect(env.CODEX_HOME).toBe("/home/u/ns/personal/codex");
-
-    expect(env.KIMI_CODE_HOME).toBe("/home/u/ns/personal/kimi");
-  });
-
-  it("forwards the session-axis bookkeeping verbatim so the agent's tool shells can switch domains", () => {
-    // charter：NS + NS_UNDO 是 ns-resolve 做跨域转换的全部输入；agent-hub 只搬运，不解析
+  it("forwards the session-axis state whole (NS / NS_UNDO / PATH / GH_CONFIG_DIR / BASH_ENV): glue rebinds it at the run cwd", () => {
     const env = buildAgentEnv({
       PATH: "/home/u/ns/meta/bin:/usr/bin",
       NS: "meta",
-      NS_UNDO: "unset NS;__ns_path_strip lit '/home/u/ns/meta/bin'",
+      NS_UNDO: "unset NS",
+      GH_CONFIG_DIR: "/home/u/ns/base/github/accounts/acct",
       BASH_ENV: "/home/u/ns/.charter/glue/ns-birth.bash",
+      FEISHU_OWNER_EMAIL: "material-var-not-in-allowlist",
     });
     expect(env.NS).toBe("meta");
-    expect(env.NS_UNDO).toBe("unset NS;__ns_path_strip lit '/home/u/ns/meta/bin'");
+    expect(env.NS_UNDO).toBe("unset NS");
     expect(env.PATH).toBe("/home/u/ns/meta/bin:/usr/bin");
+    expect(env.GH_CONFIG_DIR).toBe("/home/u/ns/base/github/accounts/acct");
     expect(env.BASH_ENV).toBe("/home/u/ns/.charter/glue/ns-birth.bash");
+    // 白名单外的域变量不透传——正因如此 runner 必须置 NS_REBIND=1 让 glue 在 cwd 重求值补齐
+    expect(env).not.toHaveProperty("FEISHU_OWNER_EMAIL");
   });
 });

@@ -49,10 +49,11 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "XDG_DATA_HOME",
 ]);
 
-// Namespace：agent-hub 不解析、不推导、不清洗——调用方环境原样透传（白名单内）。
-// charter 会话轴的语义是「绑定只在 shell 出生那一刻由 glue 做，进程只继承」：agent CLI
-// 进程继承调用方的 NS / NS_UNDO / PATH，它起的每个工具 shell 出生时自己跑 ns-resolve
-// 按 cwd 做状态转换。这里再做一遍就是第二个求值器（direnv 时代的遗留，2026-08-22 拆除）。
+// Namespace：agent-hub 不解析、不推导、不清洗。会话轴状态（NS / NS_UNDO / PATH /
+// GH_CONFIG_DIR / BASH_ENV）**整体**转发，runner 置 NS_REBIND=1 并经 zsh 把 agent 起在
+// run 的 cwd：~/.zshenv 的 glue（charter ns-resolve）先按 NS_UNDO 卸掉继承的域（同域也
+// 卸——补齐白名单过滤掉的域变量），再按 cwd 绑定，无域则只卸。整体继承、整体转换
+//（charter E7：选择性清洗致静默残缺）。direnv 时代 hub 自己推导环境的逻辑 2026-08-22 拆除。
 
 export function buildAgentEnv(source = process.env) {
   const env = {};

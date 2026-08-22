@@ -84,12 +84,17 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 ## Workspace Namespace
 
 Agent Hub **does not resolve, derive or scrub namespaces**（2026-08-22；the direnv-era
-probe/overlay was removed）. Charter's session axis binds a domain only when a shell is
-born, via glue; processes merely inherit. So the runner forwards the caller's `NS`,
-`NS_UNDO`, `PATH` and `BASH_ENV` verbatim (allowlist), and every tool shell the agent
-spawns re-runs `ns-resolve` at birth and performs the domain transition for its own
-`cwd`——the hub doing it again would be a second evaluator. A `cwd` outside any domain
-is not rejected here; charter's own signalling（`gh` wrapper 等）covers it.
+probe/overlay was removed）. Charter's session axis binds a domain only when a process is
+born through a shell, via glue, and session-axis state must be inherited whole（charter
+E7: selective forwarding makes the same-domain fast path skip evaluation and silently
+lose material variables）. So the runner (1) forwards the caller's session-axis state whole
+（`NS`、`NS_UNDO`、`PATH`、`GH_CONFIG_DIR`、`BASH_ENV`）, (2) sets `NS_REBIND=1`, and (3)
+starts the agent CLI as `/bin/zsh -c 'exec "$0" "$@"'` at the run `cwd`: `~/.zshenv`
+（glue → `ns-resolve`）unloads the inherited domain via `NS_UNDO`（even the same domain——
+this re-fills material variables the allowlist dropped）, then binds by `cwd`; no domain at
+`cwd` means unload only. The hub knows nothing about domains. A `cwd` outside any domain
+is not rejected: the agent runs namespace-less（charter's `gh` wrapper 点名 the missing
+`GH_CONFIG_DIR`）.
 
 ## Documentation Map
 

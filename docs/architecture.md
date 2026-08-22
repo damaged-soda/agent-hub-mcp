@@ -17,10 +17,10 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 
 ### 无 daemon 执行模型
 
-`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略、
-Keychain 上下文与会话轴环境（`NS` / `NS_UNDO` / `PATH` / `BASH_ENV`，原样透传，不
-解析不清洗——域的切换由 agent 的工具 shell 出生时自行经 charter `ns-resolve` 完成）。
-dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
+`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略、Keychain
+上下文与**整体的会话轴状态**（`NS` / `NS_UNDO` / `PATH`），置 `NS_REBIND=1`，再以
+`/bin/zsh -c 'exec …'` 把 agent CLI 起在 run 的 cwd——`~/.zshenv` 的 glue 先卸掉继承的
+域再按 cwd 绑定（charter 汇聚段），hub 对域一无所知。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
 命令可以由全新的 CLI 进程继续。容器根（Claude/Codex/Kimi）为机器级单根。
 
 Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
@@ -142,8 +142,8 @@ Adapter 出现在列表中的条件：
 - Adapter 能把一次 CLI 退出转换为明确的 `completed` 或 `failed`。
 
 `list_agents` 还会 best-effort 探测每个可用 adapter 的可选模型，并返回统一的
-`models` 数组与 `model_discovery` 状态。调用方可传可选的绝对路径 `cwd`；服务端用它
-解析与 run 相同的 workspace namespace。未传时使用 MCP server 的当前目录。
+`models` 数组与 `model_discovery` 状态。调用方可传可选的绝对路径 `cwd`；它只是探测模型目录时的工作目录（缓存键为
+`cwd` + 配置根 / base URL），不选择任何 namespace。未传时使用 MCP server 的当前目录。
 
 - Claude Code：以 stream-json 启动无持久化、无工具会话，发送 SDK control
   `list_models` 请求；这与交互式 `/model` picker 使用同一份账号、provider 和策略目录。

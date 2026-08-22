@@ -55,6 +55,36 @@ describe("agenthub CLI", () => {
     expect(completed.content[0].text).toBe("fake result: review this");
   });
 
+  it("births the agent through zsh at the run cwd with NS_REBIND=1 and the caller's session-axis state forwarded whole", async () => {
+    // 假 ZDOTDIR：.zshenv 扮演 charter 的 glue——记录出生 cwd 与收到的会话轴状态
+    const zdot = path.join(root, "zdot");
+    await fsp.mkdir(zdot, { recursive: true });
+    await fsp.writeFile(path.join(zdot, ".zshenv"), 'export BORN_CWD="$PWD"\nexport NS="glue-saw-${NS:-none}"\n');
+    const accepted = await runCli(
+      ["dispatch", "--agent", "claude-code", "--cwd", workspace, "--prompt", "dump-env"],
+      {
+        ...env,
+        NS: "caller-domain",
+        NS_UNDO: "unset NS",
+        LEAK: "from-caller",
+        ZDOTDIR: zdot,
+        AGENT_HUB_FORWARD_ENV: "ZDOTDIR",
+        AGENT_HUB_REQUIRE_NAMESPACE: "1",   // 退役的策略键：在场也不得影响任何行为
+      },
+    );
+    expect(accepted.status).toBe("accepted");
+    const completed = await runCli(["wait", accepted.run_ref.run_id, "--timeout-ms", "10000"], env);
+    expect(completed.status).toBe("completed");
+    const seen = JSON.parse(completed.content[0].text);
+    expect(seen).toEqual({
+      NS: "glue-saw-caller-domain",                       // glue 在 cwd 出生时收到了整体转发的会话轴状态
+      NS_UNDO: "unset NS",
+      NS_REBIND: "1",                                    // runner 要求 glue 整体重绑
+      BORN_CWD: await fsp.realpath(workspace),           // 出生在 run 的 cwd
+      LEAK: null,                                        // 白名单外不透传
+    });
+  });
+
   it("returns structured errors for invalid CLI input", async () => {
     const invalidTimeout = await runCliFailure(
       ["wait", "not-used", "--timeout-ms", "0"],
@@ -307,6 +337,9 @@ process.stdin.on("end", async () => {
   const write = (value) => process.stdout.write(JSON.stringify(value) + (streamJson ? "\\n" : ""));
   if (streamJson) write({ type: "system", subtype: "init", session_id: sessionId });
   let result = "fake result: " + input;
+  if (input.trim() === "dump-env") {
+    result = JSON.stringify({ NS: process.env.NS ?? null, NS_UNDO: process.env.NS_UNDO ?? null, NS_REBIND: process.env.NS_REBIND ?? null, BORN_CWD: process.env.BORN_CWD ?? null, LEAK: process.env.LEAK ?? null });
+  }
   if (input.includes("AGENT_HUB_DISCUSSION_PROTOCOL_V1")) {
     const marker = "[OUTPUT CONTRACT]\\n";
     const markerIndex = input.lastIndexOf(marker);

@@ -20,8 +20,8 @@ agenthub agents --cwd "$PWD"
 
 `agenthub agents` returns `claude-code`, `codex`, and `kimi-code` under `agents` only when the corresponding local CLI is available; missing CLIs appear under `unavailable_agents`.
 It also returns the selectable model catalog for each adapter. Use
-`--json '{"cwd":"/absolute/path/to/project"}'` when the CLI configuration or authentication
-namespace depends on the target workspace. A model catalog failure is reported through
+`--json '{"cwd":"/absolute/path/to/project"}'` to probe from a specific working directory
+（it does not select a namespace）. A model catalog failure is reported through
 `model_discovery` and does not move the adapter to `unavailable_agents`.
 
 ## Commands
@@ -56,7 +56,7 @@ namespace depends on the target workspace. A model catalog failure is reported t
 | `AGENT_HUB_KIMI_MODEL` | unset | Default `-m` for Kimi runs when the request omits `metadata["kimi-code"].model`. |
 | `AGENT_HUB_KIMI_EFFORT` | unset | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when the request omits `metadata["kimi-code"].effort`. |
 
-The runner forwards a small default environment allowlist for Claude, Codex, and Kimi auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`), session-axis state forwarded verbatim for the agent's tool shells to switch domains (`NS`, `NS_UNDO`, `GH_CONFIG_DIR`; `GIT_CONFIG_GLOBAL` legacy), the shell glue injection point (`BASH_ENV`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
+The runner forwards a small default environment allowlist for Claude, Codex, and Kimi auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`), the session-axis state forwarded whole for charter's glue to rebind at the run cwd (`NS`, `NS_UNDO`, `GH_CONFIG_DIR`, `BASH_ENV`; `GIT_CONFIG_GLOBAL` legacy; the runner adds `NS_REBIND=1`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
 
 ```sh
 AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE agenthub dispatch …

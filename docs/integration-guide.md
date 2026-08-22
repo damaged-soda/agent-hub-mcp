@@ -59,8 +59,9 @@ tool_timeout_sec = 660
 ### list_agents
 
 Returns available and unavailable local adapters together with their selectable models.
-The optional `cwd` must be an absolute directory and selects the same workspace namespace
-and CLI configuration used for a run:
+The optional `cwd` must be an absolute directory; it is only the working directory for
+model-catalog probing（cache key: `cwd` + config root / base URL）and does not select a
+namespace:
 
 ```json
 {
@@ -83,10 +84,10 @@ Model discovery failure does not make the adapter unavailable. In that case `mod
 empty array, while normal dispatch remains usable. Results are cached for 30 seconds per
 workspace namespace.
 
-Namespaces are not resolved or enforced by Agent Hub: the caller's session-axis
-environment is forwarded verbatim and the agent's tool shells bind a domain by `cwd`
-at birth（charter `ns-resolve`）. Container roots (Claude/Codex/Kimi) are machine-level
-singletons.
+Namespaces are not resolved or enforced by Agent Hub: the caller's session-axis state is
+forwarded whole with `NS_REBIND=1`, the agent CLI is started through `zsh` at the run
+`cwd`, and charter's glue rebinds the domain by `cwd` at birth. Container roots
+(Claude/Codex/Kimi) are machine-level singletons.
 
 ### run_agent
 
