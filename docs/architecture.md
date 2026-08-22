@@ -152,7 +152,7 @@ Adapter 出现在列表中的条件：
 - Kimi Code：读取 `kimi provider list --json`，只保留 `models` 下的安全模型字段；
   `providers` 中的 API key、base URL 等配置不会进入响应。
 
-探测并行执行，按 workspace namespace 缓存 30 秒，单个命令限时 5 秒、输出限
+探测并行执行，按 `cwd` + 配置根 / base URL 缓存 30 秒，单个命令限时 5 秒、输出限
 8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，
 不会改变 adapter 自身的 `available` 状态。
 

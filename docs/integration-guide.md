@@ -82,7 +82,7 @@ Every adapter entry contains:
 
 Model discovery failure does not make the adapter unavailable. In that case `models` is an
 empty array, while normal dispatch remains usable. Results are cached for 30 seconds per
-workspace namespace.
+`cwd` + config root / base URL.
 
 Namespaces are not resolved or enforced by Agent Hub: the caller's session-axis state is
 forwarded whole with `NS_REBIND=1`, the agent CLI is started through `zsh` at the run
