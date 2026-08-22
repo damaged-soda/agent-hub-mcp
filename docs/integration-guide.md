@@ -83,13 +83,10 @@ Model discovery failure does not make the adapter unavailable. In that case `mod
 empty array, while normal dispatch remains usable. Results are cached for 30 seconds per
 workspace namespace.
 
-When the deployment sets `AGENT_HUB_REQUIRE_NAMESPACE=1`, `list_agents` and runs reject
-a cwd whose direnv declaration does not export `NS`. Container roots
-(Claude/Codex/Kimi) are machine-level singletons and no longer part of the
-namespace contract; legacy per-domain keys are scrubbed, never required. The error
-code is `namespace_unresolved` with `retryable: false` in both direct CLI errors and run
-failures; callers should repair or allow the declaration rather than retry against
-default config roots.
+Namespaces are not resolved or enforced by Agent Hub: the caller's session-axis
+environment is forwarded verbatim and the agent's tool shells bind a domain by `cwd`
+at birth（charter `ns-resolve`）. Container roots (Claude/Codex/Kimi) are machine-level
+singletons.
 
 ### run_agent
 

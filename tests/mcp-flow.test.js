@@ -43,7 +43,6 @@ describe("MCP flow", () => {
       PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
       AGENT_HUB_RUN_DIR: runDir,
       AGENT_HUB_CWD_ALLOWLIST: workspaceDir,
-      AGENT_HUB_REQUIRE_NAMESPACE: "",
     };
   });
 

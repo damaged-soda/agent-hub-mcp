@@ -20,7 +20,7 @@ import {
   writeState,
 } from "./fs-store.js";
 import { getAdapter } from "./adapters.js";
-import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
+import { buildAgentEnv } from "./env.js";
 import {
   acquireSessionLease,
   completeSessionRun,
@@ -59,11 +59,10 @@ async function main() {
   if ((await readState(runDir).catch(() => null))?.status === "cancelled") {
     return;
   }
-  // Position wins: namespace derived from the run cwd overrides inherited env.
+  // 调用方环境透传（白名单）；namespace 由 agent 的工具 shell 出生时按 cwd 自行解析。
   // command.env carries adapter-injected values (e.g. kimi's effort variable).
   const agentEnv = {
     ...buildAgentEnv(process.env),
-    ...resolveNamespaceEnv(request.cwd),
     ...command.env,
   };
   await atomicWriteJson(path.join(runDir, "command.json"), {

@@ -24,7 +24,6 @@ describe("agenthub CLI", () => {
       AGENT_HUB_RUN_DIR: path.join(root, "runs"),
       AGENT_HUB_DISCUSSION_DIR: path.join(root, "discussions"),
       AGENT_HUB_CWD_ALLOWLIST: workspace,
-      AGENT_HUB_REQUIRE_NAMESPACE: "",
     };
   });
 
@@ -71,25 +70,6 @@ describe("agenthub CLI", () => {
     const invalidJson = await runCliFailure(["dispatch", "--json", "{"], env);
     expect(invalidJson.error.code).toBe("invalid_cli_usage");
     expect(invalidJson.error.message).toMatch(/^--json is invalid:/);
-  });
-
-  it("preserves retryable=false for a required namespace that cannot resolve", async () => {
-    const failure = await runCliFailure(
-      ["agents", "--cwd", workspace],
-      {
-        ...env,
-        AGENT_HUB_REQUIRE_NAMESPACE: "1",
-        AGENT_HUB_DIRENV_BIN: path.join(root, "missing-direnv"),
-      },
-    );
-
-    expect(failure).toEqual({
-      error: {
-        code: "namespace_unresolved",
-        message: expect.stringContaining("Namespace is required"),
-        retryable: false,
-      },
-    });
   });
 
   it("runs a durable discussion from a detached CLI worker", async () => {

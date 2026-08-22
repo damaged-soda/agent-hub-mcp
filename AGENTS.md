@@ -80,25 +80,16 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 | `AGENT_HUB_CODEX_EFFORT` | Default effort for Codex runs. |
 | `AGENT_HUB_KIMI_MODEL` | Default model for Kimi runs. |
 | `AGENT_HUB_KIMI_EFFORT` | Default effort for Kimi runs. |
-| `AGENT_HUB_DIRENV_BIN` | Override the direnv binary used for namespace resolution. |
-| `AGENT_HUB_REQUIRE_NAMESPACE` | When `1`/`true`/`yes`, reject a cwd whose direnv declaration does not export `NS` instead of running namespace-less. |
 
-## Workspace Namespace Resolution
+## Workspace Namespace
 
-Namespace contract (charter `ARCHITECTURE.md` 会话轴)：a run is born into the
-namespace declared above its `cwd`, and the declaration is `NS`（plus the
-account-slot pointer `GH_CONFIG_DIR`）。Before spawning the agent CLI, the runner
-probes `direnv export json` at the run's `cwd` with inherited namespace keys
-stripped, so values and removals derived from `cwd` take precedence over the
-server process. The overlay list still covers retired per-domain container keys
-(`GIT_CONFIG_GLOBAL`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`,
-`CODEX_HOME`, `KIMI_CODE_HOME`)：ancestor-process residue is scrubbed, but a
-value the target cwd's declaration explicitly exports still overlays through —
-it is an overlay, not a blocklist; the keys are simply never required（charter
-2026-08-20 单根裁决：容器归机器轴，凭据按账号槽）。`DIRENV_*` bookkeeping is never forwarded. By default, a `cwd`
-outside any workspace or an unavailable direnv clears namespace keys and runs
-namespace-less; deployments that set `AGENT_HUB_REQUIRE_NAMESPACE=1` fail with
-`namespace_unresolved` when `NS` does not resolve.
+Agent Hub **does not resolve, derive or scrub namespaces**（2026-08-22；the direnv-era
+probe/overlay was removed）. Charter's session axis binds a domain only when a shell is
+born, via glue; processes merely inherit. So the runner forwards the caller's `NS`,
+`NS_UNDO`, `PATH` and `BASH_ENV` verbatim (allowlist), and every tool shell the agent
+spawns re-runs `ns-resolve` at birth and performs the domain transition for its own
+`cwd`——the hub doing it again would be a second evaluator. A `cwd` outside any domain
+is not rejected here; charter's own signalling（`gh` wrapper 等）covers it.
 
 ## Documentation Map
 

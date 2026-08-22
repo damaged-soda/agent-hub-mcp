@@ -17,13 +17,11 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 
 ### 无 daemon 执行模型
 
-`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略与
-Keychain 上下文，但会清空 namespace redirect，再按 run cwd 从空基线执行
-`direnv export json`。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续
-`query`、`wait`、`cancel` 命令可以由全新的 CLI 进程继续。设置
-`AGENT_HUB_REQUIRE_NAMESPACE=1` 的部署在 cwd 声明未导出 `NS` 时直接以
-`namespace_unresolved` 失败。容器根（Claude/Codex/Kimi）为机器级单根，
-不再属于 namespace 契约。
+`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略、
+Keychain 上下文与会话轴环境（`NS` / `NS_UNDO` / `PATH` / `BASH_ENV`，原样透传，不
+解析不清洗——域的切换由 agent 的工具 shell 出生时自行经 charter `ns-resolve` 完成）。
+dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
+命令可以由全新的 CLI 进程继续。容器根（Claude/Codex/Kimi）为机器级单根。
 
 Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
 `agenthub discussion dispatch` 启动一个 detached Discussion worker；query/wait/cancel

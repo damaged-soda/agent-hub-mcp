@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
-import { buildAgentEnv, resolveNamespaceEnv } from "../src/env.js";
+import { describe, expect, it } from "vitest";
+import { buildAgentEnv } from "../src/env.js";
 import { currentEnvKeys } from "../src/fs-store.js";
 
 describe("agent environment", () => {
@@ -40,14 +37,12 @@ describe("agent environment", () => {
       AGENT_HUB_CODEX_EFFORT: "xhigh",
       AGENT_HUB_KIMI_EFFORT: "medium",
       AGENT_HUB_KIMI_MODEL: "k2",
-      AGENT_HUB_REQUIRE_NAMESPACE: "1",
     });
 
     expect(env.AGENT_HUB_CLAUDE_EFFORT).toBe("high");
     expect(env.AGENT_HUB_CODEX_EFFORT).toBe("xhigh");
     expect(env.AGENT_HUB_KIMI_EFFORT).toBe("medium");
     expect(env.AGENT_HUB_KIMI_MODEL).toBe("k2");
-    expect(env.AGENT_HUB_REQUIRE_NAMESPACE).toBe("1");
   });
 
   it("omits namespace keys that were explicitly cleared from command metadata", () => {
@@ -78,152 +73,21 @@ describe("agent environment", () => {
       "/home/u/.local/state/claude-code-secure-storage",
     );
     expect(env.CODEX_HOME).toBe("/home/u/ns/personal/codex");
+
     expect(env.KIMI_CODE_HOME).toBe("/home/u/ns/personal/kimi");
   });
-});
 
-describe("namespace resolution from run cwd", () => {
-  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hub-direnv-"));
-  const stubBin = path.join(stubDir, "direnv-stub");
-  const unsetStubBin = path.join(stubDir, "direnv-unset-stub");
-  fs.writeFileSync(
-    stubBin,
-    `#!/bin/sh
-echo '{"NS":"personal","GH_CONFIG_DIR":"/home/u/ns/personal/github/runtime","GIT_CONFIG_GLOBAL":"/home/u/ns/personal/github/config/gitconfig","CLAUDE_CONFIG_DIR":"/home/u/ns/personal/claude","CLAUDE_SECURESTORAGE_CONFIG_DIR":"/home/u/.local/state/claude-code-secure-storage","CODEX_HOME":"/home/u/ns/personal/codex","KIMI_CODE_HOME":"/home/u/ns/personal/kimi","DIRENV_DIFF":"bookkeeping","OTHER":"junk"}'
-`,
-    { mode: 0o755 },
-  );
-  fs.writeFileSync(
-    unsetStubBin,
-    `#!/bin/sh
-echo '{"NS":null,"GH_CONFIG_DIR":null,"GIT_CONFIG_GLOBAL":null,"CLAUDE_CONFIG_DIR":null,"CLAUDE_SECURESTORAGE_CONFIG_DIR":null,"CODEX_HOME":"/home/u/.codex","KIMI_CODE_HOME":null}'
-`,
-    { mode: 0o755 },
-  );
-
-  afterAll(() => {
-    fs.rmSync(stubDir, { recursive: true, force: true });
-  });
-
-  it("derives from cwd even when the server env carries another namespace", () => {
-    const env = resolveNamespaceEnv(stubDir, {
-      NS: "company",
-      GH_CONFIG_DIR: "/home/u/ns/company/github/runtime",
-      GIT_CONFIG_GLOBAL: "/home/u/ns/company/github/config/gitconfig",
-      AGENT_HUB_DIRENV_BIN: stubBin,
-    });
-    expect(env).toEqual({
-      NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
-      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
-      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
-      CODEX_HOME: "/home/u/ns/personal/codex",
-      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
-    });
-  });
-
-  it("derives namespace keys and drops direnv bookkeeping", () => {
-    const env = resolveNamespaceEnv(stubDir, {
-      PATH: "/bin",
-      DIRENV_DIFF: "stale-inherited-state",
-      AGENT_HUB_DIRENV_BIN: stubBin,
-    });
-    expect(env).toEqual({
-      NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
-      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
-      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
-      CODEX_HOME: "/home/u/ns/personal/codex",
-      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
-    });
-  });
-
-  it("clears namespace keys that direnv returns as null", () => {
-    const env = resolveNamespaceEnv(stubDir, {
-      NS: "personal",
-      GH_CONFIG_DIR: "/home/u/ns/personal/github/runtime",
-      GIT_CONFIG_GLOBAL: "/home/u/ns/personal/github/config/gitconfig",
-      CLAUDE_CONFIG_DIR: "/home/u/ns/personal/claude",
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
-      CODEX_HOME: "/home/u/ns/personal/codex",
-      KIMI_CODE_HOME: "/home/u/ns/personal/kimi",
-      AGENT_HUB_DIRENV_BIN: unsetStubBin,
-    });
-    expect(env).toEqual({
-      NS: undefined,
-      GH_CONFIG_DIR: undefined,
-      GIT_CONFIG_GLOBAL: undefined,
-      CLAUDE_CONFIG_DIR: undefined,
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
-      CODEX_HOME: "/home/u/.codex",
-      KIMI_CODE_HOME: undefined,
-    });
-  });
-
-  it("clears namespace keys when direnv is unavailable", () => {
-    const env = resolveNamespaceEnv(stubDir, {
-      PATH: "/bin",
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
-      AGENT_HUB_DIRENV_BIN: path.join(stubDir, "missing-binary"),
-    });
-    expect(env).toEqual({
-      NS: undefined,
-      GH_CONFIG_DIR: undefined,
-      GIT_CONFIG_GLOBAL: undefined,
-      CLAUDE_CONFIG_DIR: undefined,
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
-      CODEX_HOME: undefined,
-      KIMI_CODE_HOME: undefined,
-    });
-  });
-
-  it("accepts the single-root contract: NS alone satisfies a required namespace and stale legacy keys are scrubbed", () => {
-    const minimalStub = path.join(stubDir, "direnv-minimal-stub");
-    fs.writeFileSync(
-      minimalStub,
-      `#!/bin/sh
-echo '{"NS":"meta"}'
-`,
-      { mode: 0o755 },
-    );
-    const env = resolveNamespaceEnv(stubDir, {
-      PATH: "/bin",
-      AGENT_HUB_REQUIRE_NAMESPACE: "1",
-      AGENT_HUB_DIRENV_BIN: minimalStub,
-      // 祖先进程带着旧世界的全部残值：必须被清除而非透传
-      GH_CONFIG_DIR: "/home/u/ns/meta/github/runtime",
-      GIT_CONFIG_GLOBAL: "/home/u/ns/meta/github/config/gitconfig",
-      CLAUDE_CONFIG_DIR: "/home/u/ns/meta/claude",
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/u/.local/state/claude-code-secure-storage",
-      CODEX_HOME: "/home/u/ns/meta/codex",
-      KIMI_CODE_HOME: "/home/u/ns/meta/kimi",
-    });
-    expect(env).toEqual({
+  it("forwards the session-axis bookkeeping verbatim so the agent's tool shells can switch domains", () => {
+    // charter：NS + NS_UNDO 是 ns-resolve 做跨域转换的全部输入；agent-hub 只搬运，不解析
+    const env = buildAgentEnv({
+      PATH: "/home/u/ns/meta/bin:/usr/bin",
       NS: "meta",
-      GH_CONFIG_DIR: undefined,
-      GIT_CONFIG_GLOBAL: undefined,
-      CLAUDE_CONFIG_DIR: undefined,
-      CLAUDE_SECURESTORAGE_CONFIG_DIR: undefined,
-      CODEX_HOME: undefined,
-      KIMI_CODE_HOME: undefined,
+      NS_UNDO: "unset NS;__ns_path_strip lit '/home/u/ns/meta/bin'",
+      BASH_ENV: "/home/u/ns/.charter/glue/ns-birth.bash",
     });
-  });
-
-  it("fails loud when deployment policy requires a namespace but cwd resolves none", () => {
-    expect(() =>
-      resolveNamespaceEnv(stubDir, {
-        PATH: "/bin",
-        NS: "personal",
-        AGENT_HUB_REQUIRE_NAMESPACE: "1",
-        AGENT_HUB_DIRENV_BIN: unsetStubBin,
-      }),
-    ).toThrow(
-      expect.objectContaining({
-        code: "namespace_unresolved",
-        retryable: false,
-      }),
-    );
+    expect(env.NS).toBe("meta");
+    expect(env.NS_UNDO).toBe("unset NS;__ns_path_strip lit '/home/u/ns/meta/bin'");
+    expect(env.PATH).toBe("/home/u/ns/meta/bin:/usr/bin");
+    expect(env.BASH_ENV).toBe("/home/u/ns/.charter/glue/ns-birth.bash");
   });
 });
