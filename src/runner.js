@@ -20,7 +20,14 @@ import {
   writeState,
 } from "./fs-store.js";
 import { getAdapter } from "./adapters.js";
-import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
+import { buildAgentEnv } from "./env.js";
+
+// agent 经 zsh -c 出生：zsh 对任何调用都读 ~/.zshenv（除非 -f / ZDOTDIR 改向），charter 的
+// glue 在那里按 cwd 绑定；exec 让 pid / 进程组 / 信号 / 退出码 / stdin 都是 agent 本体的。
+const BIRTH_SHELL = "/bin/zsh";
+function birthArgv(command) {
+  return [BIRTH_SHELL, "-c", 'exec "$0" "$@"', command.command, ...command.args];
+}
 import {
   acquireSessionLease,
   completeSessionRun,
@@ -59,17 +66,19 @@ async function main() {
   if ((await readState(runDir).catch(() => null))?.status === "cancelled") {
     return;
   }
-  // Position wins: namespace derived from the run cwd overrides inherited env.
-  // command.env carries adapter-injected values (e.g. kimi's effort variable).
+  // 环境按白名单透传（会话轴状态 NS / NS_UNDO / PATH 整体在内），并置 NS_REBIND=1：
+  // agent 经 zsh 起在 run 的 cwd，~/.zshenv 的 glue 先卸掉继承的域再按 cwd 绑定——和
+  // 终端里敲命令同一条汇聚段，hub 不解析。command.env carries adapter-injected values.
   const agentEnv = {
     ...buildAgentEnv(process.env),
-    ...resolveNamespaceEnv(request.cwd),
+    NS_REBIND: "1",
     ...command.env,
   };
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,
     adapter_id: command.adapter_id,
     argv: command.argv,
+    launcher: birthArgv(command),   // 实际 spawn 的 argv（经 zsh 出生）；argv 是 adapter 视角
     output_format: command.output_format,
     cwd: request.cwd,
     env_keys: currentEnvKeys(agentEnv),
@@ -108,7 +117,8 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     terminateChild(child, childPgid, killTimers);
   };
 
-  const child = spawn(command.command, command.args, {
+  const launcher = birthArgv(command);
+  const child = spawn(launcher[0], launcher.slice(1), {
     cwd: request.cwd,
     detached: true,
     env: agentEnv,

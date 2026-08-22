@@ -28,7 +28,7 @@ import {
 } from "./fs-store.js";
 import { allAdapters, getAdapter } from "./adapters.js";
 import { validateRequestPaths } from "./security.js";
-import { buildAgentEnv, resolveNamespaceEnv } from "./env.js";
+import { buildAgentEnv } from "./env.js";
 import {
   DEFAULT_RUN_AGENT_WAIT_MS,
   DEFAULT_WAIT_AGENT_RUN_MS,
@@ -49,10 +49,7 @@ export async function listAgents(input = {}) {
   if (input?.cwd !== undefined) {
     ({ cwd } = await validateRequestPaths(input.cwd));
   }
-  const env = {
-    ...buildAgentEnv(process.env),
-    ...resolveNamespaceEnv(cwd),
-  };
+  const env = buildAgentEnv(process.env);
   const described = await Promise.all(
     allAdapters().map((adapter) => adapter.listAgent({ cwd, env })),
   );
@@ -294,7 +291,7 @@ function normalizeInternalRetention(internal) {
 
 function buildRunnerEnv(source) {
   const env = buildAgentEnv(source);
-  for (const key of ["AGENT_HUB_RUN_DIR", "AGENT_HUB_DIRENV_BIN"]) {
+  for (const key of ["AGENT_HUB_RUN_DIR"]) {
     if (typeof source[key] === "string") env[key] = source[key];
   }
   return env;

@@ -17,13 +17,11 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 
 ### 无 daemon 执行模型
 
-`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略与
-Keychain 上下文，但会清空 namespace redirect，再按 run cwd 从空基线执行
-`direnv export json`。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续
-`query`、`wait`、`cancel` 命令可以由全新的 CLI 进程继续。设置
-`AGENT_HUB_REQUIRE_NAMESPACE=1` 的部署在 cwd 声明未导出 `NS` 时直接以
-`namespace_unresolved` 失败。容器根（Claude/Codex/Kimi）为机器级单根，
-不再属于 namespace 契约。
+`agenthub dispatch` 在调用者现场启动 detached runner；runner 从现场继承非密策略、Keychain
+上下文与**整体的会话轴状态**（`NS` / `NS_UNDO` / `PATH`），置 `NS_REBIND=1`，再以
+`/bin/zsh -c 'exec …'` 把 agent CLI 起在 run 的 cwd——`~/.zshenv` 的 glue 先卸掉继承的
+域再按 cwd 绑定（charter 汇聚段），hub 对域一无所知。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
+命令可以由全新的 CLI 进程继续。容器根（Claude/Codex/Kimi）为机器级单根。
 
 Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
 `agenthub discussion dispatch` 启动一个 detached Discussion worker；query/wait/cancel
@@ -50,7 +48,7 @@ CLI 参数处理规则：
 
 - MCP 为非交互执行设置必要参数，例如 Claude Code 的 `-p` 和 `--output-format stream-json`。
 - 其他 CLI 行为参数来自 adapter metadata 或 CLI 默认配置。
-- `command.json` 记录实际 argv，便于复现。
+- `command.json` 记录 adapter 视角的 `argv` 与实际 spawn 的 `launcher`（`/bin/zsh -c 'exec "$0" "$@"' …`，agent 经 zsh 出生），便于复现。
 
 ### 统一 metadata 层
 
@@ -144,8 +142,8 @@ Adapter 出现在列表中的条件：
 - Adapter 能把一次 CLI 退出转换为明确的 `completed` 或 `failed`。
 
 `list_agents` 还会 best-effort 探测每个可用 adapter 的可选模型，并返回统一的
-`models` 数组与 `model_discovery` 状态。调用方可传可选的绝对路径 `cwd`；服务端用它
-解析与 run 相同的 workspace namespace。未传时使用 MCP server 的当前目录。
+`models` 数组与 `model_discovery` 状态。调用方可传可选的绝对路径 `cwd`；它只是探测模型目录时的工作目录（缓存键为
+`cwd` + 配置根 / base URL），不选择任何 namespace。未传时使用 MCP server 的当前目录。
 
 - Claude Code：以 stream-json 启动无持久化、无工具会话，发送 SDK control
   `list_models` 请求；这与交互式 `/model` picker 使用同一份账号、provider 和策略目录。
@@ -154,7 +152,7 @@ Adapter 出现在列表中的条件：
 - Kimi Code：读取 `kimi provider list --json`，只保留 `models` 下的安全模型字段；
   `providers` 中的 API key、base URL 等配置不会进入响应。
 
-探测并行执行，按 workspace namespace 缓存 30 秒，单个命令限时 5 秒、输出限
+探测并行执行，按 `cwd` + 配置根 / base URL 缓存 30 秒，单个命令限时 5 秒、输出限
 8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，
 不会改变 adapter 自身的 `available` 状态。
 

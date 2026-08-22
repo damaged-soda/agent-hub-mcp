@@ -62,11 +62,10 @@ Every CLI invocation inherits the caller's login, environment, and macOS Keychai
 
 `cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for all adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi has no permission flags in prompt mode, so `read-only`/`full` are rejected there rather than silently remapped). Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` environment defaults).
 
-Workspace deployments can set `AGENT_HUB_REQUIRE_NAMESPACE=1` to require `cwd` to
-resolve a namespace declaration (`NS` via direnv). An unresolved declaration then
-fails with `namespace_unresolved` instead of running namespace-less. Container
-roots (Claude/Codex/Kimi) are machine-level singletons and no longer part of the
-namespace contract.
+Agent Hub does not resolve namespaces. It forwards the caller's session-axis state whole
+（`NS`、`NS_UNDO`、`PATH`…）, sets `NS_REBIND=1`, and starts the agent CLI through
+`zsh -c 'exec …'` at the run `cwd`, so `~/.zshenv`（charter's glue）unloads the inherited
+domain and binds by `cwd`——exactly as a command typed in a terminal there would.
 
 ## Structured Discussions
 

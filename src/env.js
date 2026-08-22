@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-
 const DEFAULT_AGENT_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_BASE_URL",
@@ -10,7 +8,6 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "AGENT_HUB_FORWARD_ENV",
   "AGENT_HUB_KIMI_EFFORT",
   "AGENT_HUB_KIMI_MODEL",
-  "AGENT_HUB_REQUIRE_NAMESPACE",
   "AGENT_HUB_RUN_TTL_SECONDS",
   "BASH_ENV",
   "AWS_ACCESS_KEY_ID",
@@ -37,6 +34,7 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "GOOGLE_CLOUD_PROJECT",
   "NO_COLOR",
   "NS",
+  "NS_UNDO",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
   "PATH",
@@ -51,121 +49,11 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "XDG_DATA_HOME",
 ]);
 
-// Overlay keys: probed from the run cwd's direnv declaration and force-cleared
-// otherwise, so stale values inherited by the server process never leak into
-// agents. Includes retired legacy keys (charter 2026-08-20 单根裁决之前的
-// per-domain 容器变量) precisely so old-world residue gets scrubbed.
-const NAMESPACE_ENV_KEYS = [
-  "NS",
-  "GH_CONFIG_DIR",
-  "GIT_CONFIG_GLOBAL",
-  "CLAUDE_CONFIG_DIR",
-  "CLAUDE_SECURESTORAGE_CONFIG_DIR",
-  "CODEX_HOME",
-  "KIMI_CODE_HOME",
-];
-
-// Namespace contract (charter ARCHITECTURE 会话轴)：a namespace declaration is
-// `NS` itself. Container roots are machine-level singletons and credentials are
-// account slots — neither is per-namespace anymore, so only NS is required.
-const REQUIRED_NAMESPACE_ENV_KEYS = ["NS"];
-
-const DIRENV_CANDIDATES = [
-  "direnv",
-  "/opt/homebrew/bin/direnv",
-  "/usr/local/bin/direnv",
-  "/usr/bin/direnv",
-];
-const NAMESPACE_PROBE_TIMEOUT_MS = 5000;
-
-function clearedNamespaceEnv() {
-  return Object.fromEntries(NAMESPACE_ENV_KEYS.map((key) => [key, undefined]));
-}
-
-function namespaceRequired(source) {
-  return /^(?:1|true|yes)$/i.test(source.AGENT_HUB_REQUIRE_NAMESPACE ?? "");
-}
-
-function unresolvedNamespaceEnv(cwd, source, reason) {
-  if (!namespaceRequired(source)) {
-    return clearedNamespaceEnv();
-  }
-  const error = new Error(
-    `Namespace is required, but cwd ${cwd} did not resolve a complete direnv declaration: ${reason}`,
-  );
-  error.code = "namespace_unresolved";
-  error.retryable = false;
-  throw error;
-}
-
-// Namespace rule (~/work/meta/charter/NAMESPACE.md): the environment always follows
-// position — derive the workspace namespace from the run's cwd via direnv, regardless
-// of what the server process inherited. Stale DIRENV_* bookkeeping is stripped so the
-// probe evaluates cleanly for this cwd.
-export function resolveNamespaceEnv(cwd, source = process.env) {
-  const probeEnv = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (!key.startsWith("DIRENV_")) {
-      probeEnv[key] = value;
-    }
-  }
-  for (const key of NAMESPACE_ENV_KEYS) {
-    delete probeEnv[key];
-  }
-  probeEnv.DIRENV_LOG_FORMAT = "";
-  const candidates = source.AGENT_HUB_DIRENV_BIN
-    ? [source.AGENT_HUB_DIRENV_BIN]
-    : DIRENV_CANDIDATES;
-  for (const bin of candidates) {
-    let stdout;
-    try {
-      stdout = execFileSync(bin, ["export", "json"], {
-        cwd,
-        env: probeEnv,
-        timeout: NAMESPACE_PROBE_TIMEOUT_MS,
-        encoding: "utf8",
-      });
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        continue;
-      }
-      return unresolvedNamespaceEnv(cwd, source, error?.message ?? "direnv probe failed");
-    }
-    if (!stdout || !stdout.trim()) {
-      return unresolvedNamespaceEnv(cwd, source, "direnv returned no environment");
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch {
-      return unresolvedNamespaceEnv(cwd, source, "direnv returned invalid JSON");
-    }
-    const env = clearedNamespaceEnv();
-    for (const key of NAMESPACE_ENV_KEYS) {
-      if (typeof parsed[key] === "string") {
-        env[key] = parsed[key];
-      } else if (Object.hasOwn(parsed, key) && parsed[key] === null) {
-        // direnv uses null to unset a variable inherited from another namespace.
-        // child_process omits undefined env values, so the overlay clears it.
-        env[key] = undefined;
-      }
-    }
-    if (namespaceRequired(source)) {
-      const missing = REQUIRED_NAMESPACE_ENV_KEYS.filter(
-        (key) => typeof env[key] !== "string" || env[key].trim() === "",
-      );
-      if (missing.length > 0) {
-        return unresolvedNamespaceEnv(
-          cwd,
-          source,
-          `missing ${missing.join(", ")}`,
-        );
-      }
-    }
-    return env;
-  }
-  return unresolvedNamespaceEnv(cwd, source, "direnv executable is unavailable");
-}
+// Namespace：agent-hub 不解析、不推导、不清洗。会话轴状态（NS / NS_UNDO / PATH /
+// GH_CONFIG_DIR / BASH_ENV）**整体**转发，runner 置 NS_REBIND=1 并经 zsh 把 agent 起在
+// run 的 cwd：~/.zshenv 的 glue（charter ns-resolve）先按 NS_UNDO 卸掉继承的域（同域也
+// 卸——补齐白名单过滤掉的域变量），再按 cwd 绑定，无域则只卸。整体继承、整体转换
+//（charter E7：选择性清洗致静默残缺）。direnv 时代 hub 自己推导环境的逻辑 2026-08-22 拆除。
 
 export function buildAgentEnv(source = process.env) {
   const env = {};
