@@ -22,7 +22,12 @@ import {
 import { getAdapter } from "./adapters.js";
 import { buildAgentEnv } from "./env.js";
 
+// agent 经 zsh -c 出生：zsh 对任何调用都读 ~/.zshenv（除非 -f / ZDOTDIR 改向），charter 的
+// glue 在那里按 cwd 绑定；exec 让 pid / 进程组 / 信号 / 退出码 / stdin 都是 agent 本体的。
 const BIRTH_SHELL = "/bin/zsh";
+function birthArgv(command) {
+  return [BIRTH_SHELL, "-c", 'exec "$0" "$@"', command.command, ...command.args];
+}
 import {
   acquireSessionLease,
   completeSessionRun,
@@ -73,6 +78,7 @@ async function main() {
     schema_version: 1,
     adapter_id: command.adapter_id,
     argv: command.argv,
+    launcher: birthArgv(command),   // 实际 spawn 的 argv（经 zsh 出生）；argv 是 adapter 视角
     output_format: command.output_format,
     cwd: request.cwd,
     env_keys: currentEnvKeys(agentEnv),
@@ -111,9 +117,8 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     terminateChild(child, childPgid, killTimers);
   };
 
-  // 经 zsh -c 出生：zsh 对任何调用都读 ~/.zshenv（除非 -f / ZDOTDIR 改向），glue 在
-  // 那里按 cwd 绑定；exec 让 pid / 信号 / 退出码都是 agent 本体的。
-  const child = spawn(BIRTH_SHELL, ["-c", 'exec "$0" "$@"', command.command, ...command.args], {
+  const launcher = birthArgv(command);
+  const child = spawn(launcher[0], launcher.slice(1), {
     cwd: request.cwd,
     detached: true,
     env: agentEnv,

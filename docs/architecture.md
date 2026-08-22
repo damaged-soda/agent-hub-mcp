@@ -48,7 +48,7 @@ CLI 参数处理规则：
 
 - MCP 为非交互执行设置必要参数，例如 Claude Code 的 `-p` 和 `--output-format stream-json`。
 - 其他 CLI 行为参数来自 adapter metadata 或 CLI 默认配置。
-- `command.json` 记录实际 argv，便于复现。
+- `command.json` 记录 adapter 视角的 `argv` 与实际 spawn 的 `launcher`（`/bin/zsh -c 'exec "$0" "$@"' …`，agent 经 zsh 出生），便于复现。
 
 ### 统一 metadata 层
 
