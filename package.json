@@ -3,13 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./agent-session-core": "./src/agent-session-core.js",
+    "./agent-session-sources": "./src/agent-session-sources.js",
+    "./agent-session-transcripts": "./src/agent-session-transcripts.js",
+    "./session-server": "./src/session-server.js"
+  },
   "files": [
     "docs",
+    "fixtures",
+    "schemas",
     "scripts/install-skill.js",
     "skills",
-    "src"
+    "src",
+    "ui"
   ],
   "bin": {
+    "agent-session": "src/session-cli.js",
     "agenthub": "src/cli.js",
     "agent-hub-mcp": "src/server.js",
     "agent-hub-mcp-canceller": "src/canceller.js",

@@ -17,7 +17,7 @@ npm install
 npm run install:local
 ```
 
-`npm run install:local` links `agenthub` into the active npm prefix and installs the
+`npm run install:local` links `agenthub` and `agent-session` into the active npm prefix and installs the
 versioned Skill at `${CODEX_HOME:-~/.codex}/skills/agent-hub`.
 
 Run the test suite:
@@ -43,6 +43,28 @@ agenthub agents --cwd /absolute/path/to/project
 Each agent has a normalized `models` array and a `model_discovery` status. Model discovery
 is best-effort: if a CLI cannot return its catalog, the agent remains available and reports
 `model_discovery.status: "unavailable"` with an empty `models` array.
+
+## Inspect native sessions
+
+`agent-session` is a separate read-only CLI for provider-native Claude Code, Codex, and Kimi Code
+sessions, including sessions that were not launched by Agent Hub:
+
+```sh
+agent-session list --limit 20
+agent-session inspect --provider codex --session-id SESSION_ID --limit 200
+agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
+agent-session serve --host 127.0.0.1 --port 8765
+```
+
+`inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
+visible prompts, assistant text, tool arguments, and tool results, but never projects thinking
+blocks. Both commands only read provider-native files; they do not run cleanup, repair state, probe
+models, launch agents, or create another session database.
+
+`serve` hosts the same contract and a dependency-free browser UI. It rejects non-loopback binds,
+foreign browser origins, and mutating HTTP methods; every API and asset response is `no-store` and
+uses a restrictive Content Security Policy. The page starts in `metadata` mode and requires an
+inline second confirmation before requesting transcript bodies.
 
 Dispatch a smoke prompt:
 
@@ -168,6 +190,9 @@ Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cac
 
 ## Docs
 
+- [Agent Session Core](docs/agent-session-core.md) defines the provider-neutral session identity,
+  provenance model, and content projection boundary shared with future inspectors and telemetry
+  consumers.
 - [Architecture](docs/architecture.md) explains run/session boundaries, state files, process groups, and adapter behavior.
 - [Discussion feature design](docs/discussion-design.md) specifies the durable, structured multi-agent discussion workflow and its invariants.
 - [Integration guide](docs/integration-guide.md) documents the CLI and optional MCP surfaces.

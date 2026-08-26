@@ -400,5 +400,8 @@ describe("codex adapter", () => {
     ).toEqual({ agent_id: "codex", native_session_id: THREAD_ID });
     expect(codexSessionRefFromEvent({ type: "turn.started" })).toBeNull();
     expect(codexSessionRefFromEvent({ type: "thread.started", thread_id: " " })).toBeNull();
+    expect(
+      codexSessionRefFromEvent({ type: "thread.started", thread_id: "0199abc" }),
+    ).toBeNull();
   });
 });

@@ -1,0 +1,10 @@
+{"type":"metadata","protocol_version":"1","created_at":1787738400000}
+{"type":"profile.bind","modelAlias":"k3","profileName":"default","thinkingEffort":"high","systemPrompt":"Private Kimi system prompt","environmentDisclosure":{"cwd":"/workspace/example"},"agentsMdPaths":["/workspace/example/AGENTS.md"],"activeToolNames":["Read","Bash"],"disallowedTools":["Delete"],"time":1787738400000}
+{"type":"permission.set_mode","mode":"auto","time":1787738400100}
+{"type":"turn.prompt","input":[{"type":"text","text":"Review this change."}],"time":1787738400200}
+{"type":"llm.tools_snapshot","hash":"tools-1","tools":[{"name":"Bash","description":"Run commands","parameters":{"type":"object"}}],"time":1787738400300}
+{"type":"llm.request","provider":"kimi","model":"k3","modelAlias":"k3","thinkingEffort":"high","time":1787738400400}
+{"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool-1","name":"Bash","args":{"command":"git status --short"}},"time":1787738400500}
+{"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool-1","result":{"content":"clean\n","isError":false}},"time":1787738400600}
+{"type":"context.append_message","message":{"role":"assistant","content":[{"type":"text","text":"Looks good."}],"toolCalls":[]},"time":1787738400700}
+{"type":"usage.record","model":"k3","usage":{"input_tokens":10,"output_tokens":3},"time":1787738400800}
