@@ -76,6 +76,7 @@ agent-session list [--provider ...] [--limit ...]
 agent-session inspect --provider ... --session-id ...
   [--profile metadata|inspect] [--after ...] [--limit ...]
 agent-session serve [--host 127.0.0.1] [--port 8765]
+  [--public-origin https://agent-session.example.ts.net]
 ```
 
 `list` derives identity from provider-native stores. `inspect` uses normalized event sequence
@@ -86,6 +87,8 @@ bodies. Neither command accepts arbitrary source paths or mutates provider/sessi
 does not add a database or background coordinator. Responses are `no-store`, cross-origin browser
 requests are rejected, and the UI does not request the `inspect` profile until an inline explicit
 confirmation.
+An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
+the process still refuses non-literal loopback bind addresses.
 
 Migration order:
 

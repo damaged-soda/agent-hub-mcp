@@ -10,7 +10,8 @@ const assetRoot = path.resolve(
   "ui",
   "session-inspector",
 );
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1"]);
+const LOOPBACK_REQUEST_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const ASSETS = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -20,12 +21,14 @@ const ASSETS = new Map([
 
 export async function startSessionServer(options = {}) {
   const host = options.host ?? "127.0.0.1";
-  if (!LOOPBACK_HOSTS.has(host)) {
+  if (!LOOPBACK_BIND_HOSTS.has(host)) {
     throw new Error("agent-session serve only accepts loopback hosts");
   }
+  const publicOrigin = normalizePublicOrigin(options.publicOrigin);
+  const serverOptions = { ...options, publicOrigin };
   const port = boundedPort(options.port ?? 8765);
   const server = http.createServer((request, response) => {
-    handleRequest(request, response, options).catch((error) => {
+    handleRequest(request, response, serverOptions).catch((error) => {
       sendJson(response, statusForError(error), {
         error: { code: "agent_session_server_error", message: error.message },
       });
@@ -43,12 +46,12 @@ export async function startSessionServer(options = {}) {
 
 async function handleRequest(request, response, options) {
   setSecurityHeaders(response);
-  if (!requestHostAllowed(request.headers.host)) {
+  if (!requestHostAllowed(request.headers.host, options.publicOrigin)) {
     sendJson(response, 403, { error: { code: "host_forbidden", message: "Loopback Host required" } });
     return;
   }
   const origin = request.headers.origin;
-  if (origin && origin !== `http://${request.headers.host}`) {
+  if (!requestOriginAllowed(origin, request.headers.host, options.publicOrigin)) {
     sendJson(response, 403, { error: { code: "origin_forbidden", message: "Same origin required" } });
     return;
   }
@@ -138,14 +141,44 @@ function boundedPort(value) {
   return port;
 }
 
-function requestHostAllowed(value) {
+function requestHostAllowed(value, publicOrigin) {
   if (typeof value !== "string" || !value) return false;
   try {
-    const hostname = new URL(`http://${value}`).hostname.replace(/^\[|\]$/g, "");
-    return LOOPBACK_HOSTS.has(hostname);
+    const requestUrl = new URL(`http://${value}`);
+    const hostname = requestUrl.hostname.replace(/^\[|\]$/g, "");
+    if (LOOPBACK_REQUEST_HOSTS.has(hostname)) return true;
+    return Boolean(publicOrigin && requestUrl.host === new URL(publicOrigin).host);
   } catch {
     return false;
   }
+}
+
+function requestOriginAllowed(origin, host, publicOrigin) {
+  if (!origin) return true;
+  if (origin === `http://${host}`) return true;
+  return Boolean(publicOrigin && origin === publicOrigin);
+}
+
+function normalizePublicOrigin(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") throw new Error("public origin must be a string");
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("public origin must be an absolute HTTPS origin");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error("public origin must be an absolute HTTPS origin without path or credentials");
+  }
+  return parsed.origin;
 }
 
 function statusForError(error) {
