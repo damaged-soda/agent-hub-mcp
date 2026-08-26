@@ -6,6 +6,7 @@ import {
   runCommand,
   runVersionCommand,
 } from "./adapter-utils.js";
+import { sessionRefFromLiveEvent } from "./agent-session-core.js";
 
 export const CODEX_AGENT_ID = "codex";
 export const CODEX_DISCUSSION_CAPABILITIES = Object.freeze({
@@ -297,14 +298,10 @@ export function interpretCodexExit({ code, signal, stdout, stderr }) {
 }
 
 export function codexSessionRefFromEvent(event) {
-  if (
-    event?.type === "thread.started" &&
-    typeof event.thread_id === "string" &&
-    event.thread_id.trim() !== ""
-  ) {
-    return { agent_id: CODEX_AGENT_ID, native_session_id: event.thread_id };
-  }
-  return null;
+  const ref = sessionRefFromLiveEvent(CODEX_AGENT_ID, event);
+  if (!ref) return null;
+  assertCodexSessionId(ref.native_session_id);
+  return ref;
 }
 
 export async function listCodexAgent(options = {}) {

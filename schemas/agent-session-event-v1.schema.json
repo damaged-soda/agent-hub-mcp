@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-hub.local/schemas/agent-session-event-v1.schema.json",
+  "title": "Agent Session Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "provider",
+    "native_session_id",
+    "sequence",
+    "kind",
+    "occurred_at",
+    "data",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "provider": { "enum": ["claude", "codex", "kimi"] },
+    "native_session_id": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 512 },
+        { "type": "null" }
+      ]
+    },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "kind": {
+      "enum": [
+        "session",
+        "context",
+        "message",
+        "turn-start",
+        "turn-end",
+        "tool-call",
+        "tool-result",
+        "error",
+        "rate-limit"
+      ]
+    },
+    "occurred_at": {
+      "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "data": { "type": "object" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "source", "native_type"],
+      "properties": {
+        "stage": {
+          "enum": ["requested", "launched", "observed", "inferred", "unknown"]
+        },
+        "source": {
+          "enum": [
+            "live-stream",
+            "native-transcript",
+            "agenthub-request",
+            "agenthub-command"
+          ]
+        },
+        "native_type": { "type": "string" }
+      }
+    }
+  }
+}

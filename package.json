@@ -3,8 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./agent-session-core": "./src/agent-session-core.js"
+  },
   "files": [
     "docs",
+    "fixtures",
+    "schemas",
     "scripts/install-skill.js",
     "skills",
     "src"

@@ -23,6 +23,7 @@ Key files:
 | `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
 | `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
+| `src/agent-session-core.js` | Provider-neutral session identity, provenance, and pure live-event projections. |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |
@@ -104,4 +105,5 @@ is not rejected: the agent runs namespace-less（charter's `gh` wrapper 点名 t
 | `docs/integration-guide.md` | Implementing a client call flow or understanding request/response shapes. |
 | `docs/operator-runbook.md` | Operating, configuring, or troubleshooting local runs. |
 | `docs/architecture.md` | Changing lifecycle, storage, adapter, or process-group behavior. |
+| `docs/agent-session-core.md` | Changing provider-neutral session/event projections or content profiles. |
 | `docs/discussion-design.md` | Changing the fixed Discussion protocol, schemas, recovery, or safety boundaries. |

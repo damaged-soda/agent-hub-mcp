@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a03dc9-2a7e-76a2-b03d-39e06e22a5b6"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"cmd-1","type":"command_execution","command":"git status --short"}}
+{"type":"item.completed","item":{"id":"cmd-1","type":"command_execution","status":"completed","aggregated_output":"clean\n","exit_code":0}}
+{"type":"item.completed","item":{"id":"edit-1","type":"file_change","status":"completed","changes":[{"path":"src/example.js","kind":"update"}]}}
+{"type":"item.completed","item":{"id":"msg-1","type":"agent_message","text":"Looks good."}}
+{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":3}}

@@ -168,6 +168,9 @@ Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cac
 
 ## Docs
 
+- [Agent Session Core](docs/agent-session-core.md) defines the provider-neutral session identity,
+  provenance model, and content projection boundary shared with future inspectors and telemetry
+  consumers.
 - [Architecture](docs/architecture.md) explains run/session boundaries, state files, process groups, and adapter behavior.
 - [Discussion feature design](docs/discussion-design.md) specifies the durable, structured multi-agent discussion workflow and its invariants.
 - [Integration guide](docs/integration-guide.md) documents the CLI and optional MCP surfaces.

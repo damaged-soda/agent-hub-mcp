@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { summarizeLiveRecord } from "./agent-session-core.js";
 
 export const FINAL_STATUSES = new Set(["completed", "failed", "cancelled", "unknown"]);
 export const ACTIVE_STATUSES = new Set(["queued", "starting", "running"]);
@@ -281,179 +282,12 @@ export async function recentEventSummary(runDir, maxEvents = 5) {
     } catch {
       continue;
     }
-    const summary =
-      summarizeClaudeEvent(event) ?? summarizeCodexEvent(event) ?? summarizeKimiEvent(event);
+    const summary = summarizeLiveRecord(event);
     if (summary) {
       summaries.push(summary);
     }
   }
   return summaries.slice(-maxEvents);
-}
-
-function summarizeClaudeEvent(event) {
-  if (event?.type === "system" && event.subtype === "init") {
-    return {
-      type: "system",
-      message: `Claude session initialized${event.model ? ` with ${event.model}` : ""}.`,
-      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
-    };
-  }
-  if (event?.type === "assistant") {
-    const text = collectContentText(event.message?.content);
-    if (text) {
-      return {
-        type: "assistant",
-        message: truncate(text, 1000),
-        session_id: typeof event.session_id === "string" ? event.session_id : undefined,
-      };
-    }
-    const toolNames = collectToolNames(event.message?.content);
-    if (toolNames.length > 0) {
-      return {
-        type: "assistant",
-        message: `Using tools: ${toolNames.join(", ")}.`,
-        session_id: typeof event.session_id === "string" ? event.session_id : undefined,
-      };
-    }
-  }
-  if (event?.type === "result") {
-    const resultText =
-      typeof event.result === "string" && event.result.trim()
-        ? ` ${truncate(event.result.trim(), 1000)}`
-        : "";
-    return {
-      type: "result",
-      message: `${event.is_error ? "Failed" : "Completed"}${resultText}`,
-      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
-    };
-  }
-  if (event?.type === "rate_limit_event") {
-    const status = event.rate_limit_info?.status;
-    return {
-      type: "rate_limit",
-      message: status ? `Rate limit status: ${status}.` : "Rate limit event.",
-      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
-    };
-  }
-  return null;
-}
-
-function summarizeCodexEvent(event) {
-  if (event?.type === "thread.started" && typeof event.thread_id === "string") {
-    return {
-      type: "system",
-      message: "Codex session started.",
-      session_id: event.thread_id,
-    };
-  }
-  if (event?.type === "item.started" && event.item?.type === "command_execution") {
-    const command = typeof event.item.command === "string" ? event.item.command.trim() : "";
-    return {
-      type: "assistant",
-      message: command ? `Running command: ${truncate(command, 200)}` : "Running a command.",
-    };
-  }
-  if (event?.type === "item.completed") {
-    const item = event.item;
-    if (item?.type === "agent_message" && typeof item.text === "string" && item.text.trim()) {
-      return {
-        type: "assistant",
-        message: truncate(item.text.trim(), 1000),
-      };
-    }
-    if (item?.type === "file_change" && Array.isArray(item.changes) && item.changes.length > 0) {
-      const paths = item.changes
-        .map((change) => change?.path)
-        .filter((value) => typeof value === "string")
-        .slice(0, 3);
-      if (paths.length > 0) {
-        return {
-          type: "assistant",
-          message: `Edited files: ${paths.join(", ")}${item.changes.length > 3 ? ", ..." : ""}`,
-        };
-      }
-    }
-  }
-  if (event?.type === "turn.completed") {
-    return {
-      type: "result",
-      message: "Completed",
-    };
-  }
-  if (event?.type === "turn.failed") {
-    const message =
-      typeof event.error?.message === "string" && event.error.message.trim()
-        ? ` ${truncate(event.error.message.trim(), 1000)}`
-        : "";
-    return {
-      type: "result",
-      message: `Failed${message}`,
-    };
-  }
-  if (event?.type === "error" && typeof event.message === "string" && event.message.trim()) {
-    return {
-      type: "error",
-      message: truncate(event.message.trim(), 1000),
-    };
-  }
-  return null;
-}
-
-function summarizeKimiEvent(event) {
-  if (event?.role === "assistant") {
-    if (typeof event.content === "string" && event.content.trim()) {
-      return {
-        type: "assistant",
-        message: truncate(event.content.trim(), 1000),
-      };
-    }
-    if (Array.isArray(event.tool_calls) && event.tool_calls.length > 0) {
-      const toolNames = event.tool_calls
-        .map((call) => call?.function?.name)
-        .filter((name) => typeof name === "string");
-      if (toolNames.length > 0) {
-        return {
-          type: "assistant",
-          message: `Using tools: ${toolNames.join(", ")}.`,
-        };
-      }
-    }
-  }
-  if (event?.role === "meta" && event.type === "session.resume_hint") {
-    return {
-      type: "result",
-      message: "Completed",
-      session_id: typeof event.session_id === "string" ? event.session_id : undefined,
-    };
-  }
-  return null;
-}
-
-function collectContentText(content) {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .filter((block) => block?.type === "text" && typeof block.text === "string")
-    .map((block) => block.text)
-    .join("")
-    .trim();
-}
-
-function collectToolNames(content) {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content
-    .filter((block) => block?.type === "tool_use" && typeof block.name === "string")
-    .map((block) => block.name);
-}
-
-function truncate(value, maxLength) {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength - 3)}...`;
 }
 
 export function currentEnvKeys(env = process.env) {

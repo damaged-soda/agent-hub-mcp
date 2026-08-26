@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"550e8400-e29b-41d4-a716-446655440000","model":"claude-opus-test","cwd":"/workspace/example","permissionMode":"plan","tools":["Read","Bash"],"agents":["reviewer"],"skills":["agent-hub"],"plugins":[{"name":"feature-dev","source":"marketplace","path":"/private/plugin"}],"mcp_servers":[{"name":"docs","status":"connected","url":"https://secret.invalid"}]}
+{"type":"assistant","session_id":"550e8400-e29b-41d4-a716-446655440000","message":{"content":[{"type":"text","text":"I will inspect it."},{"type":"thinking","thinking":"hidden reasoning"}]}}
+{"type":"assistant","session_id":"550e8400-e29b-41d4-a716-446655440000","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"git status --short"}}]}}
+{"type":"user","session_id":"550e8400-e29b-41d4-a716-446655440000","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"clean\n"}]}}
+{"type":"result","session_id":"550e8400-e29b-41d4-a716-446655440000","is_error":false,"result":"Looks good.","usage":{"input_tokens":12,"output_tokens":4}}
