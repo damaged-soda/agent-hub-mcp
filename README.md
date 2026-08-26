@@ -17,7 +17,7 @@ npm install
 npm run install:local
 ```
 
-`npm run install:local` links `agenthub` into the active npm prefix and installs the
+`npm run install:local` links `agenthub` and `agent-session` into the active npm prefix and installs the
 versioned Skill at `${CODEX_HOME:-~/.codex}/skills/agent-hub`.
 
 Run the test suite:
@@ -43,6 +43,22 @@ agenthub agents --cwd /absolute/path/to/project
 Each agent has a normalized `models` array and a `model_discovery` status. Model discovery
 is best-effort: if a CLI cannot return its catalog, the agent remains available and reports
 `model_discovery.status: "unavailable"` with an empty `models` array.
+
+## Inspect native sessions
+
+`agent-session` is a separate read-only CLI for provider-native Claude Code, Codex, and Kimi Code
+sessions, including sessions that were not launched by Agent Hub:
+
+```sh
+agent-session list --limit 20
+agent-session inspect --provider codex --session-id SESSION_ID --limit 200
+agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
+```
+
+`inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
+visible prompts, assistant text, tool arguments, and tool results, but never projects thinking
+blocks. Both commands only read provider-native files; they do not run cleanup, repair state, probe
+models, launch agents, or create another session database.
 
 Dispatch a smoke prompt:
 

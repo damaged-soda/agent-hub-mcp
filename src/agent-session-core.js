@@ -3,6 +3,18 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/;
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
 export const AGENT_SESSION_PROVIDERS = Object.freeze(["claude", "codex", "kimi"]);
 export const AGENT_SESSION_CONTENT_PROFILES = Object.freeze(["inspect", "metadata"]);
+export const AGENT_SESSION_EVENT_KINDS = Object.freeze([
+  "session",
+  "context",
+  "message",
+  "turn-start",
+  "turn-end",
+  "model-call",
+  "tool-call",
+  "tool-result",
+  "error",
+  "rate-limit",
+]);
 
 const AGENT_ID_TO_PROVIDER = Object.freeze({
   claude: "claude",
@@ -58,13 +70,23 @@ export function parseJsonLines(text) {
 }
 
 export function createContextObservation(input) {
+  if (!input?.context || typeof input.context !== "object" || Array.isArray(input.context)) {
+    throw new Error("context must be an object");
+  }
+  return createSessionEvent({ ...input, kind: "context", data: input.context });
+}
+
+export function createSessionEvent(input) {
   const identity = createSessionIdentity(input?.provider, input?.native_session_id ?? null);
   const stage = input?.stage ?? "unknown";
   const source = input?.source ?? "native-transcript";
   if (!PROVENANCE_STAGES.has(stage)) throw new Error(`Unsupported provenance stage: ${stage}`);
   if (!PROVENANCE_SOURCES.has(source)) throw new Error(`Unsupported provenance source: ${source}`);
-  if (!input?.context || typeof input.context !== "object" || Array.isArray(input.context)) {
-    throw new Error("context must be an object");
+  if (!AGENT_SESSION_EVENT_KINDS.includes(input?.kind)) {
+    throw new Error(`Unsupported agent session event kind: ${input?.kind}`);
+  }
+  if (!input?.data || typeof input.data !== "object" || Array.isArray(input.data)) {
+    throw new Error("data must be an object");
   }
   if (
     input.occurred_at !== undefined &&
@@ -83,9 +105,9 @@ export function createContextObservation(input) {
     schema_version: AGENT_SESSION_SCHEMA_VERSION,
     ...identity,
     sequence: Number.isInteger(input.sequence) && input.sequence >= 0 ? input.sequence : 0,
-    kind: "context",
+    kind: input.kind,
     occurred_at: input.occurred_at ?? null,
-    data: structuredClone(input.context),
+    data: structuredClone(input.data),
     provenance: {
       stage,
       source,
@@ -471,16 +493,25 @@ function projectMetadataEvent(event) {
       permission: optionalString(data.permission),
       effort: optionalString(data.effort),
       sandbox: optionalString(data.sandbox),
+      provider: optionalString(data.provider),
+      profile: optionalString(data.profile),
+      entrypoint: optionalString(data.entrypoint),
+      branch: optionalString(data.branch),
+      commit: optionalString(data.commit),
       network_access:
         typeof data.network_access === "boolean" || typeof data.network_access === "string"
           ? data.network_access
           : undefined,
       add_dirs: stringArray(data.add_dirs),
       tools: names(data.tools),
+      disallowed_tools: names(data.disallowed_tools),
+      tools_hash: optionalString(data.tools_hash),
       agents: names(data.agents),
       skills: names(data.skills),
       plugins: descriptors(data.plugins).map(({ name, source }) => compact({ name, source })),
       mcp_servers: descriptors(data.mcp_servers).map(({ name, status }) => compact({ name, status })),
+      system_instruction_bytes: contentBytes(data.system_instructions),
+      context_summary_bytes: contentBytes(data.context_summary),
     });
     return projected;
   }
@@ -518,6 +549,16 @@ function projectMetadataEvent(event) {
       status: optionalString(data.status),
       usage: safeUsage(data.usage),
       result_bytes: contentBytes(data.result),
+    });
+    return projected;
+  }
+  if (projected.kind === "model-call") {
+    projected.data = compact({
+      status: optionalString(data.status),
+      model: optionalString(data.model),
+      effort: optionalString(data.effort),
+      usage: safeUsage(data.usage),
+      duration_ms: Number.isFinite(data.duration_ms) ? data.duration_ms : undefined,
     });
     return projected;
   }

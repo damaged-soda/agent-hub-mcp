@@ -63,17 +63,30 @@ state.
 `metadata` is a safe common baseline, not a replacement for Cockpit's stricter source projection.
 Cockpit may retain fewer fields and remains responsible for its own fail-loud redaction tests.
 
-## Adapter facets and migration
+## Adapter facets and read API
 
-The first slice normalizes live JSONL records and centralizes session-ref extraction and progress
-summaries already used by Agent Hub. Provider-native historical transcript discovery is a separate
-facet because its inputs and lifecycle differ from non-interactive stdout streams.
+Live JSONL normalization centralizes session-ref extraction and progress summaries already used by
+Agent Hub. The separate transcript facet understands provider-native Claude Code, Codex, and Kimi
+Code evidence without making Agent Hub the session owner.
+
+The daemon-free `agent-session` CLI is the stable read surface:
+
+```text
+agent-session list [--provider ...] [--limit ...]
+agent-session inspect --provider ... --session-id ...
+  [--profile metadata|inspect] [--after ...] [--limit ...]
+```
+
+`list` derives identity from provider-native stores. `inspect` uses normalized event sequence
+cursors, defaults to `metadata`, and requires an explicit `--profile inspect` to return transcript
+bodies. Neither command accepts arbitrary source paths or mutates provider/session state.
 
 Migration order:
 
 1. Keep the schema and provider fixtures stable and versioned.
 2. Move shared live-event semantics behind this module without changing Agent Hub run behavior.
-3. Add transcript discovery/read adapters for the local inspector.
+3. Keep transcript discovery/read adapters side-effect free and use them as the local inspector
+   boundary.
 4. Let Cockpit validate its Python scanner against the same conformance fixtures before deciding
    whether to consume a core-generated metadata JSONL stream.
 

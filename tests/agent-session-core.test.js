@@ -92,10 +92,12 @@ describe("context provenance", () => {
       permission: "read-only",
       add_dirs: [],
       tools: [],
+      disallowed_tools: [],
       agents: [],
       skills: [],
       plugins: [],
       mcp_servers: [],
+      system_instruction_bytes: 12,
     });
     expect(JSON.stringify(metadata)).not.toContain("must not persist");
     expect(() =>

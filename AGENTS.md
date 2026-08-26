@@ -24,6 +24,9 @@ Key files:
 | `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
 | `src/agent-session-core.js` | Provider-neutral session identity, provenance, and pure live-event projections. |
+| `src/agent-session-transcripts.js` | Pure Claude/Codex/Kimi native transcript projections. |
+| `src/agent-session-sources.js` | Side-effect-free native session discovery and cursor reads. |
+| `src/session-cli.js` | Read-only `agent-session list/inspect` command surface. |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |
