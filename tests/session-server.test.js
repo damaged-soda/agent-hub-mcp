@@ -90,10 +90,10 @@ describe("agent session server", () => {
       ).status,
     ).toBe(403);
     await expect(startSessionServer({ host: "0.0.0.0", port: 0, roots })).rejects.toThrow(
-      /loopback/,
+      /literal 127\.0\.0\.1 or ::1/,
     );
     await expect(startSessionServer({ host: "localhost", port: 0, roots })).rejects.toThrow(
-      /loopback/,
+      /literal 127\.0\.0\.1 or ::1/,
     );
   });
 
@@ -113,15 +113,29 @@ describe("agent session server", () => {
       });
       expect(accepted).toBe(200);
       const wrongOrigin = await requestStatus(localUrl, {
-          Host: "agent-session.example.ts.net",
-          Origin: "https://attacker.invalid",
+        Host: "agent-session.example.ts.net",
+        Origin: "https://attacker.invalid",
       });
       expect(wrongOrigin).toBe(403);
+      const downgradedOrigin = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net",
+        Origin: "http://agent-session.example.ts.net",
+      });
+      expect(downgradedOrigin).toBe(403);
+      const nativeClient = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net",
+      });
+      expect(nativeClient).toBe(200);
       const wrongHost = await requestStatus(localUrl, {
         Host: "other.example.ts.net",
         Origin: publicOrigin,
       });
       expect(wrongHost).toBe(403);
+      const wrongPort = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net:8443",
+        Origin: publicOrigin,
+      });
+      expect(wrongPort).toBe(403);
     } finally {
       await new Promise((resolve) => publicServer.close(resolve));
     }
@@ -133,5 +147,24 @@ describe("agent session server", () => {
         publicOrigin: "http://agent-session.example.ts.net/path",
       }),
     ).rejects.toThrow(/HTTPS origin/);
+    const canonicalServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots,
+      publicOrigin: "https://Agent-Session.EXAMPLE.ts.net:443/",
+    });
+    try {
+      expect(
+        await requestStatus(
+          `http://127.0.0.1:${canonicalServer.address().port}/api/sessions?limit=1`,
+          {
+            Host: "agent-session.example.ts.net",
+            Origin: "https://agent-session.example.ts.net",
+          },
+        ),
+      ).toBe(200);
+    } finally {
+      await new Promise((resolve) => canonicalServer.close(resolve));
+    }
   });
 });

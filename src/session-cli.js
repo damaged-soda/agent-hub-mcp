@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { discoverNativeSessions, inspectNativeSession } from "./agent-session-sources.js";
-import { startSessionServer } from "./session-server.js";
+import { normalizePublicOrigin, startSessionServer } from "./session-server.js";
 
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
@@ -40,10 +40,11 @@ async function main(argv = process.argv.slice(2)) {
   }
   if (command === "serve") {
     rejectUnknown(flags, new Set(["host", "port", "public-origin"]));
+    const publicOrigin = normalizePublicOrigin(flags["public-origin"]);
     const server = await startSessionServer({
       host: flags.host,
       port: flags.port,
-      publicOrigin: flags["public-origin"],
+      publicOrigin,
     });
     const address = server.address();
     const host = typeof address === "object" && address ? address.address : flags.host || "127.0.0.1";
@@ -52,7 +53,7 @@ async function main(argv = process.argv.slice(2)) {
       api_version: 1,
       kind: "agent-session-server",
       url: `http://${host.includes(":") ? `[${host}]` : host}:${port}`,
-      public_origin: flags["public-origin"] || undefined,
+      public_origin: publicOrigin || undefined,
     });
     const close = () => server.close(() => process.exit(0));
     process.once("SIGINT", close);

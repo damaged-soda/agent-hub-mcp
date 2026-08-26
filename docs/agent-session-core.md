@@ -89,6 +89,10 @@ requests are rejected, and the UI does not request the `inspect` profile until a
 confirmation.
 An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
 the process still refuses non-literal loopback bind addresses.
+The server does not authenticate API clients, and the UI confirmation is not a server-side content
+gate. Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT
+publish the inspector through Funnel or another public tunnel. Bind addresses are restricted to the
+literal `127.0.0.1` and `::1`; `localhost` is deliberately rejected.
 
 Migration order:
 

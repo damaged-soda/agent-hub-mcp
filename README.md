@@ -70,6 +70,13 @@ inline second confirmation before requesting transcript bodies.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.
 
+The inspector server has no authentication of its own. `--public-origin` is routing validation,
+not authorization: the reverse proxy and its network policy are the only access-control boundary,
+and callers can request `?profile=inspect` directly without the UI confirmation. Use it only behind
+an access-controlled private proxy such as tailnet-only Tailscale Serve; never place it behind
+Tailscale Funnel or another public tunnel. Bind addresses are intentionally limited to the literal
+`127.0.0.1` and `::1`; `localhost` is rejected rather than resolved.
+
 Dispatch a smoke prompt:
 
 ```sh

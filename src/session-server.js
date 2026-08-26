@@ -22,7 +22,7 @@ const ASSETS = new Map([
 export async function startSessionServer(options = {}) {
   const host = options.host ?? "127.0.0.1";
   if (!LOOPBACK_BIND_HOSTS.has(host)) {
-    throw new Error("agent-session serve only accepts loopback hosts");
+    throw new Error("agent-session serve host must be the literal 127.0.0.1 or ::1");
   }
   const publicOrigin = normalizePublicOrigin(options.publicOrigin);
   const serverOptions = { ...options, publicOrigin };
@@ -155,11 +155,21 @@ function requestHostAllowed(value, publicOrigin) {
 
 function requestOriginAllowed(origin, host, publicOrigin) {
   if (!origin) return true;
-  if (origin === `http://${host}`) return true;
+  if (requestHostIsLoopback(host)) return origin === `http://${host}`;
   return Boolean(publicOrigin && origin === publicOrigin);
 }
 
-function normalizePublicOrigin(value) {
+function requestHostIsLoopback(value) {
+  if (typeof value !== "string" || !value) return false;
+  try {
+    const hostname = new URL(`http://${value}`).hostname.replace(/^\[|\]$/g, "");
+    return LOOPBACK_REQUEST_HOSTS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function normalizePublicOrigin(value) {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string") throw new Error("public origin must be a string");
   let parsed;
