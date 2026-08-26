@@ -90,13 +90,6 @@ describe("context provenance", () => {
     expect(metadata[0].data).toEqual({
       model: "sonnet",
       permission: "read-only",
-      add_dirs: [],
-      tools: [],
-      disallowed_tools: [],
-      agents: [],
-      skills: [],
-      plugins: [],
-      mcp_servers: [],
       system_instruction_bytes: 12,
     });
     expect(JSON.stringify(metadata)).not.toContain("must not persist");
@@ -214,6 +207,18 @@ describe("live adapter helpers", () => {
       }).message,
     ).toBe("Codex session started.");
     expect(summarizeLiveRecord({ type: "error", message: "boom" }).message).toBe("boom");
+    expect(
+      summarizeLiveRecord({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "Here is my plan." },
+            { type: "tool_use", id: "a", name: "Read", input: {} },
+            { type: "tool_use", id: "b", name: "Grep", input: {} },
+          ],
+        },
+      }).message,
+    ).toBe("Here is my plan.");
   });
 
   it("projects individual live records as schema-shaped events", () => {

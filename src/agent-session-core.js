@@ -141,7 +141,7 @@ export function summarizeLiveRecord(record, maxLength = 1000) {
     .filter(Boolean);
   if (summaries.length === 0) return null;
   const toolSummaries = summaries.filter((summary) => summary.message?.startsWith("Using tools: "));
-  if (toolSummaries.length > 1) {
+  if (toolSummaries.length > 1 && toolSummaries.length === summaries.length) {
     const tools = toolSummaries.map((summary) => summary.message.slice(13, -1));
     return { ...toolSummaries[0], message: `Using tools: ${tools.join(", ")}.` };
   }
@@ -300,11 +300,11 @@ function projectClaudeRecord(record, base) {
         model: optionalString(record.model),
         cwd: optionalString(record.cwd),
         permission: optionalString(record.permissionMode),
-        tools: names(record.tools),
-        agents: names(record.agents),
-        skills: names(record.skills),
-        plugins: descriptors(record.plugins),
-        mcp_servers: descriptors(record.mcp_servers),
+        tools: optionalNames(record.tools),
+        agents: optionalNames(record.agents),
+        skills: optionalNames(record.skills),
+        plugins: optionalDescriptors(record.plugins),
+        mcp_servers: optionalDescriptors(record.mcp_servers),
       }),
     ];
   }
@@ -502,14 +502,14 @@ function projectMetadataEvent(event) {
         typeof data.network_access === "boolean" || typeof data.network_access === "string"
           ? data.network_access
           : undefined,
-      add_dirs: stringArray(data.add_dirs),
-      tools: names(data.tools),
-      disallowed_tools: names(data.disallowed_tools),
+      add_dirs: optionalStringArray(data.add_dirs),
+      tools: optionalNames(data.tools),
+      disallowed_tools: optionalNames(data.disallowed_tools),
       tools_hash: optionalString(data.tools_hash),
-      agents: names(data.agents),
-      skills: names(data.skills),
-      plugins: descriptors(data.plugins).map(({ name, source }) => compact({ name, source })),
-      mcp_servers: descriptors(data.mcp_servers).map(({ name, status }) => compact({ name, status })),
+      agents: optionalNames(data.agents),
+      skills: optionalNames(data.skills),
+      plugins: optionalDescriptors(data.plugins)?.map(({ name, source }) => compact({ name, source })),
+      mcp_servers: optionalDescriptors(data.mcp_servers)?.map(({ name, status }) => compact({ name, status })),
       system_instruction_bytes: contentBytes(data.system_instructions),
       context_summary_bytes: contentBytes(data.context_summary),
     });
@@ -638,6 +638,10 @@ function names(value) {
     .map((item) => item.trim());
 }
 
+function optionalNames(value) {
+  return Array.isArray(value) ? names(value) : undefined;
+}
+
 function descriptors(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -654,6 +658,10 @@ function descriptors(value) {
           : null,
     )
     .filter((item) => item?.name);
+}
+
+function optionalDescriptors(value) {
+  return Array.isArray(value) ? descriptors(value) : undefined;
 }
 
 function contentText(value) {
@@ -682,6 +690,10 @@ function contentBytes(value) {
 function stringArray(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => typeof item === "string" && item.trim());
+}
+
+function optionalStringArray(value) {
+  return Array.isArray(value) ? stringArray(value) : undefined;
 }
 
 function compact(value) {

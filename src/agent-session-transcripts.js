@@ -111,7 +111,9 @@ function projectClaudeTranscriptRecord(record, provider, nativeSessionId, state)
 function projectCodexTranscriptRecord(record, provider, nativeSessionId, state) {
   const payload = objectValue(record.payload);
   if (record.type === "session_meta") {
-    const tools = flattenCodexTools(payload.dynamic_tools);
+    const tools = Array.isArray(payload.dynamic_tools)
+      ? flattenCodexTools(payload.dynamic_tools)
+      : undefined;
     const git = objectValue(payload.git);
     const events = [];
     pushContext(
@@ -253,9 +255,9 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
         effort: stringValue(record.thinkingEffort),
         system_instructions: stringValue(record.systemPrompt),
         environment_disclosure: record.environmentDisclosure ?? null,
-        instruction_paths: stringArray(record.agentsMdPaths),
-        tools: stringArray(record.activeToolNames),
-        disallowed_tools: stringArray(record.disallowedTools),
+        instruction_paths: optionalStringArray(record.agentsMdPaths),
+        tools: optionalStringArray(record.activeToolNames),
+        disallowed_tools: optionalStringArray(record.disallowedTools),
       }),
       record,
       "kimi/profile.bind",
@@ -282,7 +284,7 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
           description: stringValue(tool?.description),
           schema: tool?.parameters ?? null,
         }))
-      : [];
+      : undefined;
     const events = [];
     pushContext(
       events,
@@ -559,6 +561,10 @@ function stringArray(value) {
   return Array.isArray(value)
     ? value.filter((item) => typeof item === "string" && item.trim())
     : [];
+}
+
+function optionalStringArray(value) {
+  return Array.isArray(value) ? stringArray(value) : undefined;
 }
 
 function numberValue(value) {

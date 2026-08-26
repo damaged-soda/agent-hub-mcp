@@ -300,8 +300,12 @@ export function interpretCodexExit({ code, signal, stdout, stderr }) {
 export function codexSessionRefFromEvent(event) {
   const ref = sessionRefFromLiveEvent(CODEX_AGENT_ID, event);
   if (!ref) return null;
-  assertCodexSessionId(ref.native_session_id);
-  return ref;
+  try {
+    assertCodexSessionId(ref.native_session_id);
+    return ref;
+  } catch {
+    return null;
+  }
 }
 
 export async function listCodexAgent(options = {}) {

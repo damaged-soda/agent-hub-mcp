@@ -85,4 +85,13 @@ describe("native transcript projections", () => {
       }
     }
   });
+
+  it("does not turn missing context arrays into observed empty sets", () => {
+    const events = projectNativeTranscript("codex", fixture("codex-transcript.jsonl"), {
+      profile: "metadata",
+    });
+    const contexts = events.filter((event) => event.kind === "context");
+    expect(contexts[0].data.tools).toEqual(["Bash"]);
+    expect(contexts[1].data).not.toHaveProperty("tools");
+  });
 });
