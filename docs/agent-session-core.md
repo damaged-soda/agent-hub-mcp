@@ -75,11 +75,17 @@ The daemon-free `agent-session` CLI is the stable read surface:
 agent-session list [--provider ...] [--limit ...]
 agent-session inspect --provider ... --session-id ...
   [--profile metadata|inspect] [--after ...] [--limit ...]
+agent-session serve [--host 127.0.0.1] [--port 8765]
 ```
 
 `list` derives identity from provider-native stores. `inspect` uses normalized event sequence
 cursors, defaults to `metadata`, and requires an explicit `--profile inspect` to return transcript
 bodies. Neither command accepts arbitrary source paths or mutates provider/session state.
+
+`serve` exposes the same list/inspect contract and the static inspector UI on loopback only. It
+does not add a database or background coordinator. Responses are `no-store`, cross-origin browser
+requests are rejected, and the UI does not request the `inspect` profile until an inline explicit
+confirmation.
 
 Migration order:
 

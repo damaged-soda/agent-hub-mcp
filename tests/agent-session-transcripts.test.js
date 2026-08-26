@@ -37,6 +37,11 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "tool-call").data.arguments).toEqual({
       command: "git status --short",
     });
+    expect(events.find((event) => event.kind === "model-call").data).toMatchObject({
+      model: "gpt-test",
+      effort: "high",
+      usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 },
+    });
   });
 
   it("projects Kimi profile/tool snapshots and transcript events", () => {

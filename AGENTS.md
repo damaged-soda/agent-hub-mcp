@@ -26,7 +26,9 @@ Key files:
 | `src/agent-session-core.js` | Provider-neutral session identity, provenance, and pure live-event projections. |
 | `src/agent-session-transcripts.js` | Pure Claude/Codex/Kimi native transcript projections. |
 | `src/agent-session-sources.js` | Side-effect-free native session discovery and cursor reads. |
-| `src/session-cli.js` | Read-only `agent-session list/inspect` command surface. |
+| `src/session-cli.js` | Read-only `agent-session list/inspect/serve` command surface. |
+| `src/session-server.js` | Loopback-only no-store API and static inspector server. |
+| `ui/session-inspector/` | Dependency-free native session inspector UI. |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |

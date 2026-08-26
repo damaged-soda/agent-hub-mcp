@@ -53,12 +53,18 @@ sessions, including sessions that were not launched by Agent Hub:
 agent-session list --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID --limit 200
 agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
+agent-session serve --host 127.0.0.1 --port 8765
 ```
 
 `inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
 visible prompts, assistant text, tool arguments, and tool results, but never projects thinking
 blocks. Both commands only read provider-native files; they do not run cleanup, repair state, probe
 models, launch agents, or create another session database.
+
+`serve` hosts the same contract and a dependency-free browser UI. It rejects non-loopback binds,
+foreign browser origins, and mutating HTTP methods; every API and asset response is `no-store` and
+uses a restrictive Content Security Policy. The page starts in `metadata` mode and requires an
+inline second confirmation before requesting transcript bodies.
 
 Dispatch a smoke prompt:
 

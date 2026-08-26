@@ -1,0 +1,481 @@
+(() => {
+  "use strict";
+
+  const state = {
+    sessions: [],
+    selected: null,
+    profile: "metadata",
+    events: [],
+    nextSequence: 0,
+    hasMore: false,
+    loading: false,
+    revealPending: false,
+  };
+
+  const listRoot = document.querySelector("#session-list");
+  const countRoot = document.querySelector("#session-count");
+  const detailRoot = document.querySelector("#detail");
+  const providerFilter = document.querySelector("#provider-filter");
+  const searchInput = document.querySelector("#session-search");
+  const refreshButton = document.querySelector("#refresh-button");
+
+  providerFilter.addEventListener("change", renderSessionList);
+  searchInput.addEventListener("input", renderSessionList);
+  refreshButton.addEventListener("click", refreshSessions);
+
+  refreshSessions();
+
+  async function refreshSessions() {
+    refreshButton.disabled = true;
+    refreshButton.textContent = "刷新中";
+    try {
+      const response = await fetch("/api/sessions?limit=200", { cache: "no-store" });
+      const document = await response.json();
+      if (!response.ok || document.kind !== "agent-session-list") {
+        throw new Error(document.error?.message || "会话目录不可用");
+      }
+      state.sessions = Array.isArray(document.data) ? document.data : [];
+      renderSessionList();
+    } catch (error) {
+      listRoot.replaceChildren(errorBox(error.message));
+      countRoot.textContent = "加载失败";
+    } finally {
+      refreshButton.disabled = false;
+      refreshButton.textContent = "刷新";
+    }
+  }
+
+  function renderSessionList() {
+    const provider = providerFilter.value;
+    const query = searchInput.value.trim().toLowerCase();
+    const sessions = state.sessions.filter((session) => {
+      if (provider && session.provider !== provider) return false;
+      if (!query) return true;
+      return [session.provider, session.native_session_id, session.cwd, session.source_kind]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+    countRoot.textContent = `${sessions.length} / ${state.sessions.length} sessions`;
+    listRoot.replaceChildren();
+    if (sessions.length === 0) {
+      listRoot.append(el("div", "unknown", "没有匹配的会话"));
+      return;
+    }
+    for (const session of sessions) {
+      const button = el("button", "session-row");
+      button.type = "button";
+      button.classList.toggle("is-selected", sameSession(session, state.selected));
+      const top = el("span", "session-row-top");
+      top.append(
+        el("span", "session-provider", session.provider),
+        el("span", "session-age", relativeTime(session.updated_at)),
+      );
+      const cwd = el("span", "session-cwd", session.cwd || "cwd unknown");
+      cwd.title = session.cwd || "";
+      const id = el("span", "session-id", session.native_session_id);
+      id.title = session.native_session_id;
+      button.append(top, cwd, id);
+      button.addEventListener("click", () => selectSession(session));
+      listRoot.append(button);
+    }
+  }
+
+  async function selectSession(session) {
+    state.selected = session;
+    state.profile = "metadata";
+    state.events = [];
+    state.nextSequence = 0;
+    state.hasMore = false;
+    state.revealPending = false;
+    renderSessionList();
+    renderDetailLoading();
+    await loadEvents(false);
+  }
+
+  async function loadEvents(append) {
+    if (!state.selected || state.loading) return;
+    state.loading = true;
+    const after = append ? state.nextSequence : 0;
+    try {
+      const session = state.selected;
+      const url = new URL(
+        `/api/sessions/${encodeURIComponent(session.provider)}/${encodeURIComponent(
+          session.native_session_id,
+        )}`,
+        window.location.origin,
+      );
+      url.searchParams.set("profile", state.profile);
+      url.searchParams.set("after", String(after));
+      url.searchParams.set("limit", "200");
+      const response = await fetch(url, { cache: "no-store" });
+      const document = await response.json();
+      if (!response.ok || document.kind !== "agent-session-inspect") {
+        throw new Error(document.error?.message || "会话读取失败");
+      }
+      state.events = append ? state.events.concat(document.data || []) : document.data || [];
+      state.nextSequence = document.next_sequence ?? after;
+      state.hasMore = document.has_more === true;
+      state.selected = document.session || session;
+      renderDetail();
+      renderSessionList();
+    } catch (error) {
+      detailRoot.replaceChildren(errorBox(error.message));
+    } finally {
+      state.loading = false;
+    }
+  }
+
+  function renderDetailLoading() {
+    detailRoot.replaceChildren(el("div", "empty-state", "正在读取会话证据…"));
+  }
+
+  function renderDetail() {
+    const session = state.selected;
+    detailRoot.replaceChildren();
+
+    const header = el("div", "detail-header");
+    const heading = el("div", "detail-heading");
+    heading.append(
+      el("div", "eyebrow", `${session.provider} · ${session.source_kind}`),
+      el("h2", "", session.cwd ? basename(session.cwd) : session.native_session_id),
+      el("div", "detail-path", session.source_path),
+    );
+    const actions = el("div", "detail-actions");
+    const contentButton = el(
+      "button",
+      state.profile === "inspect" ? "button-warning" : "button-primary",
+      state.profile === "inspect" ? "隐藏正文" : "显示 prompt / 参数",
+    );
+    contentButton.type = "button";
+    contentButton.addEventListener("click", toggleContent);
+    contentButton.disabled = state.revealPending;
+    const reloadButton = el("button", "", "重读");
+    reloadButton.type = "button";
+    reloadButton.addEventListener("click", () => loadEvents(false));
+    actions.append(contentButton, reloadButton);
+    header.append(heading, actions);
+    detailRoot.append(header);
+
+    const notice = el("div", "content-notice");
+    if (state.profile === "inspect") {
+      notice.append(
+        el("strong", "", "正文已显示。"),
+        document.createTextNode(
+          " 当前响应可能包含 system/developer/user prompt、assistant 文本、tool arguments 与结果；服务端禁止缓存，但请勿截图或转发敏感内容。",
+        ),
+      );
+    } else {
+      notice.append(
+        el("strong", "", "默认脱正文。"),
+        document.createTextNode(
+          " 当前只读取结构、字节数、模型、权限、工具名与 provenance；需要时再显式显示正文。",
+        ),
+      );
+    }
+    detailRoot.append(notice);
+
+    if (state.revealPending) {
+      const confirm = el("div", "reveal-confirm");
+      const copy = el("div", "");
+      copy.append(
+        el("strong", "", "确认读取当前会话正文？"),
+        el(
+          "p",
+          "",
+          "这会从 provider 原生文件读取 prompt、assistant 文本、tool arguments 和结果；不会写入数据库或缓存。",
+        ),
+      );
+      const confirmActions = el("div", "reveal-confirm-actions");
+      const accept = el("button", "button-warning", "确认显示");
+      accept.type = "button";
+      accept.addEventListener("click", revealContent);
+      const cancel = el("button", "", "取消");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => {
+        state.revealPending = false;
+        renderDetail();
+      });
+      confirmActions.append(accept, cancel);
+      confirm.append(copy, confirmActions);
+      detailRoot.append(confirm);
+    }
+
+    const context = latestContext(state.events);
+    const usedTools = distinct(
+      state.events.filter((event) => event.kind === "tool-call").map((event) => event.data?.tool_name),
+    );
+    const availableTools = toolNames(context.values.tools);
+    const messages = state.events.filter((event) => event.kind === "message");
+    const calls = state.events.filter((event) => event.kind === "model-call");
+    const summary = el("div", "summary-grid");
+    summary.append(
+      summaryCard("events", `${state.events.length}${state.hasMore ? "+" : ""}`),
+      summaryCard("messages", String(messages.length)),
+      summaryCard("tools used", String(usedTools.length)),
+      summaryCard("model calls", String(calls.length)),
+    );
+    detailRoot.append(summary);
+
+    detailRoot.append(renderEvidence(context));
+    detailRoot.append(renderTools(availableTools, usedTools));
+    detailRoot.append(renderTimeline());
+  }
+
+  function renderEvidence(context) {
+    const section = el("section", "section");
+    const heading = sectionHeading(
+      "上下文证据",
+      "requested / launched 将在有编排关联时出现；原生会话至少保留 observed / unknown",
+    );
+    const table = el("div", "evidence-table");
+    const definitions = [
+      ["model", "模型"],
+      ["effort", "推理强度"],
+      ["permission", "权限模式"],
+      ["sandbox", "沙箱"],
+      ["entrypoint", "入口"],
+      ["branch", "分支"],
+      ["system_instructions", "system instructions"],
+      ["system_instruction_bytes", "system prompt 大小"],
+      ["context_summary_bytes", "context summary 大小"],
+    ];
+    for (const [key, label] of definitions) {
+      const evidence = context.evidence.get(key);
+      let value = context.values[key];
+      if (key.endsWith("_bytes") && Number.isFinite(value)) value = `${formatNumber(value)} bytes`;
+      table.append(evidenceRow(label, value, evidence));
+    }
+    section.append(heading, table);
+    return section;
+  }
+
+  function renderTools(available, used) {
+    const section = el("section", "section");
+    const panels = el("div", "tool-groups");
+    panels.append(toolPanel("观测到的可用工具", available), toolPanel("本段实际调用", used));
+    section.append(sectionHeading("工具面", "available 与 used 分开，不用实际调用反推可用清单"), panels);
+    return section;
+  }
+
+  function renderTimeline() {
+    const section = el("section", "section");
+    const timeline = el("div", "timeline");
+    if (state.events.length === 0) {
+      timeline.append(el("div", "unknown", "当前游标范围没有可投影事件"));
+    }
+    for (const event of state.events) timeline.append(eventCard(event));
+    section.append(sectionHeading("会话时间线", `profile=${state.profile}`), timeline);
+    if (state.hasMore) {
+      const button = el("button", "load-more", "加载更多");
+      button.type = "button";
+      button.addEventListener("click", () => loadEvents(true));
+      section.append(button);
+    }
+    return section;
+  }
+
+  function eventCard(event) {
+    const card = el("article", `event-card is-${event.kind}`);
+    const head = el("div", "event-head");
+    const title = el("div", "event-title");
+    title.append(
+      el("span", "event-badge", event.kind),
+      el("strong", "", eventTitle(event)),
+    );
+    head.append(title, el("span", "event-sequence", `#${event.sequence}`));
+    card.append(head);
+    const body = eventBody(event);
+    if (body) card.append(el("div", "event-body", body));
+    const json = eventJson(event);
+    if (json) card.append(el("pre", "event-json", json));
+    card.append(
+      el(
+        "div",
+        "event-meta",
+        `${event.provenance?.stage || "unknown"} · ${event.provenance?.native_type || "unknown"}${
+          event.occurred_at ? ` · ${formatTime(event.occurred_at)}` : ""
+        }`,
+      ),
+    );
+    return card;
+  }
+
+  function eventTitle(event) {
+    if (event.kind === "message") return event.data?.role || "message";
+    if (event.kind === "tool-call") return event.data?.tool_name || "tool";
+    if (event.kind === "tool-result") return `result · ${event.data?.status || "unknown"}`;
+    if (event.kind === "model-call") return event.data?.model || "model call";
+    if (event.kind === "context") return "context snapshot";
+    return event.data?.status || event.kind;
+  }
+
+  function eventBody(event) {
+    if (event.kind === "message") {
+      return event.data?.content || hiddenText(event.data?.content_bytes, "message body");
+    }
+    if (event.kind === "tool-call") {
+      return event.data?.arguments === undefined
+        ? hiddenText(event.data?.argument_bytes, "tool arguments")
+        : "";
+    }
+    if (event.kind === "tool-result") {
+      return event.data?.output === undefined
+        ? hiddenText(event.data?.output_bytes, "tool output")
+        : "";
+    }
+    if (event.kind === "turn-end") {
+      return event.data?.result === undefined
+        ? hiddenText(event.data?.result_bytes, "result body")
+        : event.data?.result || "";
+    }
+    return "";
+  }
+
+  function eventJson(event) {
+    let value = null;
+    if (event.kind === "context") value = event.data;
+    if (event.kind === "tool-call" && event.data?.arguments !== undefined) value = event.data.arguments;
+    if (event.kind === "tool-result" && event.data?.output !== undefined) value = event.data.output;
+    if (event.kind === "model-call") value = event.data;
+    if (!value) return "";
+    return JSON.stringify(value, null, 2);
+  }
+
+  async function toggleContent() {
+    if (state.profile === "metadata") {
+      state.revealPending = true;
+      renderDetail();
+      return;
+    } else {
+      state.profile = "metadata";
+    }
+    state.revealPending = false;
+    state.events = [];
+    state.nextSequence = 0;
+    state.hasMore = false;
+    renderDetailLoading();
+    await loadEvents(false);
+  }
+
+  async function revealContent() {
+    state.profile = "inspect";
+    state.revealPending = false;
+    state.events = [];
+    state.nextSequence = 0;
+    state.hasMore = false;
+    renderDetailLoading();
+    await loadEvents(false);
+  }
+
+  function latestContext(events) {
+    const values = {};
+    const evidence = new Map();
+    for (const event of events.filter((item) => item.kind === "context")) {
+      for (const [key, value] of Object.entries(event.data || {})) {
+        values[key] = value;
+        evidence.set(key, event);
+      }
+    }
+    return { values, evidence };
+  }
+
+  function evidenceRow(label, value, event) {
+    const row = el("div", "evidence-row");
+    const stage = event?.provenance?.stage || "unknown";
+    row.append(
+      el("div", "evidence-key", label),
+      el("div", "evidence-value", value === undefined || value === null || value === "" ? "未知" : displayValue(value)),
+      el("div", "evidence-stage", ""),
+      el("div", "evidence-source", event?.provenance?.native_type || "no evidence"),
+    );
+    row.children[2].append(el("span", `stage-badge stage-${stage}`, stage));
+    return row;
+  }
+
+  function toolPanel(title, tools) {
+    const panel = el("article", "tool-panel");
+    panel.append(el("h4", "", title));
+    const list = el("div", "tool-list");
+    if (tools.length === 0) list.append(el("span", "unknown", "未知 / 未观测到"));
+    else for (const tool of tools) list.append(el("span", "tool-chip", tool));
+    panel.append(list);
+    return panel;
+  }
+
+  function sectionHeading(title, caption) {
+    const heading = el("div", "section-heading");
+    heading.append(el("h3", "", title), el("span", "section-caption", caption));
+    return heading;
+  }
+
+  function summaryCard(label, value) {
+    const card = el("article", "summary-card");
+    card.append(el("div", "summary-label", label), el("div", "summary-value", value));
+    return card;
+  }
+
+  function toolNames(value) {
+    if (!Array.isArray(value)) return [];
+    return distinct(
+      value.map((item) => (typeof item === "string" ? item : item?.name)).filter(Boolean),
+    );
+  }
+
+  function displayValue(value) {
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return JSON.stringify(value);
+  }
+
+  function hiddenText(bytes, label) {
+    return Number.isFinite(bytes) ? `${label} hidden · ${formatNumber(bytes)} bytes` : "";
+  }
+
+  function sameSession(left, right) {
+    return Boolean(
+      left &&
+        right &&
+        left.provider === right.provider &&
+        left.native_session_id === right.native_session_id,
+    );
+  }
+
+  function distinct(values) {
+    return [...new Set(values.filter(Boolean))];
+  }
+
+  function relativeTime(value) {
+    const timestamp = Date.parse(value || "");
+    if (!Number.isFinite(timestamp)) return "time unknown";
+    const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+    return `${Math.round(seconds / 86400)}d`;
+  }
+
+  function formatTime(value) {
+    const timestamp = Date.parse(value || "");
+    return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : String(value);
+  }
+
+  function formatNumber(value) {
+    return new Intl.NumberFormat().format(value);
+  }
+
+  function basename(value) {
+    const parts = String(value).split(/[\\/]/).filter(Boolean);
+    return parts.at(-1) || value;
+  }
+
+  function errorBox(message) {
+    return el("div", "error-box", message);
+  }
+
+  function el(tag, className = "", text = "") {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== "") node.textContent = text;
+    return node;
+  }
+})();

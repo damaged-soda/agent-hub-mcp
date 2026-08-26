@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { discoverNativeSessions, inspectNativeSession } from "./agent-session-sources.js";
+import { startSessionServer } from "./session-server.js";
 
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
@@ -35,6 +36,25 @@ async function main(argv = process.argv.slice(2)) {
         limit: flags.limit,
       }),
     );
+    return;
+  }
+  if (command === "serve") {
+    rejectUnknown(flags, new Set(["host", "port"]));
+    const server = await startSessionServer({
+      host: flags.host,
+      port: flags.port,
+    });
+    const address = server.address();
+    const host = typeof address === "object" && address ? address.address : flags.host || "127.0.0.1";
+    const port = typeof address === "object" && address ? address.port : flags.port || 8765;
+    printJson({
+      api_version: 1,
+      kind: "agent-session-server",
+      url: `http://${host.includes(":") ? `[${host}]` : host}:${port}`,
+    });
+    const close = () => server.close(() => process.exit(0));
+    process.once("SIGINT", close);
+    process.once("SIGTERM", close);
     return;
   }
   throw new Error(`Unknown agent-session command: ${command}`);
@@ -76,6 +96,7 @@ Usage:
   agent-session list [--provider claude|codex|kimi] [--limit N]
   agent-session inspect --provider ID --session-id ID
       [--profile metadata|inspect] [--after N] [--limit N]
+  agent-session serve [--host 127.0.0.1] [--port 8765]
 
 The default inspect profile is metadata. Use --profile inspect explicitly to include
 visible prompts, assistant text, tool arguments, and tool results. Thinking blocks are

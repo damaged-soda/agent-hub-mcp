@@ -27,7 +27,6 @@ export function createTranscriptProjector(providerValue, nativeSessionId) {
   const provider = canonicalProvider(providerValue);
   const state = {
     context: {},
-    lastContext: null,
     seenToolEvents: new Set(),
   };
   return {
@@ -141,7 +140,13 @@ function projectCodexTranscriptRecord(record, provider, nativeSessionId, state) 
       model: stringValue(payload.model),
       effort: stringValue(payload.effort),
       permission: stringValue(payload.approval_policy),
-      sandbox: payload.sandbox_policy ?? payload.file_system_sandbox_policy ?? null,
+      sandbox: stringValue(
+        payload.sandbox_policy?.mode ??
+          payload.sandbox_policy?.type ??
+          payload.file_system_sandbox_policy?.mode ??
+          payload.file_system_sandbox_policy?.type,
+      ),
+      sandbox_policy: payload.sandbox_policy ?? payload.file_system_sandbox_policy ?? null,
       collaboration_mode: payload.collaboration_mode ?? null,
       context_summary: stringValue(payload.summary),
     });
@@ -169,6 +174,25 @@ function projectCodexTranscriptRecord(record, provider, nativeSessionId, state) 
       return [
         transcriptEvent(provider, nativeSessionId, "turn-end", { status: "interrupted" }, record),
       ];
+    }
+    if (type === "token_count") {
+      const usage = safeUsage(payload.info?.last_token_usage ?? payload.info?.total_token_usage);
+      return usage
+        ? [
+            transcriptEvent(
+              provider,
+              nativeSessionId,
+              "model-call",
+              {
+                status: "usage",
+                model: stringValue(state.context.model),
+                effort: stringValue(state.context.effort),
+                usage,
+              },
+              record,
+            ),
+          ]
+        : [];
     }
     return [];
   }
@@ -395,12 +419,13 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
 
 function pushContext(events, state, provider, nativeSessionId, context, record, nativeType) {
   if (!context || Object.keys(context).length === 0) return;
-  const merged = { ...state.context, ...context };
-  const fingerprint = JSON.stringify(merged);
-  if (fingerprint === state.lastContext) return;
-  state.context = merged;
-  state.lastContext = fingerprint;
-  events.push(contextObservation(provider, nativeSessionId, merged, record, nativeType));
+  const delta = {};
+  for (const [key, value] of Object.entries(context)) {
+    if (JSON.stringify(state.context[key]) !== JSON.stringify(value)) delta[key] = value;
+  }
+  if (Object.keys(delta).length === 0) return;
+  state.context = { ...state.context, ...delta };
+  events.push(contextObservation(provider, nativeSessionId, delta, record, nativeType));
 }
 
 function contextObservation(provider, nativeSessionId, context, record, nativeType) {
