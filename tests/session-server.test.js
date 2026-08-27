@@ -74,6 +74,9 @@ describe("agent session server", () => {
     expect(app).toContain("LONG_TEXT_PREVIEW_CHARACTERS = 140");
     expect(app).toContain("collapsible-text-preview");
     expect(app).toContain("collapsible-text-action-expanded");
+    expect(app).toContain('addEventListener("dblclick"');
+    expect(app).toContain("navigator.clipboard?.writeText");
+    expect(app).toContain("双击复制引用");
     expect(app).not.toContain("details.open = true");
     expect(app).not.toContain("window.confirm");
   });
@@ -95,7 +98,35 @@ describe("agent session server", () => {
     const inspect = await fetch(
       `${baseUrl}/api/sessions/codex/${CODEX_ID}?profile=inspect&limit=100`,
     );
-    expect(await inspect.text()).toContain("Private developer prompt");
+    const inspectDocument = await inspect.json();
+    expect(JSON.stringify(inspectDocument)).toContain("Private developer prompt");
+    expect(inspectDocument.data.every((event) => event.event_ref?.startsWith(
+      `agenthub://session/v1/codex/${CODEX_ID}/event/e1_`,
+    ))).toBe(true);
+  });
+
+  it("returns conflict instead of choosing between divergent sources for one session", async () => {
+    const archivedDir = path.join(roots.codex, "archived_sessions");
+    const archivedPath = path.join(archivedDir, `rollout-copy-${CODEX_ID}.jsonl`);
+    const source = await fsp.readFile(path.join(
+      roots.codex,
+      "sessions",
+      "2026",
+      "08",
+      "26",
+      `rollout-2026-08-26T10-00-00-${CODEX_ID}.jsonl`,
+    ), "utf8");
+    await fsp.mkdir(archivedDir, { recursive: true });
+    await fsp.writeFile(archivedPath, source.replace("/workspace/example", "/workspace/conflict"));
+    try {
+      const response = await fetch(
+        `${baseUrl}/api/sessions/codex/${CODEX_ID}?profile=inspect&limit=100`,
+      );
+      expect(response.status).toBe(409);
+      expect((await response.json()).error.message).toMatch(/Ambiguous.*conflicting/);
+    } finally {
+      await fsp.rm(archivedDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects mutating methods, foreign origins, and non-loopback binds", async () => {

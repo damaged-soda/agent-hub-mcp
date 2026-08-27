@@ -246,6 +246,7 @@ function routePath(pathname, basePath) {
 function statusForError(error) {
   const message = String(error?.message ?? "");
   if (/^Unknown .*native_session_id/.test(message)) return 404;
+  if (/^Ambiguous .*native_session_id/.test(message)) return 409;
   if (/must be|Unsupported|requires|Unknown flag|Unexpected/.test(message)) return 400;
   return 500;
 }

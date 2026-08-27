@@ -4,6 +4,7 @@
   const LONG_TEXT_CHARACTERS = 320;
   const LONG_TEXT_LINES = 6;
   const LONG_TEXT_PREVIEW_CHARACTERS = 140;
+  const copyFeedbackTimers = new WeakMap();
 
   const state = {
     sessions: [],
@@ -274,7 +275,26 @@
       el("span", "event-badge", event.kind),
       el("strong", "", eventTitle(event)),
     );
-    head.append(title, el("span", "event-sequence", `#${event.sequence}`));
+    const sequence = el("span", "event-sequence", `#${event.sequence}`);
+    sequence.setAttribute("role", "status");
+    sequence.setAttribute("aria-live", "polite");
+    if (event.event_ref) {
+      title.classList.add("is-copyable");
+      title.tabIndex = 0;
+      title.setAttribute("role", "button");
+      title.setAttribute(
+        "aria-label",
+        `${eventTitle(event)} · 复制 ${event.kind} #${event.sequence} 引用`,
+      );
+      title.title = "双击复制引用";
+      title.addEventListener("dblclick", () => copyEventReference(event, sequence));
+      title.addEventListener("keydown", (keyboardEvent) => {
+        if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+        keyboardEvent.preventDefault();
+        copyEventReference(event, sequence);
+      });
+    }
+    head.append(title, sequence);
     card.append(head);
     const body = eventBody(event);
     if (body) card.append(textBlock("event-body", body, `${event.sequence}:body`));
@@ -351,11 +371,42 @@
 
   function eventJson(event) {
     return JSON.stringify({
+      event_ref: event.event_ref || null,
       data: event.data || {},
       provenance: event.provenance || {},
       occurred_at: event.occurred_at ?? null,
       truncation: event.truncation || null,
     }, null, 2);
+  }
+
+  async function copyEventReference(event, sequence) {
+    const original = `#${event.sequence}`;
+    try {
+      await writeClipboard(event.event_ref);
+      sequence.textContent = "已复制";
+    } catch {
+      sequence.textContent = "复制失败";
+    }
+    window.clearTimeout(copyFeedbackTimers.get(sequence));
+    copyFeedbackTimers.set(sequence, window.setTimeout(() => {
+      sequence.textContent = original;
+      copyFeedbackTimers.delete(sequence);
+    }, 1200));
+  }
+
+  async function writeClipboard(value) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const textarea = el("textarea", "sr-only");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    if (!copied) throw new Error("Clipboard write failed");
   }
 
   async function toggleContent() {

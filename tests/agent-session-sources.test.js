@@ -4,7 +4,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverNativeSessions, inspectNativeSession } from "../src/agent-session-sources.js";
+import {
+  discoverNativeSessions,
+  inspectNativeSession,
+  resolveNativeSessionEventReference,
+} from "../src/agent-session-sources.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = path.join(repoRoot, "fixtures", "agent-session");
@@ -179,6 +183,81 @@ describe("native session sources", () => {
     );
     expect(JSON.stringify(inspect)).toContain("Private developer prompt");
     expect(inspect.next_sequence).toBe(inspect.data.at(-1).sequence + 1);
+    expect(inspect.data.every((event) => event.event_ref?.startsWith(
+      `agenthub://session/v1/codex/${CODEX_ID}/event/e1_`,
+    ))).toBe(true);
+    expect(metadata.data.map((event) => event.event_ref)).toEqual(
+      inspect.data.map((event) => event.event_ref),
+    );
+  });
+
+  it("resolves one copied event into a bounded diagnostic package", async () => {
+    const inspect = await inspectNativeSession(
+      {
+        provider: "codex",
+        native_session_id: CODEX_ID,
+        profile: "inspect",
+        limit: 100,
+      },
+      { roots },
+    );
+    const call = inspect.data.find((event) => event.kind === "tool-call");
+    const resolved = await resolveNativeSessionEventReference(call.event_ref, { roots });
+    expect(resolved).toMatchObject({
+      api_version: 1,
+      kind: "agent-session-event-resolution",
+      reference: call.event_ref,
+      reference_protocol: { version: 1, event_id_version: 1 },
+      session: { provider: "codex", native_session_id: CODEX_ID },
+      data: {
+        target: { event_ref: call.event_ref, kind: "tool-call" },
+        effective_context: { kind: "context" },
+      },
+    });
+    expect(resolved.data.target.data.arguments).toEqual({ command: "git status --short" });
+    expect(resolved.data.related).toEqual([
+      expect.objectContaining({
+        kind: "tool-result",
+        data: expect.objectContaining({ tool_call_id: call.data.tool_call_id }),
+      }),
+    ]);
+    expect(resolved.data.effective_context.data.cwd).toBe("/workspace/example");
+
+    const stale = call.event_ref.replace(/.$/, call.event_ref.endsWith("a") ? "b" : "a");
+    await expect(resolveNativeSessionEventReference(stale, { roots })).rejects.toThrow(/Stale/);
+  });
+
+  it("accepts identical session copies but rejects conflicting transcript sources", async () => {
+    const archivedPath = path.join(
+      roots.codex,
+      "archived_sessions",
+      `rollout-copy-${CODEX_ID}.jsonl`,
+    );
+    await fsp.mkdir(path.dirname(archivedPath), { recursive: true });
+    await fsp.copyFile(sourcePaths.codexPath, archivedPath);
+
+    const inspect = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+    expect(inspect.session).toMatchObject({
+      source_kind: "codex-rollout",
+      duplicate_source_count: 2,
+    });
+    const reference = inspect.data.find((event) => event.kind === "tool-call").event_ref;
+
+    const divergent = (await fsp.readFile(archivedPath, "utf8")).replace(
+      "/workspace/example",
+      "/workspace/conflict",
+    );
+    await fsp.writeFile(archivedPath, divergent);
+    await expect(inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    )).rejects.toThrow(/Ambiguous.*conflicting transcript sources/);
+    await expect(resolveNativeSessionEventReference(reference, { roots })).rejects.toThrow(
+      /Ambiguous.*conflicting transcript sources/,
+    );
   });
 
   it("supports bounded cursor reads and leaves provider files untouched", async () => {
@@ -205,7 +284,7 @@ describe("native session sources", () => {
     expect(after.map((item) => item.size)).toEqual(before.map((item) => item.size));
   });
 
-  it("exposes the same contract through a side-effect-free CLI", () => {
+  it("exposes list and event resolution through a side-effect-free CLI", async () => {
     const result = spawnSync(
       process.execPath,
       [path.join(repoRoot, "src", "session-cli.js"), "list", "--limit", "10"],
@@ -223,5 +302,29 @@ describe("native session sources", () => {
     const document = JSON.parse(result.stdout);
     expect(document.kind).toBe("agent-session-list");
     expect(document.data).toHaveLength(3);
+
+    const inspect = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+    const reference = inspect.data.find((event) => event.kind === "tool-call").event_ref;
+    const resolved = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "src", "session-cli.js"), "resolve", reference],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAUDE_CONFIG_DIR: roots.claude,
+          CODEX_HOME: roots.codex,
+          KIMI_CODE_HOME: roots.kimi,
+        },
+      },
+    );
+    expect(resolved.status, resolved.stderr).toBe(0);
+    expect(JSON.parse(resolved.stdout)).toMatchObject({
+      kind: "agent-session-event-resolution",
+      reference,
+    });
   });
 });

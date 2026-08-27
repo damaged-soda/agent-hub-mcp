@@ -5,6 +5,7 @@ import {
   parseJsonLines,
   projectSessionEvents,
 } from "./agent-session-core.js";
+import { createNativeEventReferenceProjector } from "./agent-session-references.js";
 import { extractResourceAccesses } from "./agent-session-resources.js";
 
 export function projectNativeTranscript(providerValue, input, options = {}) {
@@ -13,10 +14,12 @@ export function projectNativeTranscript(providerValue, input, options = {}) {
   const nativeSessionId =
     options.native_session_id ?? inferTranscriptSessionId(provider, records) ?? null;
   const projector = createTranscriptProjector(provider, nativeSessionId);
+  const referenceProjector = createNativeEventReferenceProjector(provider, nativeSessionId);
   let sequence = Number.isInteger(options.start_sequence) ? options.start_sequence : 0;
   const events = [];
   for (const record of records) {
-    for (const event of projector.project(record)) {
+    const referenced = referenceProjector.attach(record, projector.project(record));
+    for (const event of referenced) {
       events.push({ ...event, sequence });
       sequence += 1;
     }

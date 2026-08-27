@@ -34,6 +34,7 @@ The v1 event schema is `schemas/agent-session-event-v1.schema.json`. Every event
 - `native_session_id`: provider id, or `null` until a provider reports one;
 - `sequence`, `kind`, `occurred_at`, and provider-neutral `data`;
 - provenance with a stage and source;
+- an optional `event_ref` on provider-native transcript events;
 - optional `truncation` metadata on bounded inspect events.
 
 Within schema v1, new optional fields are additive. Consumers validating a vendored schema must
@@ -79,6 +80,52 @@ The access stays on the exact tool-call sequence so an inspector can audit which
 Shell write commands are intentionally outside this bounded adapter set; writes are currently
 reported only from structured write tools and patch headers.
 
+## Stable event references
+
+Every event read through a provider-native session source with an established session id carries one
+canonical, self-contained reference:
+
+```text
+agenthub://session/v1/<provider>/<native-session-id>/event/e1_<digest>
+```
+
+`provider` is canonical `claude|codex|kimi`; the session id is percent-encoded; `digest` is a
+43-character unpadded base64url SHA-256. The URI has no machine, file path, query, fragment, or
+registry key. Machine placement remains resolver configuration, while session identity remains
+`provider + native_session_id`.
+
+The frozen `e1` digest binds length-prefixed protocol version, provider, native session id, a
+SHA-256 of the provider record's recursively key-sorted JSON form, that exact record body's
+zero-based duplicate occurrence, the event selector, and that selector's zero-based occurrence
+inside the record. A tool event selector uses `kind + tool_call_id`; a message uses `kind + role`;
+other events use `kind`. Event `sequence`, transcript path, archive location, UI layout, content
+profile, and machine identity are deliberately excluded.
+
+The reference identifies the target native record/event, not the projection's accumulated context.
+Resolution recomputes the current event projection and effective context from the transcript; if a
+preceding context record changes while the target record remains byte-equivalent, the target
+reference remains valid but derived fields such as absolute `resource_accesses` may change. Pure
+`projectNativeTranscript` calls with no inferable or supplied session id omit `event_ref`.
+
+Consequences:
+
+- appending records, moving a transcript into an archive, changing inspect/metadata profile, or
+  adding a different projected event does not change an existing reference;
+- changing the referenced native evidence changes the digest, so resolution reports a stale
+  reference instead of drifting to a similar event;
+- identical provider records are disambiguated by their occurrence among identical bodies without
+  making unrelated record order part of identity.
+
+`agent-session resolve REF` is the parsing and resolution authority. It returns bounded `inspect`
+projections for the exact target, the paired tool call/result when available, and the effective
+context at that event. It may scan the native transcript but never persists a reference registry or
+body cache. The bundled Skill must pass the opaque reference to this command rather than reimplement
+URI parsing.
+
+When one provider/session id has multiple native source files, readers hash every candidate. Exact
+copies resolve through a deterministic active-first/path order and report `duplicate_source_count`;
+conflicting bodies are ambiguous and fail loud instead of selecting by mtime or directory order.
+
 ## Adapter facets and read API
 
 Live JSONL normalization centralizes session-ref extraction and progress summaries already used by
@@ -91,6 +138,7 @@ The daemon-free `agent-session` CLI is the stable read surface:
 agent-session list [--provider ...] [--limit ...]
 agent-session inspect --provider ... --session-id ...
   [--profile metadata|inspect] [--after ...] [--limit ...]
+agent-session resolve 'agenthub://session/v1/...'
 agent-session serve [--host 127.0.0.1] [--port 8765]
   [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
   [--frame-origin https://preview.example.ts.net:24443]
@@ -102,8 +150,10 @@ explicitly marked custom); it never derives a fallback from prompt text or launc
 Kimi's automatic title mirrors the prompt and is deliberately excluded. A native title can still
 summarize a sensitive topic, so the list remains part of the private inspector surface.
 `inspect` uses normalized event sequence cursors, defaults to `metadata`, and requires an explicit
-`--profile inspect` to return transcript bodies. Neither command accepts arbitrary source paths or
-mutates provider/session state.
+`--profile inspect` to return transcript bodies. None of these commands accepts arbitrary source
+paths or mutates provider/session state.
+`resolve` accepts exactly one canonical event reference and always returns the bounded diagnostic
+package described above. The reference grants no network access and contains no transcript body.
 
 `serve` exposes the same list/inspect contract and the static inspector UI on loopback only. It
 does not add a database or background coordinator. Responses are `no-store`, cross-origin browser

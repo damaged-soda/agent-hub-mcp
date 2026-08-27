@@ -41,6 +41,10 @@
     "occurred_at": {
       "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
     },
+    "event_ref": {
+      "type": "string",
+      "pattern": "^agenthub://session/v1/(claude|codex|kimi)/[A-Za-z0-9][A-Za-z0-9._%:-]{0,1535}/event/e1_[A-Za-z0-9_-]{43}$"
+    },
     "data": { "type": "object" },
     "truncation": {
       "type": "object",
