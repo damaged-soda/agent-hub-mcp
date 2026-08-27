@@ -96,9 +96,13 @@ agent-session serve [--host 127.0.0.1] [--port 8765]
   [--frame-origin https://preview.example.ts.net:24443]
 ```
 
-`list` derives identity from provider-native stores. `inspect` uses normalized event sequence
-cursors, defaults to `metadata`, and requires an explicit `--profile inspect` to return transcript
-bodies. Neither command accepts arbitrary source paths or mutates provider/session state.
+`list` derives identity from provider-native stores. Its nullable, bounded `title` is copied only
+from provider-written title metadata (Codex's session index, Claude's `ai-title`, or Kimi's session
+state); it never derives a fallback from prompt text or launches a model call. A native title can
+still summarize a sensitive topic, so the list remains part of the private inspector surface.
+`inspect` uses normalized event sequence cursors, defaults to `metadata`, and requires an explicit
+`--profile inspect` to return transcript bodies. Neither command accepts arbitrary source paths or
+mutates provider/session state.
 
 `serve` exposes the same list/inspect contract and the static inspector UI on loopback only. It
 does not add a database or background coordinator. Responses are `no-store`, cross-origin browser

@@ -1,6 +1,9 @@
 (() => {
   "use strict";
 
+  const LONG_TEXT_CHARACTERS = 320;
+  const LONG_TEXT_LINES = 6;
+
   const state = {
     sessions: [],
     selected: null,
@@ -55,7 +58,7 @@
     const sessions = state.sessions.filter((session) => {
       if (provider && session.provider !== provider) return false;
       if (!query) return true;
-      return [session.provider, session.native_session_id, session.cwd, session.source_kind]
+      return [session.title, session.provider, session.native_session_id, session.cwd, session.source_kind]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     });
@@ -74,11 +77,13 @@
         el("span", "session-provider", session.provider),
         el("span", "session-age", relativeTime(session.updated_at)),
       );
+      const title = el("span", "session-title", sessionDisplayTitle(session));
+      title.title = sessionDisplayTitle(session);
       const cwd = el("span", "session-cwd", session.cwd || "cwd unknown");
       cwd.title = session.cwd || "";
       const id = el("span", "session-id", session.native_session_id);
       id.title = session.native_session_id;
-      button.append(top, cwd, id);
+      button.append(top, title, cwd, id);
       button.addEventListener("click", () => selectSession(session));
       listRoot.append(button);
     }
@@ -141,7 +146,8 @@
     const heading = el("div", "detail-heading");
     heading.append(
       el("div", "eyebrow", `${session.provider} · ${session.source_kind}`),
-      el("h2", "", session.cwd ? basename(session.cwd) : session.native_session_id),
+      el("h2", "", sessionDisplayTitle(session)),
+      el("div", "detail-cwd", session.cwd || "cwd unknown"),
       el("div", "detail-path", session.source_path),
     );
     const actions = el("div", "detail-actions");
@@ -269,7 +275,7 @@
     head.append(title, el("span", "event-sequence", `#${event.sequence}`));
     card.append(head);
     const body = eventBody(event);
-    if (body) card.append(el("div", "event-body", body));
+    if (body) card.append(textBlock("event-body", body, "展开正文"));
     const resources = Array.isArray(event.data?.resource_accesses) ? event.data.resource_accesses : [];
     if (resources.length > 0) {
       const resourceList = el("div", "event-resources");
@@ -287,8 +293,13 @@
     const json = eventJson(event);
     if (json) {
       const details = el("details", "event-details");
-      details.open = true;
-      details.append(el("summary", "event-details-summary", "完整事件明细"));
+      details.append(
+        el(
+          "summary",
+          "event-details-summary",
+          `完整事件明细 · ${formatNumber(textLength(json))} 字符`,
+        ),
+      );
       details.append(el("pre", "event-json", json));
       card.append(details);
     }
@@ -368,9 +379,10 @@
   function evidenceRow(label, value, event) {
     const row = el("div", "evidence-row");
     const stage = event?.provenance?.stage || "unknown";
+    const displayed = value === undefined || value === null || value === "" ? "未知" : displayValue(value);
     row.append(
       el("div", "evidence-key", label),
-      el("div", "evidence-value", value === undefined || value === null || value === "" ? "未知" : displayValue(value)),
+      textBlock("evidence-value", displayed, "展开长文本"),
       el("div", "evidence-stage", ""),
       el("div", "evidence-source", event?.provenance?.native_type || "no evidence"),
     );
@@ -413,6 +425,29 @@
     return JSON.stringify(value);
   }
 
+  function textBlock(className, value, summary) {
+    const text = String(value);
+    if (!isLongText(text)) return el("div", className, text);
+    const details = el("details", `${className} collapsible-text`);
+    details.append(
+      el(
+        "summary",
+        "collapsible-text-summary",
+        `${summary} · ${formatNumber(textLength(text))} 字符`,
+      ),
+      el("div", "collapsible-text-body", text),
+    );
+    return details;
+  }
+
+  function isLongText(value) {
+    return textLength(value) > LONG_TEXT_CHARACTERS || value.split(/\r?\n/).length > LONG_TEXT_LINES;
+  }
+
+  function textLength(value) {
+    return Array.from(value).length;
+  }
+
   function hiddenText(bytes, label) {
     return Number.isFinite(bytes) ? `${label} hidden · ${formatNumber(bytes)} bytes` : "";
   }
@@ -452,6 +487,10 @@
   function basename(value) {
     const parts = String(value).split(/[\\/]/).filter(Boolean);
     return parts.at(-1) || value;
+  }
+
+  function sessionDisplayTitle(session) {
+    return session.title || (session.cwd ? basename(session.cwd) : session.native_session_id);
   }
 
   function errorBox(message) {

@@ -45,9 +45,17 @@ beforeEach(async () => {
     fsp.copyFile(path.join(fixtureRoot, "kimi-transcript.jsonl"), kimiPath),
     fsp.writeFile(
       path.join(kimiDir, "state.json"),
-      JSON.stringify({ id: KIMI_ID, cwd: "/workspace/example" }),
+      JSON.stringify({ id: KIMI_ID, cwd: "/workspace/example", title: "检查 Kimi 会话" }),
     ),
   ]);
+  await fsp.appendFile(
+    claudePath,
+    `\n${JSON.stringify({ type: "ai-title", sessionId: CLAUDE_ID, aiTitle: "检查 Claude 会话" })}\n`,
+  );
+  await fsp.writeFile(
+    path.join(roots.codex, "session_index.jsonl"),
+    `${JSON.stringify({ id: CODEX_ID, thread_name: "检查 Codex 会话" })}\n`,
+  );
   await fsp.writeFile(
     path.join(roots.kimi, "session_index.jsonl"),
     `${JSON.stringify({ sessionId: KIMI_ID, sessionDir: kimiDir, workDir: "/workspace/example" })}\n`,
@@ -65,16 +73,19 @@ describe("native session sources", () => {
     expect(sessions.map((item) => item.provider).sort()).toEqual(["claude", "codex", "kimi"]);
     expect(sessions.find((item) => item.provider === "claude")).toMatchObject({
       native_session_id: CLAUDE_ID,
+      title: "检查 Claude 会话",
       cwd: "/workspace/example",
       source_kind: "claude-transcript",
     });
     expect(sessions.find((item) => item.provider === "codex")).toMatchObject({
       native_session_id: CODEX_ID,
+      title: "检查 Codex 会话",
       cwd: "/workspace/example",
       source_kind: "codex-rollout",
     });
     expect(sessions.find((item) => item.provider === "kimi")).toMatchObject({
       native_session_id: KIMI_ID,
+      title: "检查 Kimi 会话",
       cwd: "/workspace/example",
       source_kind: "kimi-wire",
     });
