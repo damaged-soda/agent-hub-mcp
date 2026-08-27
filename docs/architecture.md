@@ -618,9 +618,11 @@ Kimi stdout 处理规则：
 
 ## Discussion 编排
 
-Discussion 只存在于 streamable HTTP daemon；stdio 保持原有 run tools 并逐步下线。HTTP
+Discussion 的主入口是 `agenthub discussion`：dispatch 创建 detached worker，后续
+query/wait/cancel 可从本机持久化记录按需恢复，不要求常驻 daemon。可选 streamable HTTP
 进程启动一个 process-wide `DiscussionManager`，每次 MCP HTTP 请求仍可创建短生命周期
-server/transport，但共享同一个 manager。这样讨论不会依附某次请求或 client 连接。
+server/transport，但共享同一个 manager。MCP stdio 只保留普通 run tools。两种 coordinator
+都不会让讨论依附某次请求或 client 连接。
 
 固定协议包含五个阶段：独立 memo、主持人验证计划、参与者 challenge、参与者 revision、
 主持人 DecisionRecord。调用方在材料准备时确定完整 roster；主持人只主持，不邀请成员。

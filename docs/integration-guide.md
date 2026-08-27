@@ -20,6 +20,43 @@ agenthub wait RUN_ID
 
 Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.
 
+## Provider-native Session Inspector
+
+`agent-session` is a separate read-only CLI. It discovers Claude Code, Codex, and Kimi Code native
+sessions whether or not Agent Hub launched them:
+
+```sh
+agent-session list --limit 20
+agent-session inspect --provider codex --session-id SESSION_ID
+agent-session inspect --provider codex --session-id SESSION_ID \
+  --profile inspect --after 0 --limit 200
+agent-session serve --host 127.0.0.1 --port 8765
+```
+
+`inspect` defaults to the content-free `metadata` profile. `--profile inspect` explicitly includes
+visible prompts, assistant text, tool arguments, and tool results; thinking blocks are never
+projected. Discovery and reads are side-effect free: they do not mutate provider stores, repair
+state, launch agents, or create another session database.
+
+The loopback server exposes the same contract:
+
+```text
+GET /api/sessions?provider=&limit=
+GET /api/sessions/<provider>/<native-session-id>?profile=&after=&limit=
+```
+
+Every API and asset response is `no-store`; mutating methods, foreign origins, and non-literal
+loopback binds are rejected. For a trusted private reverse proxy, pass one exact HTTPS origin:
+
+```sh
+agent-session serve --host 127.0.0.1 --port 8765 \
+  --public-origin https://agent-session.example.ts.net
+```
+
+`--public-origin` only validates Host/Origin routing. The server has no authentication and the UI
+confirmation is not a server-side content gate, so authorization must be enforced by the private
+proxy/network policy. Never publish this endpoint through Funnel or another public tunnel.
+
 ## Optional MCP Server Registration
 
 ```json
