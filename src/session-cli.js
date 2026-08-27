@@ -7,7 +7,6 @@ import {
 } from "./agent-session-sources.js";
 import {
   normalizeBasePath,
-  normalizeFrameOrigin,
   normalizePublicOrigin,
   startSessionServer,
 } from "./session-server.js";
@@ -55,17 +54,15 @@ async function main(argv = process.argv.slice(2)) {
   if (command === "serve") {
     rejectUnknown(
       flags,
-      new Set(["host", "port", "public-origin", "base-path", "frame-origin"]),
+      new Set(["host", "port", "public-origin", "base-path"]),
     );
     const publicOrigin = normalizePublicOrigin(flags["public-origin"]);
     const basePath = normalizeBasePath(flags["base-path"]);
-    const frameOrigin = normalizeFrameOrigin(flags["frame-origin"]);
     const server = await startSessionServer({
       host: flags.host,
       port: flags.port,
       publicOrigin,
       basePath,
-      frameOrigin,
     });
     const address = server.address();
     const host = typeof address === "object" && address ? address.address : flags.host || "127.0.0.1";
@@ -78,7 +75,6 @@ async function main(argv = process.argv.slice(2)) {
       }`,
       public_origin: publicOrigin || undefined,
       base_path: basePath || undefined,
-      frame_origin: frameOrigin || undefined,
     });
     const close = () => server.close(() => process.exit(0));
     process.once("SIGINT", close);
@@ -127,7 +123,9 @@ Usage:
   agent-session resolve 'agenthub://session/v1/PROVIDER/SESSION_ID[/event/EVENT_ID]'
   agent-session serve [--host 127.0.0.1] [--port 8765]
       [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
-      [--frame-origin https://preview.example.ts.net:24443]
+
+HTTP endpoints: GET /, GET /healthz, GET /api/sessions,
+and GET /api/sessions/PROVIDER/SESSION_ID (all below --base-path when set).
 
 The default inspect profile is metadata. Resolve identifies one copied session reference;
 event references additionally return a bounded inspect diagnostic. Use --profile inspect

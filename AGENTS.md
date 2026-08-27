@@ -29,8 +29,7 @@ Key files:
 | `src/agent-session-resources.js` | Pure high-confidence file/Skill access extraction for session tool steps. |
 | `src/agent-session-sources.js` | Side-effect-free native session discovery and cursor reads. |
 | `src/session-cli.js` | Read-only `agent-session list/inspect/serve` command surface. |
-| `src/session-server.js` | Loopback-only no-store API and static inspector server. |
-| `ui/session-inspector/` | Dependency-free native session inspector UI. |
+| `src/session-server.js` | Loopback-only no-store session API for Cockpit. |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |

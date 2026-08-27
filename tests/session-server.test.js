@@ -56,37 +56,35 @@ afterAll(async () => {
 });
 
 describe("agent session server", () => {
-  it("serves a no-store same-origin UI with a restrictive CSP", async () => {
+  it("serves a versioned no-store API discovery document without UI assets", async () => {
     const response = await fetch(baseUrl);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
-    const index = await response.text();
-    expect(index).toContain("Agent 会话检查器");
-    expect(index).toContain('id="copy-status"');
-    const app = await (await fetch(`${baseUrl}/app.js`)).text();
-    expect(app).toContain('profile: "inspect"');
-    expect(app).toContain("resource-chip");
-    expect(app).toContain("完整事件明细");
-    expect(app).toContain("sessionDisplayTitle");
-    expect(app).toContain("collapsible-text");
-    expect(app).toContain("LONG_TEXT_PREVIEW_CHARACTERS");
-    expect(app).toContain("LONG_TEXT_PREVIEW_CHARACTERS = 140");
-    expect(app).toContain("collapsible-text-preview");
-    expect(app).toContain("collapsible-text-action-expanded");
-    expect(app).toContain('addEventListener("dblclick"');
-    expect(app).toContain("navigator.clipboard?.writeText");
-    expect(app).toContain("双击复制引用");
-    expect(app).toContain("session.session_ref");
-    expect(app).toContain("copy-feedback");
-    expect(app).toContain("copyStatus.textContent");
-    expect(app).not.toContain("sequence.textContent");
-    expect(app).not.toContain("details.open = true");
-    expect(app).not.toContain("window.confirm");
-    const style = await (await fetch(`${baseUrl}/style.css`)).text();
-    expect(style).toContain(".copy-reference-target { cursor: pointer;");
+    expect(await response.json()).toEqual({
+      api_version: 1,
+      kind: "agent-session-service",
+      data: {
+        read_only: true,
+        profiles: ["metadata", "inspect"],
+        endpoints: {
+          health: "healthz",
+          sessions: "api/sessions",
+          inspect: "api/sessions/{provider}/{native_session_id}",
+        },
+      },
+    });
+    const health = await fetch(`${baseUrl}/healthz`);
+    expect(await health.json()).toEqual({
+      api_version: 1,
+      kind: "agent-session-health",
+      status: "ok",
+    });
+    expect((await fetch(`${baseUrl}/index.html`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/app.js`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/style.css`)).status).toBe(404);
   });
 
   it("keeps API bodies hidden until inspect is explicit", async () => {
@@ -200,6 +198,11 @@ describe("agent session server", () => {
         Host: "agent-session.example.ts.net",
       });
       expect(nativeClient).toBe(200);
+      const publicHealthUrl =
+        `http://127.0.0.1:${publicServer.address().port}/healthz`;
+      expect(await requestStatus(publicHealthUrl, {
+        Host: "agent-session.example.ts.net",
+      })).toBe(200);
       const wrongHost = await requestStatus(localUrl, {
         Host: "other.example.ts.net",
         Origin: publicOrigin,
@@ -242,7 +245,7 @@ describe("agent session server", () => {
     }
   });
 
-  it("serves the complete inspector under one canonical base path", async () => {
+  it("serves the complete API under one canonical base path", async () => {
     const publicOrigin = "https://cockpit.example.ts.net";
     const prefixedServer = await startSessionServer({
       host: "127.0.0.1",
@@ -263,20 +266,24 @@ describe("agent session server", () => {
 
       const index = await fetch(`${prefixedBase}/agent-session/`);
       expect(index.status).toBe(200);
-      expect(index.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
-      expect(index.headers.get("x-frame-options")).toBe("SAMEORIGIN");
-      expect(await index.text()).toContain('src="./app.js"');
-      expect((await fetch(`${prefixedBase}/agent-session/index.html`)).status).toBe(200);
-      expect((await fetch(`${prefixedBase}/agent-session/style.css`)).status).toBe(200);
+      expect(index.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+      expect(index.headers.get("x-frame-options")).toBe("DENY");
+      expect(await index.json()).toMatchObject({
+        api_version: 1,
+        kind: "agent-session-service",
+      });
+      const health = await fetch(`${prefixedBase}/agent-session/healthz`);
+      expect(await health.json()).toMatchObject({
+        api_version: 1,
+        kind: "agent-session-health",
+        status: "ok",
+      });
+      expect((await fetch(`${prefixedBase}/agent-session/index.html`)).status).toBe(404);
+      expect((await fetch(`${prefixedBase}/agent-session/style.css`)).status).toBe(404);
       const head = await fetch(`${prefixedBase}/agent-session/`, { method: "HEAD" });
       expect(head.status).toBe(200);
       expect(await head.text()).toBe("");
-      const app = await fetch(`${prefixedBase}/agent-session/app.js`);
-      expect(app.status).toBe(200);
-      const appText = await app.text();
-      expect(appText).toContain("document.baseURI");
-      expect(appText).not.toContain('fetch("/api/');
-      expect(appText).not.toContain("window.location.origin");
+      expect((await fetch(`${prefixedBase}/agent-session/app.js`)).status).toBe(404);
 
       const list = await fetch(`${prefixedBase}/agent-session/api/sessions?limit=1`);
       expect(list.status).toBe(200);
@@ -298,47 +305,4 @@ describe("agent session server", () => {
     ).rejects.toThrow(/base path/);
   });
 
-  it("admits one exact HTTPS frame origin only for a prefixed inspector", async () => {
-    const frameOrigin = "https://preview.example.ts.net:24443";
-    const framedServer = await startSessionServer({
-      host: "127.0.0.1",
-      port: 0,
-      roots,
-      basePath: "/agent-session",
-      frameOrigin,
-    });
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:${framedServer.address().port}/agent-session/`,
-      );
-      expect(response.headers.get("content-security-policy")).toContain(
-        `frame-ancestors ${frameOrigin}`,
-      );
-      expect(response.headers.get("x-frame-options")).toBeNull();
-    } finally {
-      await new Promise((resolve) => framedServer.close(resolve));
-    }
-
-    await expect(
-      startSessionServer({ host: "127.0.0.1", port: 0, roots, frameOrigin }),
-    ).rejects.toThrow(/requires a non-root base path/);
-    await expect(
-      startSessionServer({
-        host: "127.0.0.1",
-        port: 0,
-        roots,
-        basePath: "/agent-session",
-        frameOrigin: "http://preview.example.ts.net",
-      }),
-    ).rejects.toThrow(/frame origin/);
-    await expect(
-      startSessionServer({
-        host: "127.0.0.1",
-        port: 0,
-        roots,
-        basePath: "/agent-session",
-        frameOrigin: "https://*.example.ts.net",
-      }),
-    ).rejects.toThrow(/frame origin/);
-  });
 });
