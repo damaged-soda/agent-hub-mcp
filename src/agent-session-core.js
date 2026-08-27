@@ -330,7 +330,7 @@ function projectClaudeRecord(record, base) {
         const argumentsValue = block.input ?? null;
         events.push(
           makeEvent(base, "tool-call", {
-            ...toolCallData(block.name, argumentsValue),
+            ...toolCallData(block.name, argumentsValue, record.cwd),
             tool_call_id: optionalString(block.id),
           }),
         );
@@ -396,7 +396,7 @@ function projectCodexRecord(record, base) {
       const argumentsValue = { command: optionalString(item.command) };
       return [
         makeEvent(base, "tool-call", {
-          ...toolCallData("shell", argumentsValue),
+          ...toolCallData("shell", argumentsValue, record.cwd),
           tool_call_id: optionalString(item.id),
         }),
       ];
@@ -415,7 +415,7 @@ function projectCodexRecord(record, base) {
     const argumentsValue = { changes, files: changes.map((change) => change?.path).filter(Boolean) };
     return [
       makeEvent(base, "tool-call", {
-        ...toolCallData("file_change", argumentsValue),
+        ...toolCallData("file_change", argumentsValue, record.cwd),
         tool_call_id: optionalString(item.id),
         target_paths: changes.map((change) => change?.path).filter((path) => typeof path === "string"),
         arguments: { changes },
@@ -426,7 +426,7 @@ function projectCodexRecord(record, base) {
   if (item.type === "mcp_tool_call") {
     const toolName = [item.server, item.tool].filter((part) => typeof part === "string").join("/");
     const common = {
-      ...toolCallData(toolName || "mcp", item.arguments ?? null),
+      ...toolCallData(toolName || "mcp", item.arguments ?? null, record.cwd),
       tool_call_id: optionalString(item.id),
       tool_kind: "mcp",
     };
@@ -466,7 +466,7 @@ function projectKimiRecord(record, base) {
       const argumentsValue = parseArguments(call.function?.arguments);
       events.push(
         makeEvent(base, "tool-call", {
-          ...toolCallData(name, argumentsValue),
+          ...toolCallData(name, argumentsValue, record.cwd),
           tool_call_id: optionalString(call.id),
         }),
       );
@@ -721,10 +721,11 @@ function classifyTool(name) {
   return "other";
 }
 
-function toolCallData(name, argumentsValue) {
+function toolCallData(name, argumentsValue, cwd = null) {
   const resourceAccesses = extractResourceAccesses({
     tool_name: name,
     arguments: argumentsValue,
+    cwd,
   });
   return compact({
     tool_name: name,
@@ -752,6 +753,7 @@ function boundInspectEvent(event) {
   const projected = structuredClone(event);
   const fields = [];
   projected.data = boundInspectValue(projected.data, "data", 0, fields);
+  projected.provenance = boundInspectValue(projected.provenance, "provenance", 0, fields);
   if (fields.length > 0) projected.truncation = { truncated: true, fields };
   return projected;
 }

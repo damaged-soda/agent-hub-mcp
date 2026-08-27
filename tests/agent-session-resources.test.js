@@ -38,6 +38,8 @@ describe("agent session resource access projection", () => {
           coverage: "exact",
         },
       ]);
+    const doubleEscaped = String.raw`const patch = "*** Begin Patch\\n*** Add File: src/double.js\\n+SECRET\\n*** End Patch";`;
+    expect(patchTargetPaths(doubleEscaped)).toEqual(["src/double.js"]);
   });
 
   it("extracts explicit file operands from bounded read command adapters", () => {
@@ -85,5 +87,40 @@ describe("agent session resource access projection", () => {
       .toEqual([]);
     expect(shellReadPaths("cat input.md > output.md; cat < stdin.md"))
       .toEqual(["input.md", "stdin.md"]);
+    expect(shellReadPaths("cat ~/.ssh/config; rg pattern src/; rg pattern src/lib"))
+      .toEqual([]);
+    expect(explicitSkillPaths("path LIKE '%/SKILL.md'"))
+      .toEqual([]);
+  });
+
+  it("drops fd, heredoc, and multiline command noise while preserving explicit reads", () => {
+    const command = `cat > /tmp/deploy.env <<'EOF'
+DEPLOY_TOKEN=ghp_secret_value
+cat confidential.md
+EOF
+cat README.md 2>/dev/null
+head -3 docs/b.md 2>&1
+cat <<< hello
+sed -i '' 's/a/b/' config.md
+rg -e pattern src/file.js
+rg pattern src/
+rm -rf build
+cd nested
+cat child.md`;
+    expect(shellReadPaths(command, "/repo")).toEqual([
+      "/repo/README.md",
+      "/repo/docs/b.md",
+      "/repo/config.md",
+      "/repo/src/file.js",
+      "/repo/nested/child.md",
+    ]);
+  });
+
+  it("prefers the explicit tool workdir over session cwd", () => {
+    expect(extractResourceAccesses({
+      tool_name: "exec_command",
+      arguments: { cmd: "cat local.md", workdir: "/work/other" },
+      cwd: "/work/session",
+    }).map((item) => item.path)).toEqual(["/work/other/local.md"]);
   });
 });

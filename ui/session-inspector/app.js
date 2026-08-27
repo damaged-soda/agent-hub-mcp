@@ -9,6 +9,7 @@
     nextSequence: 0,
     hasMore: false,
     loading: false,
+    loadToken: 0,
   };
 
   const listRoot = document.querySelector("#session-list");
@@ -95,7 +96,8 @@
   }
 
   async function loadEvents(append) {
-    if (!state.selected || state.loading) return;
+    if (!state.selected) return;
+    const loadToken = ++state.loadToken;
     state.loading = true;
     const after = append ? state.nextSequence : 0;
     try {
@@ -109,6 +111,7 @@
       url.searchParams.set("limit", "200");
       const response = await fetch(url, { cache: "no-store" });
       const document = await response.json();
+      if (loadToken !== state.loadToken) return;
       if (!response.ok || document.kind !== "agent-session-inspect") {
         throw new Error(document.error?.message || "会话读取失败");
       }
@@ -119,9 +122,10 @@
       renderDetail();
       renderSessionList();
     } catch (error) {
+      if (loadToken !== state.loadToken) return;
       detailRoot.replaceChildren(errorBox(error.message));
     } finally {
-      state.loading = false;
+      if (loadToken === state.loadToken) state.loading = false;
     }
   }
 

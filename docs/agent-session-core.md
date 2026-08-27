@@ -33,7 +33,11 @@ The v1 event schema is `schemas/agent-session-event-v1.schema.json`. Every event
 - `provider`: `claude`, `codex`, or `kimi`;
 - `native_session_id`: provider id, or `null` until a provider reports one;
 - `sequence`, `kind`, `occurred_at`, and provider-neutral `data`;
-- provenance with a stage and source.
+- provenance with a stage and source;
+- optional `truncation` metadata on bounded inspect events.
+
+Within schema v1, new optional fields are additive. Consumers validating a vendored schema must
+update that schema before accepting producers that use newly added optional fields.
 
 Provenance stages deliberately keep context values separate:
 
@@ -59,8 +63,9 @@ state.
   context for an explicit local inspection request. Thinking blocks are never projected. Long
   strings, arrays, objects, and nesting are bounded; truncated events carry field paths plus
   original and retained sizes/counts.
-- `metadata`: removes message text, tool arguments/results, result/error text, and private plugin
-  paths while retaining byte counts and structural metadata.
+- `metadata`: removes message text, full tool arguments/results, result/error text, and private
+  plugin paths while retaining byte counts, structural metadata, and normalized resource paths
+  derived from explicit file operands.
 
 `metadata` is a safe common baseline, not a replacement for Cockpit's stricter source projection.
 Cockpit may retain fewer fields and remains responsible for its own fail-loud redaction tests.
@@ -71,6 +76,8 @@ headers, explicit `SKILL.md` literals, and bounded adapters for literal operands
 `sed/cat/head/tail/wc` plus explicit file operands of `rg/grep` and `git show/diff --`. Variables,
 globs, directory-wide searches, and indirect process I/O remain unknown rather than being guessed.
 The access stays on the exact tool-call sequence so an inspector can audit which step touched it.
+Shell write commands are intentionally outside this bounded adapter set; writes are currently
+reported only from structured write tools and patch headers.
 
 ## Adapter facets and read API
 

@@ -61,11 +61,15 @@ agent-session serve --host 127.0.0.1 --port 8765 \
   --frame-origin https://preview.example.ts.net:24443
 ```
 
-`inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
+`inspect` defaults to the body-free `metadata` profile. The explicit `inspect` profile includes
 visible prompts, assistant text, tool arguments, tool results, and per-step high-confidence file /
 Skill accesses, but never projects thinking blocks. Long inspect fields are bounded and carry
 truncation metadata. Both commands only read provider-native files; they do not run cleanup, repair
 state, probe models, launch agents, or create another session database.
+
+Metadata omits command and message bodies but may retain normalized resource paths derived from
+explicit file operands so the exact read/write step remains auditable. Shell writes are not inferred;
+only structured write tools and patch headers currently produce write accesses.
 
 `serve` hosts the same contract and a dependency-free browser UI. It rejects non-loopback binds,
 foreign browser origins, and mutating HTTP methods; every API and asset response is `no-store` and

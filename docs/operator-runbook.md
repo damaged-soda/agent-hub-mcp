@@ -43,7 +43,7 @@ It also returns the selectable model catalog for each adapter. Use
 ## Session Inspector Operations
 
 `npm run install:local` links `agent-session` into the same active npm prefix as `agenthub`.
-Verify the content-free path before exposing a reverse proxy:
+Verify the body-free metadata path before exposing a reverse proxy:
 
 ```sh
 agent-session list --limit 5
