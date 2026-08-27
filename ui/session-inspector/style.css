@@ -271,7 +271,20 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .event-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .event-sequence { color: var(--text-muted); font: 10px/1 var(--mono); }
 .event-body { margin-top: 10px; color: var(--text-soft); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
-.collapsible-text-summary { color: var(--text-soft); cursor: pointer; font: 11px/1.4 var(--mono); }
+.collapsible-text-summary { color: var(--text-soft); cursor: pointer; font: inherit; list-style: none; }
+.collapsible-text-summary::-webkit-details-marker { display: none; }
+.collapsible-text-action {
+  color: var(--accent-strong);
+  font-family: var(--ui);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.collapsible-text-action-expanded { display: none; }
+.collapsible-text[open] > .collapsible-text-summary .collapsible-text-preview,
+.collapsible-text[open] > .collapsible-text-summary .collapsible-text-action-collapsed { display: none; }
+.collapsible-text[open] > .collapsible-text-summary .collapsible-text-action-expanded { display: inline; }
 .collapsible-text-body { margin-top: 9px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .event-resources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .resource-chip {
