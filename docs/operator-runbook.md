@@ -67,7 +67,10 @@ credentials, and HTTP origins are rejected. Wildcards are unsupported and never 
 The base path is routing, not authorization: keep authorization at the private proxy/network layer,
 never use Funnel or another public tunnel, and treat direct `?profile=inspect` requests as capable
 of returning transcript bodies without the UI confirmation. Base-path mode permits same-origin
-iframe embedding; root mode remains `DENY`, and no mode permits cross-origin framing.
+iframe embedding and root mode remains `DENY` unless the explicit preview option below is used.
+For a private preview on a different origin, add one exact HTTPS `--frame-origin` together with a
+non-root base path. This changes only CSP framing; the inspector still validates its own exact
+`--public-origin`, and the parent cannot read the framed DOM through the browser same-origin policy.
 
 ## Environment Variables
 

@@ -77,6 +77,7 @@ agent-session inspect --provider ... --session-id ...
   [--profile metadata|inspect] [--after ...] [--limit ...]
 agent-session serve [--host 127.0.0.1] [--port 8765]
   [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
+  [--frame-origin https://preview.example.ts.net:24443]
 ```
 
 `list` derives identity from provider-native stores. `inspect` uses normalized event sequence
@@ -93,6 +94,9 @@ An optional `base-path` moves the complete UI/API surface under one path prefix 
 the native session roots, content profiles, or authorization boundary. Because the parent already
 shares that origin and can call the API directly, base-path mode permits only same-origin framing;
 root mode remains non-embeddable.
+For an explicitly authorized private preview, `frame-origin` may replace `self` with one exact HTTPS
+ancestor only when a non-root base path is configured. It does not change Host/Origin admission,
+enable CORS, or allow the parent to inspect the framed document.
 The server does not authenticate API clients, and the UI confirmation is not a server-side content
 gate. Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT
 publish the inspector through Funnel or another public tunnel. Bind addresses are restricted to the

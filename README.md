@@ -56,6 +56,9 @@ agent-session inspect --provider codex --session-id SESSION_ID --profile inspect
 agent-session serve --host 127.0.0.1 --port 8765
 agent-session serve --host 127.0.0.1 --port 8765 \
   --public-origin https://cockpit.example.ts.net --base-path /agent-session
+agent-session serve --host 127.0.0.1 --port 8765 \
+  --public-origin https://inspector.example.ts.net:24444 --base-path /agent-session \
+  --frame-origin https://preview.example.ts.net:24443
 ```
 
 `inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
@@ -73,6 +76,9 @@ Tailscale Serve; it never changes the loopback-only bind.
 default, and the prefix without its trailing slash redirects to the canonical URL. Base-path mode
 also permits same-origin framing so a trusted parent page on that exact origin can embed the UI;
 root mode keeps `frame-ancestors 'none'` and `X-Frame-Options: DENY`.
+An explicit `--frame-origin` is available only with a non-root base path for a private preview on a
+different exact HTTPS origin. It replaces SAMEORIGIN with that single CSP ancestor and omits XFO;
+it does not enable CORS or let the parent read iframe content.
 
 The inspector server has no authentication of its own. `--public-origin` is routing validation,
 not authorization: the reverse proxy and its network policy are the only access-control boundary,

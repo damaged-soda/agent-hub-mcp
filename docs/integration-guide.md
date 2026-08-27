@@ -61,6 +61,9 @@ the default remains `/`, requests outside a configured prefix return 404, and a 
 slash redirects to the canonical page URL. A configured base path changes frame policy from DENY to
 SAMEORIGIN so a page on the exact admitted origin may embed the inspector; cross-origin framing is
 still rejected.
+An explicitly authorized private preview may add one exact HTTPS `--frame-origin` while keeping a
+separate `--public-origin`. This requires a non-root base path, emits that exact CSP ancestor without
+XFO, and does not grant the parent CORS or DOM access.
 
 ## Optional MCP Server Registration
 

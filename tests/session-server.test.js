@@ -241,4 +241,48 @@ describe("agent session server", () => {
       startSessionServer({ host: "127.0.0.1", port: 0, roots, basePath: "/../private" }),
     ).rejects.toThrow(/base path/);
   });
+
+  it("admits one exact HTTPS frame origin only for a prefixed inspector", async () => {
+    const frameOrigin = "https://preview.example.ts.net:24443";
+    const framedServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots,
+      basePath: "/agent-session",
+      frameOrigin,
+    });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${framedServer.address().port}/agent-session/`,
+      );
+      expect(response.headers.get("content-security-policy")).toContain(
+        `frame-ancestors ${frameOrigin}`,
+      );
+      expect(response.headers.get("x-frame-options")).toBeNull();
+    } finally {
+      await new Promise((resolve) => framedServer.close(resolve));
+    }
+
+    await expect(
+      startSessionServer({ host: "127.0.0.1", port: 0, roots, frameOrigin }),
+    ).rejects.toThrow(/requires a non-root base path/);
+    await expect(
+      startSessionServer({
+        host: "127.0.0.1",
+        port: 0,
+        roots,
+        basePath: "/agent-session",
+        frameOrigin: "http://preview.example.ts.net",
+      }),
+    ).rejects.toThrow(/frame origin/);
+    await expect(
+      startSessionServer({
+        host: "127.0.0.1",
+        port: 0,
+        roots,
+        basePath: "/agent-session",
+        frameOrigin: "https://*.example.ts.net",
+      }),
+    ).rejects.toThrow(/frame origin/);
+  });
 });

@@ -26,7 +26,11 @@ export async function startSessionServer(options = {}) {
   }
   const publicOrigin = normalizePublicOrigin(options.publicOrigin);
   const basePath = normalizeBasePath(options.basePath);
-  const serverOptions = { ...options, publicOrigin, basePath };
+  const frameOrigin = normalizeFrameOrigin(options.frameOrigin);
+  if (frameOrigin && !basePath) {
+    throw new Error("frame origin requires a non-root base path");
+  }
+  const serverOptions = { ...options, publicOrigin, basePath, frameOrigin };
   const port = boundedPort(options.port ?? 8765);
   const server = http.createServer((request, response) => {
     handleRequest(request, response, serverOptions).catch((error) => {
@@ -116,7 +120,7 @@ async function handleRequest(request, response, options) {
 }
 
 function setSecurityHeaders(response, options) {
-  const frameAncestors = options.basePath ? "'self'" : "'none'";
+  const frameAncestors = options.frameOrigin || (options.basePath ? "'self'" : "'none'");
   response.setHeader("Cache-Control", "no-store");
   response.setHeader(
     "Content-Security-Policy",
@@ -125,7 +129,9 @@ function setSecurityHeaders(response, options) {
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("X-Frame-Options", options.basePath ? "SAMEORIGIN" : "DENY");
+  if (!options.frameOrigin) {
+    response.setHeader("X-Frame-Options", options.basePath ? "SAMEORIGIN" : "DENY");
+  }
 }
 
 function sendJson(response, status, document, method = "GET") {
@@ -204,6 +210,17 @@ export function normalizePublicOrigin(value) {
     throw new Error("public origin must be an absolute HTTPS origin without path or credentials");
   }
   return parsed.origin;
+}
+
+export function normalizeFrameOrigin(value) {
+  if (value === undefined || value === null || value === "") return null;
+  try {
+    const normalized = normalizePublicOrigin(value);
+    if (new URL(normalized).hostname.includes("*")) throw new Error("wildcard");
+    return normalized;
+  } catch {
+    throw new Error("frame origin must be an absolute HTTPS origin without path or credentials");
+  }
 }
 
 export function normalizeBasePath(value) {
