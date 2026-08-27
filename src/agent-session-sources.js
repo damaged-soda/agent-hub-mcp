@@ -11,6 +11,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const KIMI_ID_PATTERN = /^(?:session|ses)_[0-9a-f-]{36}$/i;
 const MAX_LIST_LIMIT = 500;
 const MAX_EVENT_LIMIT = 1000;
+const MAX_TITLE_LENGTH = 256;
+const CLAUDE_TITLE_TAIL_BYTES = 64 * 1024;
 
 export function nativeSessionRoots(env = process.env) {
   const home = os.homedir();
@@ -93,6 +95,7 @@ export async function inspectNativeSession(input, options = {}) {
 }
 
 async function discoverCodex(root) {
+  const titles = await codexTitleIndex(root);
   const files = [
     ...(await collectFiles(path.join(root, "sessions"), isJsonl)),
     ...(await collectFiles(path.join(root, "archived_sessions"), isJsonl)),
@@ -101,16 +104,16 @@ async function discoverCodex(root) {
   for (const sourcePath of files) {
     const match = /([0-9a-f]{8}-[0-9a-f-]{27})\.jsonl$/i.exec(sourcePath);
     if (!match || !UUID_PATTERN.test(match[1])) continue;
-    descriptors.push(
-      await baseDescriptor(
-        "codex",
-        match[1],
-        sourcePath,
-        sourcePath.includes(`${path.sep}archived_sessions${path.sep}`)
-          ? "codex-rollout-archived"
-          : "codex-rollout",
-      ),
+    const descriptor = await baseDescriptor(
+      "codex",
+      match[1],
+      sourcePath,
+      sourcePath.includes(`${path.sep}archived_sessions${path.sep}`)
+        ? "codex-rollout-archived"
+        : "codex-rollout",
     );
+    descriptor.title = titles.get(match[1]) ?? null;
+    descriptors.push(descriptor);
   }
   return dedupeDescriptors(descriptors);
 }
@@ -185,17 +188,79 @@ async function baseDescriptor(provider, nativeSessionId, sourcePath, sourceKind)
     created_at: stat.birthtime.toISOString(),
     updated_at: stat.mtime.toISOString(),
     cwd: null,
+    title: null,
   };
 }
 
 async function enrichDescriptor(descriptor) {
-  if (descriptor.cwd) return { ...descriptor };
   if (descriptor.provider === "kimi" && descriptor.state_path) {
     const state = await readJson(descriptor.state_path);
-    return { ...descriptor, cwd: typeof state?.cwd === "string" ? state.cwd : null };
+    return {
+      ...descriptor,
+      cwd: descriptor.cwd ?? (typeof state?.cwd === "string" ? state.cwd : null),
+      title: state?.isCustomTitle === true ? nativeTitle(state.title) : null,
+    };
   }
   const metadata = await firstMetadataRecord(descriptor);
-  return { ...descriptor, ...metadata };
+  const title =
+    descriptor.provider === "claude"
+      ? await latestClaudeTitle(descriptor)
+      : descriptor.title;
+  return { ...descriptor, ...metadata, title };
+}
+
+async function codexTitleIndex(root) {
+  const indexPath = path.join(root, "session_index.jsonl");
+  const text = await fsp.readFile(indexPath, "utf8").catch((error) => {
+    if (error?.code === "ENOENT") return "";
+    throw error;
+  });
+  const titles = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!UUID_PATTERN.test(record.id)) continue;
+    const title = nativeTitle(record.thread_name);
+    if (title) titles.set(record.id, title);
+  }
+  return titles;
+}
+
+async function latestClaudeTitle(descriptor) {
+  const retained = Math.min(descriptor.size_bytes, CLAUDE_TITLE_TAIL_BYTES);
+  if (retained <= 0) return null;
+  const handle = await fsp.open(descriptor.source_path, "r").catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!handle) return null;
+  try {
+    const buffer = Buffer.allocUnsafe(retained);
+    const offset = descriptor.size_bytes - retained;
+    const { bytesRead } = await handle.read(buffer, 0, retained, offset);
+    let text = buffer.subarray(0, bytesRead).toString("utf8");
+    if (offset > 0) text = text.slice(text.indexOf("\n") + 1);
+    let title = null;
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.includes('"ai-title"')) continue;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (record.type !== "ai-title" || record.sessionId !== descriptor.native_session_id) continue;
+      title = nativeTitle(record.aiTitle) ?? title;
+    }
+    return title;
+  } finally {
+    await handle.close();
+  }
 }
 
 async function firstMetadataRecord(descriptor) {
@@ -289,6 +354,13 @@ function timestampValue(value) {
   if (!Number.isFinite(value)) return null;
   const millis = value > 100000000000 ? value : value * 1000;
   return new Date(millis).toISOString();
+}
+
+function nativeTitle(value) {
+  if (typeof value !== "string") return null;
+  const title = value.replace(/\s+/g, " ").trim();
+  if (!title) return null;
+  return Array.from(title).slice(0, MAX_TITLE_LENGTH).join("");
 }
 
 function isJsonl(value) {

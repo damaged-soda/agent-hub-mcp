@@ -45,9 +45,22 @@ beforeEach(async () => {
     fsp.copyFile(path.join(fixtureRoot, "kimi-transcript.jsonl"), kimiPath),
     fsp.writeFile(
       path.join(kimiDir, "state.json"),
-      JSON.stringify({ id: KIMI_ID, cwd: "/workspace/example" }),
+      JSON.stringify({
+        id: KIMI_ID,
+        cwd: "/workspace/example",
+        title: "检查 Kimi 会话",
+        isCustomTitle: true,
+      }),
     ),
   ]);
+  await fsp.appendFile(
+    claudePath,
+    `\n${JSON.stringify({ type: "ai-title", sessionId: CLAUDE_ID, aiTitle: "检查 Claude 会话" })}\n`,
+  );
+  await fsp.writeFile(
+    path.join(roots.codex, "session_index.jsonl"),
+    `${JSON.stringify({ id: CODEX_ID, thread_name: "检查 Codex 会话" })}\n`,
+  );
   await fsp.writeFile(
     path.join(roots.kimi, "session_index.jsonl"),
     `${JSON.stringify({ sessionId: KIMI_ID, sessionDir: kimiDir, workDir: "/workspace/example" })}\n`,
@@ -65,16 +78,19 @@ describe("native session sources", () => {
     expect(sessions.map((item) => item.provider).sort()).toEqual(["claude", "codex", "kimi"]);
     expect(sessions.find((item) => item.provider === "claude")).toMatchObject({
       native_session_id: CLAUDE_ID,
+      title: "检查 Claude 会话",
       cwd: "/workspace/example",
       source_kind: "claude-transcript",
     });
     expect(sessions.find((item) => item.provider === "codex")).toMatchObject({
       native_session_id: CODEX_ID,
+      title: "检查 Codex 会话",
       cwd: "/workspace/example",
       source_kind: "codex-rollout",
     });
     expect(sessions.find((item) => item.provider === "kimi")).toMatchObject({
       native_session_id: KIMI_ID,
+      title: "检查 Kimi 会话",
       cwd: "/workspace/example",
       source_kind: "kimi-wire",
     });
@@ -94,6 +110,52 @@ describe("native session sources", () => {
     );
     const sessions = await discoverNativeSessions({ roots, provider: "kimi", limit: 10 });
     expect(sessions.map((item) => item.native_session_id)).toEqual([KIMI_ID]);
+  });
+
+  it("normalizes bounded titles and keeps missing titles explicit", async () => {
+    await fsp.writeFile(
+      path.join(roots.codex, "session_index.jsonl"),
+      `${JSON.stringify({ id: CODEX_ID, thread_name: `  标题  换行\n${"x".repeat(300)}` })}\n`,
+    );
+    let sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(sessions[0].title).toHaveLength(256);
+    expect(sessions[0].title).toMatch(/^标题 换行 x+$/);
+
+    await fsp.writeFile(
+      path.join(roots.codex, "session_index.jsonl"),
+      `${JSON.stringify({ id: CODEX_ID, thread_name: " \n " })}\n`,
+    );
+    sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(sessions[0].title).toBeNull();
+  });
+
+  it("uses only recent Claude ai-title metadata", async () => {
+    await fsp.appendFile(
+      sourcePaths.claudePath,
+      `${JSON.stringify({ type: "ai-title", sessionId: CLAUDE_ID, aiTitle: "更新后的标题" })}\n`,
+    );
+    let sessions = await discoverNativeSessions({ roots, provider: "claude", limit: 10 });
+    expect(sessions[0].title).toBe("更新后的标题");
+
+    await fsp.appendFile(
+      sourcePaths.claudePath,
+      `${JSON.stringify({ type: "noise", value: "x".repeat(64 * 1024) })}\n`,
+    );
+    sessions = await discoverNativeSessions({ roots, provider: "claude", limit: 10 });
+    expect(sessions[0].title).toBeNull();
+  });
+
+  it("does not expose Kimi automatic prompt titles", async () => {
+    await fsp.writeFile(
+      path.join(path.dirname(path.dirname(path.dirname(sourcePaths.kimiPath))), "state.json"),
+      JSON.stringify({
+        cwd: "/workspace/example",
+        title: "这是第一条 prompt 的原文",
+        isCustomTitle: false,
+      }),
+    );
+    const sessions = await discoverNativeSessions({ roots, provider: "kimi", limit: 10 });
+    expect(sessions[0].title).toBeNull();
   });
 
   it("uses metadata by default and requires inspect profile for transcript bodies", async () => {

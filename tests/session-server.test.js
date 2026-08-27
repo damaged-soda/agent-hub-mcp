@@ -42,6 +42,10 @@ beforeAll(async () => {
   );
   await fsp.mkdir(path.dirname(codexPath), { recursive: true });
   await fsp.copyFile(path.join(fixtureRoot, "codex-transcript.jsonl"), codexPath);
+  await fsp.writeFile(
+    path.join(roots.codex, "session_index.jsonl"),
+    `${JSON.stringify({ id: CODEX_ID, thread_name: "审查 Agent Session 改动" })}\n`,
+  );
   server = await startSessionServer({ host: "127.0.0.1", port: 0, roots });
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
@@ -64,13 +68,19 @@ describe("agent session server", () => {
     expect(app).toContain('profile: "inspect"');
     expect(app).toContain("resource-chip");
     expect(app).toContain("完整事件明细");
+    expect(app).toContain("sessionDisplayTitle");
+    expect(app).toContain("collapsible-text");
+    expect(app).not.toContain("details.open = true");
     expect(app).not.toContain("window.confirm");
   });
 
   it("keeps API bodies hidden until inspect is explicit", async () => {
     const list = await fetch(`${baseUrl}/api/sessions?limit=10`);
     expect(list.status).toBe(200);
-    expect((await list.json()).data[0].native_session_id).toBe(CODEX_ID);
+    expect((await list.json()).data[0]).toMatchObject({
+      native_session_id: CODEX_ID,
+      title: "审查 Agent Session 改动",
+    });
 
     const metadata = await fetch(
       `${baseUrl}/api/sessions/codex/${CODEX_ID}?profile=metadata&limit=100`,
