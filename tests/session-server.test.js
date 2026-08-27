@@ -167,4 +167,58 @@ describe("agent session server", () => {
       await new Promise((resolve) => canonicalServer.close(resolve));
     }
   });
+
+  it("serves the complete inspector under one canonical base path", async () => {
+    const publicOrigin = "https://cockpit.example.ts.net";
+    const prefixedServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots,
+      publicOrigin,
+      basePath: "/agent-session/",
+    });
+    const prefixedBase = `http://127.0.0.1:${prefixedServer.address().port}`;
+    try {
+      const redirect = await fetch(`${prefixedBase}/agent-session`, { redirect: "manual" });
+      expect(redirect.status).toBe(308);
+      expect(redirect.headers.get("location")).toBe("/agent-session/");
+      const queryRedirect = await fetch(`${prefixedBase}/agent-session?limit=5&x=1`, {
+        redirect: "manual",
+      });
+      expect(queryRedirect.headers.get("location")).toBe("/agent-session/?limit=5&x=1");
+
+      const index = await fetch(`${prefixedBase}/agent-session/`);
+      expect(index.status).toBe(200);
+      expect(await index.text()).toContain('src="./app.js"');
+      expect((await fetch(`${prefixedBase}/agent-session/index.html`)).status).toBe(200);
+      expect((await fetch(`${prefixedBase}/agent-session/style.css`)).status).toBe(200);
+      const head = await fetch(`${prefixedBase}/agent-session/`, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      const app = await fetch(`${prefixedBase}/agent-session/app.js`);
+      expect(app.status).toBe(200);
+      const appText = await app.text();
+      expect(appText).toContain("document.baseURI");
+      expect(appText).not.toContain('fetch("/api/');
+      expect(appText).not.toContain("window.location.origin");
+
+      const list = await fetch(`${prefixedBase}/agent-session/api/sessions?limit=1`);
+      expect(list.status).toBe(200);
+      expect((await list.json()).data[0].native_session_id).toBe(CODEX_ID);
+      expect((await fetch(`${prefixedBase}/api/sessions?limit=1`)).status).toBe(404);
+
+      expect(
+        await requestStatus(`${prefixedBase}/agent-session/api/sessions?limit=1`, {
+          Host: "cockpit.example.ts.net",
+          Origin: publicOrigin,
+        }),
+      ).toBe(200);
+    } finally {
+      await new Promise((resolve) => prefixedServer.close(resolve));
+    }
+
+    await expect(
+      startSessionServer({ host: "127.0.0.1", port: 0, roots, basePath: "/../private" }),
+    ).rejects.toThrow(/base path/);
+  });
 });
