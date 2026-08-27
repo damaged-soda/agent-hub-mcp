@@ -53,6 +53,7 @@ sessions, including sessions that were not launched by Agent Hub:
 agent-session list --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID --limit 200
 agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
+agent-session resolve 'agenthub://session/v1/codex/SESSION_ID'
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID/event/EVENT_ID'
 agent-session serve --host 127.0.0.1 --port 8765
 agent-session serve --host 127.0.0.1 --port 8765 \
@@ -68,10 +69,11 @@ Skill accesses, but never projects thinking blocks. Long inspect fields are boun
 truncation metadata. These commands only read provider-native files; they do not run cleanup, repair
 state, probe models, launch agents, or create another session database.
 
-Native transcript events include a stable `agenthub://session/v1/...` reference that excludes file
-paths, machine location, and display sequence. `resolve` validates one copied reference and returns
-a bounded inspect diagnostic with the exact target, its paired tool call/result when present, and
-the effective context at that step. Stale references fail instead of drifting to a similar event.
+Native sessions and transcript events include stable `agenthub://session/v1/...` references that
+exclude file paths, machine location, and display sequence. `resolve` validates either form; session
+references return metadata, while event references add a bounded inspect diagnostic with the exact
+target, its paired tool call/result when present, and the effective context at that step. Stale event
+references fail instead of drifting to a similar event.
 
 Metadata omits command and message bodies but may retain normalized resource paths derived from
 explicit file operands so the exact read/write step remains auditable. Shell writes are not inferred;
@@ -82,8 +84,9 @@ foreign browser origins, and mutating HTTP methods; every API and asset response
 uses a restrictive Content Security Policy. The private page explicitly requests bounded `inspect`
 by default, renders full structured event details, and marks read/write resources on the exact tool
 step; users can switch back to metadata.
-Double-click an event title (or focus it and press Enter) to copy its stable reference; the sequence
-label reports the copy result without adding a persistent control to every card.
+Double-click the selected session title or any event title to copy its stable reference. Copyable
+titles use the pointer cursor, and success or failure appears beside the pointer instead of replacing
+the distant sequence label. Focused titles also support Enter or Space.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.
 `--base-path` moves the UI, assets, and API together under one canonical prefix; root remains the

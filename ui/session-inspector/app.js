@@ -4,7 +4,8 @@
   const LONG_TEXT_CHARACTERS = 320;
   const LONG_TEXT_LINES = 6;
   const LONG_TEXT_PREVIEW_CHARACTERS = 140;
-  const copyFeedbackTimers = new WeakMap();
+  let activeCopyFeedback = null;
+  let copyFeedbackTimer = null;
 
   const state = {
     sessions: [],
@@ -24,6 +25,7 @@
   const providerFilter = document.querySelector("#provider-filter");
   const searchInput = document.querySelector("#session-search");
   const refreshButton = document.querySelector("#refresh-button");
+  const copyStatus = document.querySelector("#copy-status");
   const apiListUrl = new URL("api/sessions", document.baseURI);
   const apiItemRoot = new URL(`${apiListUrl.href}/`);
 
@@ -147,9 +149,17 @@
 
     const header = el("div", "detail-header");
     const heading = el("div", "detail-heading");
+    const sessionTitle = el("h2", "session-reference-title");
+    const sessionTitleCopy = el("span", "", sessionDisplayTitle(session));
+    makeReferenceCopyTarget(
+      sessionTitleCopy,
+      session.session_ref,
+      `${sessionDisplayTitle(session)} · 复制 session 引用`,
+    );
+    sessionTitle.append(sessionTitleCopy);
     heading.append(
       el("div", "eyebrow", `${session.provider} · ${session.source_kind}`),
-      el("h2", "", sessionDisplayTitle(session)),
+      sessionTitle,
       el("div", "detail-cwd", session.cwd || "cwd unknown"),
       el("div", "detail-path", session.source_path),
     );
@@ -276,24 +286,11 @@
       el("strong", "", eventTitle(event)),
     );
     const sequence = el("span", "event-sequence", `#${event.sequence}`);
-    sequence.setAttribute("role", "status");
-    sequence.setAttribute("aria-live", "polite");
-    if (event.event_ref) {
-      title.classList.add("is-copyable");
-      title.tabIndex = 0;
-      title.setAttribute("role", "button");
-      title.setAttribute(
-        "aria-label",
-        `${eventTitle(event)} · 复制 ${event.kind} #${event.sequence} 引用`,
-      );
-      title.title = "双击复制引用";
-      title.addEventListener("dblclick", () => copyEventReference(event, sequence));
-      title.addEventListener("keydown", (keyboardEvent) => {
-        if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
-        keyboardEvent.preventDefault();
-        copyEventReference(event, sequence);
-      });
-    }
+    makeReferenceCopyTarget(
+      title,
+      event.event_ref,
+      `${eventTitle(event)} · 复制 ${event.kind} #${event.sequence} 引用`,
+    );
     head.append(title, sequence);
     card.append(head);
     const body = eventBody(event);
@@ -379,19 +376,54 @@
     }, null, 2);
   }
 
-  async function copyEventReference(event, sequence) {
-    const original = `#${event.sequence}`;
+  function makeReferenceCopyTarget(target, reference, accessibleLabel) {
+    if (!reference) return;
+    target.classList.add("copy-reference-target");
+    target.tabIndex = 0;
+    target.setAttribute("role", "button");
+    target.setAttribute("aria-label", accessibleLabel);
+    target.title = "双击复制引用";
+    target.addEventListener("dblclick", (pointerEvent) => {
+      copyReference(reference, target, pointerEvent);
+    });
+    target.addEventListener("keydown", (keyboardEvent) => {
+      if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+      keyboardEvent.preventDefault();
+      copyReference(reference, target);
+    });
+  }
+
+  async function copyReference(reference, anchor, pointerEvent) {
+    const point = pointerEvent
+      ? { x: pointerEvent.clientX, y: pointerEvent.clientY }
+      : (() => {
+          const bounds = anchor.getBoundingClientRect();
+          return { x: bounds.left + Math.min(bounds.width, 120), y: bounds.bottom };
+        })();
+    let message = "已复制";
     try {
-      await writeClipboard(event.event_ref);
-      sequence.textContent = "已复制";
+      await writeClipboard(reference);
     } catch {
-      sequence.textContent = "复制失败";
+      message = "复制失败";
     }
-    window.clearTimeout(copyFeedbackTimers.get(sequence));
-    copyFeedbackTimers.set(sequence, window.setTimeout(() => {
-      sequence.textContent = original;
-      copyFeedbackTimers.delete(sequence);
-    }, 1200));
+    showCopyFeedback(message, point);
+  }
+
+  function showCopyFeedback(message, point) {
+    if (activeCopyFeedback) activeCopyFeedback.remove();
+    window.clearTimeout(copyFeedbackTimer);
+    const feedback = el("div", "copy-feedback", message);
+    feedback.setAttribute("aria-hidden", "true");
+    feedback.style.left = `${Math.max(8, Math.min(window.innerWidth - 92, point.x + 12))}px`;
+    feedback.style.top = `${Math.max(8, Math.min(window.innerHeight - 38, point.y + 12))}px`;
+    document.body.append(feedback);
+    activeCopyFeedback = feedback;
+    copyStatus.textContent = "";
+    window.requestAnimationFrame(() => { copyStatus.textContent = message; });
+    copyFeedbackTimer = window.setTimeout(() => {
+      if (activeCopyFeedback === feedback) activeCopyFeedback = null;
+      feedback.remove();
+    }, 1100);
   }
 
   async function writeClipboard(value) {

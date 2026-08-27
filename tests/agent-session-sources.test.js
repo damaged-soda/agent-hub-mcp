@@ -8,6 +8,7 @@ import {
   discoverNativeSessions,
   inspectNativeSession,
   resolveNativeSessionEventReference,
+  resolveNativeSessionReference,
 } from "../src/agent-session-sources.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -88,6 +89,7 @@ describe("native session sources", () => {
     });
     expect(sessions.find((item) => item.provider === "codex")).toMatchObject({
       native_session_id: CODEX_ID,
+      session_ref: `agenthub://session/v1/codex/${CODEX_ID}`,
       title: "检查 Codex 会话",
       cwd: "/workspace/example",
       source_kind: "codex-rollout",
@@ -227,6 +229,25 @@ describe("native session sources", () => {
     await expect(resolveNativeSessionEventReference(stale, { roots })).rejects.toThrow(/Stale/);
   });
 
+  it("resolves one copied session reference without eagerly reading transcript bodies", async () => {
+    const reference = `agenthub://session/v1/codex/${CODEX_ID}`;
+    const resolved = await resolveNativeSessionReference(reference, { roots });
+    expect(resolved).toMatchObject({
+      api_version: 1,
+      kind: "agent-session-resolution",
+      reference,
+      reference_protocol: { version: 1 },
+      session: {
+        provider: "codex",
+        native_session_id: CODEX_ID,
+        session_ref: reference,
+        title: "检查 Codex 会话",
+      },
+    });
+    expect(resolved).not.toHaveProperty("data");
+    expect(JSON.stringify(resolved)).not.toContain("Private developer prompt");
+  });
+
   it("accepts identical session copies but rejects conflicting transcript sources", async () => {
     const archivedPath = path.join(
       roots.codex,
@@ -302,6 +323,25 @@ describe("native session sources", () => {
     const document = JSON.parse(result.stdout);
     expect(document.kind).toBe("agent-session-list");
     expect(document.data).toHaveLength(3);
+
+    const sessionResolved = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "src", "session-cli.js"), "resolve", document.data[0].session_ref],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAUDE_CONFIG_DIR: roots.claude,
+          CODEX_HOME: roots.codex,
+          KIMI_CODE_HOME: roots.kimi,
+        },
+      },
+    );
+    expect(sessionResolved.status, sessionResolved.stderr).toBe(0);
+    expect(JSON.parse(sessionResolved.stdout)).toMatchObject({
+      kind: "agent-session-resolution",
+      reference: document.data[0].session_ref,
+    });
 
     const inspect = await inspectNativeSession(
       { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },

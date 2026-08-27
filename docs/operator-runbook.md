@@ -53,13 +53,15 @@ agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
 
 The CLI/API still default to metadata. The private browser inspector requests bounded inspect by
 default, shows every structured event detail, and annotates literal file/Skill reads and writes on
-their tool-call steps. Double-click an event title to copy its stable reference; the right-side
-sequence label confirms success. Treat the page as sensitive even though long values are truncated.
+their tool-call steps. Double-click the selected session title or an event title to copy its stable
+reference. Copyable titles use the pointer cursor; feedback appears beside the pointer. Treat the
+page as sensitive even though long values are truncated.
 
-Resolving a copied event is deliberately body-bearing: it returns the target and related event in
-bounded `inspect` form plus the effective context. Do not use it as a metadata-only preflight:
+Resolving a session reference is metadata-only; resolving an event is deliberately body-bearing and
+returns the target, related event, and effective context in bounded `inspect` form:
 
 ```sh
+agent-session resolve 'agenthub://session/v1/codex/SESSION_ID'
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID/event/EVENT_ID'
 ```
 

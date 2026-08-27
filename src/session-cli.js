@@ -3,7 +3,7 @@
 import {
   discoverNativeSessions,
   inspectNativeSession,
-  resolveNativeSessionEventReference,
+  resolveNativeSessionReference,
 } from "./agent-session-sources.js";
 import {
   normalizeBasePath,
@@ -19,8 +19,8 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (command === "resolve") {
-    if (rest.length !== 1) throw new Error("resolve requires exactly one event reference");
-    printJson(await resolveNativeSessionEventReference(rest[0]));
+    if (rest.length !== 1) throw new Error("resolve requires exactly one session reference");
+    printJson(await resolveNativeSessionReference(rest[0]));
     return;
   }
   const flags = parseFlags(rest);
@@ -124,16 +124,17 @@ Usage:
   agent-session list [--provider claude|codex|kimi] [--limit N]
   agent-session inspect --provider ID --session-id ID
       [--profile metadata|inspect] [--after N] [--limit N]
-  agent-session resolve 'agenthub://session/v1/PROVIDER/SESSION_ID/event/EVENT_ID'
+  agent-session resolve 'agenthub://session/v1/PROVIDER/SESSION_ID[/event/EVENT_ID]'
   agent-session serve [--host 127.0.0.1] [--port 8765]
       [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
       [--frame-origin https://preview.example.ts.net:24443]
 
-The default inspect profile is metadata. Resolve returns a bounded inspect diagnostic for
-one copied event reference. Use --profile inspect explicitly to include visible prompts,
-assistant text, tool arguments, and tool results when paging a session. Thinking blocks
-are never projected. Commands only read provider-native files; they do not clean up stores,
-repair state, probe models, launch agents, or create a session database.
+The default inspect profile is metadata. Resolve identifies one copied session reference;
+event references additionally return a bounded inspect diagnostic. Use --profile inspect
+to include visible prompts, assistant text, tool arguments, and tool results when paging
+a session. Thinking blocks are never projected. Commands only read provider-native files;
+they do not clean up stores, repair state, probe models, launch agents, or create a session
+database.
 `;
 }
 

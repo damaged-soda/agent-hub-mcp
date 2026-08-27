@@ -63,7 +63,9 @@ describe("agent session server", () => {
     expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(response.headers.get("x-frame-options")).toBe("DENY");
-    expect(await response.text()).toContain("Agent 会话检查器");
+    const index = await response.text();
+    expect(index).toContain("Agent 会话检查器");
+    expect(index).toContain('id="copy-status"');
     const app = await (await fetch(`${baseUrl}/app.js`)).text();
     expect(app).toContain('profile: "inspect"');
     expect(app).toContain("resource-chip");
@@ -77,8 +79,14 @@ describe("agent session server", () => {
     expect(app).toContain('addEventListener("dblclick"');
     expect(app).toContain("navigator.clipboard?.writeText");
     expect(app).toContain("双击复制引用");
+    expect(app).toContain("session.session_ref");
+    expect(app).toContain("copy-feedback");
+    expect(app).toContain("copyStatus.textContent");
+    expect(app).not.toContain("sequence.textContent");
     expect(app).not.toContain("details.open = true");
     expect(app).not.toContain("window.confirm");
+    const style = await (await fetch(`${baseUrl}/style.css`)).text();
+    expect(style).toContain(".copy-reference-target { cursor: pointer;");
   });
 
   it("keeps API bodies hidden until inspect is explicit", async () => {
@@ -86,6 +94,7 @@ describe("agent session server", () => {
     expect(list.status).toBe(200);
     expect((await list.json()).data[0]).toMatchObject({
       native_session_id: CODEX_ID,
+      session_ref: `agenthub://session/v1/codex/${CODEX_ID}`,
       title: "审查 Agent Session 改动",
     });
 

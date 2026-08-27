@@ -7,26 +7,30 @@ export const AGENT_SESSION_EVENT_ID_VERSION = 1;
 const EVENT_ID_PATTERN = /^e1_[A-Za-z0-9_-]{43}$/;
 const RECORD_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 
-export function formatAgentSessionEventReference(input) {
+export function formatAgentSessionReference(input) {
   const identity = createSessionIdentity(input?.provider, input?.native_session_id);
   if (!identity.native_session_id) throw new Error("native_session_id is required");
+  return `agenthub://session/v${AGENT_SESSION_REFERENCE_VERSION}/${identity.provider}/${
+    encodeURIComponent(identity.native_session_id)
+  }`;
+}
+
+export function formatAgentSessionEventReference(input) {
   if (typeof input?.event_id !== "string" || !EVENT_ID_PATTERN.test(input.event_id)) {
     throw new Error("event_id must be a stable Agent Session event id");
   }
-  return `agenthub://session/v${AGENT_SESSION_REFERENCE_VERSION}/${identity.provider}/${
-    encodeURIComponent(identity.native_session_id)
-  }/event/${input.event_id}`;
+  return `${formatAgentSessionReference(input)}/event/${input.event_id}`;
 }
 
-export function parseAgentSessionEventReference(value) {
+export function parseAgentSessionReference(value) {
   if (typeof value !== "string" || !value) {
-    throw new Error("Agent Session event reference must be a non-empty string");
+    throw new Error("Agent Session reference must be a non-empty string");
   }
   let parsed;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error("Invalid Agent Session event reference");
+    throw new Error("Invalid Agent Session reference");
   }
   if (
     parsed.protocol !== "agenthub:" ||
@@ -37,27 +41,37 @@ export function parseAgentSessionEventReference(value) {
     parsed.search ||
     parsed.hash
   ) {
-    throw new Error("Invalid Agent Session event reference");
+    throw new Error("Invalid Agent Session reference");
   }
   const segments = parsed.pathname.split("/").filter(Boolean);
   if (
-    segments.length !== 5 ||
+    (segments.length !== 3 && segments.length !== 5) ||
     segments[0] !== `v${AGENT_SESSION_REFERENCE_VERSION}` ||
-    segments[3] !== "event"
+    (segments.length === 5 && segments[3] !== "event")
   ) {
-    throw new Error("Unsupported Agent Session event reference version or shape");
+    throw new Error("Unsupported Agent Session reference version or shape");
   }
   let nativeSessionId;
   try {
     nativeSessionId = decodeURIComponent(segments[2]);
   } catch {
-    throw new Error("Invalid Agent Session event reference encoding");
+    throw new Error("Invalid Agent Session reference encoding");
   }
   const provider = canonicalProvider(segments[1]);
   if (provider !== segments[1]) {
-    throw new Error("Agent Session event reference provider is not canonical");
+    throw new Error("Agent Session reference provider is not canonical");
   }
   const identity = createSessionIdentity(provider, nativeSessionId);
+  if (segments.length === 3) {
+    const reference = formatAgentSessionReference(identity);
+    if (reference !== value) throw new Error("Agent Session reference is not canonical");
+    return {
+      reference_version: AGENT_SESSION_REFERENCE_VERSION,
+      reference_kind: "session",
+      ...identity,
+      reference,
+    };
+  }
   const eventId = segments[4];
   if (!EVENT_ID_PATTERN.test(eventId)) {
     throw new Error("Invalid Agent Session event id");
@@ -66,10 +80,20 @@ export function parseAgentSessionEventReference(value) {
   if (reference !== value) throw new Error("Agent Session event reference is not canonical");
   return {
     reference_version: AGENT_SESSION_REFERENCE_VERSION,
+    reference_kind: "event",
     ...identity,
     event_id: eventId,
     reference,
   };
+}
+
+export function parseAgentSessionEventReference(value) {
+  const parsed = parseAgentSessionReference(value);
+  if (parsed.reference_kind !== "event") {
+    throw new Error("Agent Session event reference must include an event id");
+  }
+  const { reference_kind: _referenceKind, ...eventReference } = parsed;
+  return eventReference;
 }
 
 export function attachNativeEventReferences(events, input) {

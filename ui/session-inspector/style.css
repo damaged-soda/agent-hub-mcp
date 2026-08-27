@@ -199,6 +199,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .detail-heading { min-width: 0; }
 .eyebrow { margin-bottom: 8px; color: var(--accent); font: 700 11px/1 var(--mono); text-transform: uppercase; }
 .detail-heading h2 { margin: 0; font-size: clamp(20px, 2.2vw, 30px); font-weight: 620; }
+.session-reference-title { width: fit-content; max-width: 100%; overflow-wrap: anywhere; }
 .detail-cwd { margin-top: 8px; color: var(--text-soft); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
 .detail-path { margin-top: 8px; color: var(--text-soft); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
 .detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
@@ -269,8 +270,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .event-card.is-error::before { background: var(--danger); }
 .event-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .event-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.event-title.is-copyable { cursor: copy; user-select: none; }
-.event-title.is-copyable:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 5px; }
+.copy-reference-target { cursor: pointer; user-select: none; }
+.copy-reference-target:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 5px; }
 .event-sequence { color: var(--text-muted); font: 10px/1 var(--mono); }
 .event-body { margin-top: 10px; color: var(--text-soft); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .collapsible-text-summary { color: var(--text-soft); cursor: pointer; font: inherit; list-style: none; }
@@ -308,6 +309,25 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 pre.event-json { max-height: 300px; margin: 10px 0 0; overflow: auto; padding: 10px; border-radius: 8px; background: var(--surface-raised); color: var(--text-soft); font: 10px/1.5 var(--mono); white-space: pre-wrap; }
 .load-more { display: block; margin: 18px auto 0; }
 .error-box { padding: 12px; border: 1px solid var(--danger); border-radius: 9px; color: var(--danger); background: var(--surface); }
+.copy-feedback {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  padding: 6px 9px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--surface-hover);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  color: var(--text);
+  font: 700 11px/1 var(--ui);
+  animation: copy-feedback-pop 1.1s ease both;
+}
+
+@keyframes copy-feedback-pop {
+  0% { opacity: 0; transform: translateY(3px) scale(.96); }
+  12%, 76% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-2px) scale(.98); }
+}
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
