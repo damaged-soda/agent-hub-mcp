@@ -61,7 +61,9 @@ describe("agent session server", () => {
     expect(response.headers.get("x-frame-options")).toBe("DENY");
     expect(await response.text()).toContain("Agent 会话检查器");
     const app = await (await fetch(`${baseUrl}/app.js`)).text();
-    expect(app).toContain("reveal-confirm");
+    expect(app).toContain('profile: "inspect"');
+    expect(app).toContain("resource-chip");
+    expect(app).toContain("完整事件明细");
     expect(app).not.toContain("window.confirm");
   });
 

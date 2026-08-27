@@ -33,10 +33,15 @@ agent-session inspect --provider codex --session-id SESSION_ID \
 agent-session serve --host 127.0.0.1 --port 8765
 ```
 
-`inspect` defaults to the content-free `metadata` profile. `--profile inspect` explicitly includes
-visible prompts, assistant text, tool arguments, and tool results; thinking blocks are never
-projected. Discovery and reads are side-effect free: they do not mutate provider stores, repair
+`inspect` defaults to the body-free `metadata` profile. `--profile inspect` explicitly includes
+visible prompts, assistant text, tool arguments, tool results, and per-tool `resource_accesses`;
+thinking blocks are never projected. Long inspect fields are bounded with explicit truncation
+metadata. Discovery and reads are side-effect free: they do not mutate provider stores, repair
 state, launch agents, or create another session database.
+
+Metadata can retain normalized resource paths extracted from explicit file operands while omitting
+the command body itself. Current shell adapters cover reads only; write accesses come from structured
+write tools and patch headers.
 
 The loopback server exposes the same contract:
 
@@ -54,7 +59,7 @@ agent-session serve --host 127.0.0.1 --port 8765 \
 ```
 
 `--public-origin` only validates Host/Origin routing. The server has no authentication and the UI
-confirmation is not a server-side content gate, so authorization must be enforced by the private
+profile is not a server-side content gate, so authorization must be enforced by the private
 proxy/network policy. Never publish this endpoint through Funnel or another public tunnel.
 `--base-path` places the page, static assets, and both API routes below the same canonical prefix;
 the default remains `/`, requests outside a configured prefix return 404, and a missing trailing

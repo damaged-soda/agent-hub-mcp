@@ -5,6 +5,7 @@ import {
   parseJsonLines,
   projectSessionEvents,
 } from "./agent-session-core.js";
+import { extractResourceAccesses } from "./agent-session-resources.js";
 
 export function projectNativeTranscript(providerValue, input, options = {}) {
   const provider = canonicalProvider(providerValue);
@@ -89,16 +90,15 @@ function projectClaudeTranscriptRecord(record, provider, nativeSessionId, state)
     }
     for (const block of blocks) {
       if (block?.type !== "tool_use" || typeof block.name !== "string") continue;
+      const argumentsValue = block.input ?? null;
       events.push(
         transcriptEvent(
           provider,
           nativeSessionId,
           "tool-call",
           {
+            ...toolCallData(block.name, argumentsValue, state.context.cwd),
             tool_call_id: stringValue(block.id),
-            tool_name: block.name,
-            tool_kind: classifyTool(block.name),
-            arguments: block.input ?? null,
           },
           record,
         ),
@@ -207,16 +207,15 @@ function projectCodexTranscriptRecord(record, provider, nativeSessionId, state) 
   }
   if (["function_call", "custom_tool_call"].includes(payload.type)) {
     const name = stringValue(payload.name ?? payload.namespace) ?? "tool";
+    const argumentsValue = parseMaybeJson(payload.arguments ?? payload.input);
     return [
       transcriptEvent(
         provider,
         nativeSessionId,
         "tool-call",
         {
+          ...toolCallData(name, argumentsValue, state.context.cwd),
           tool_call_id: stringValue(payload.call_id ?? payload.id),
-          tool_name: name,
-          tool_kind: classifyTool(name),
-          arguments: parseMaybeJson(payload.arguments ?? payload.input),
           status: stringValue(payload.status),
         },
         record,
@@ -250,6 +249,7 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
       provider,
       nativeSessionId,
       compact({
+        cwd: stringValue(record.environmentDisclosure?.cwd),
         model: stringValue(record.modelAlias),
         profile: stringValue(record.profileName),
         effort: stringValue(record.thinkingEffort),
@@ -316,16 +316,15 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
     for (const call of Array.isArray(message.toolCalls) ? message.toolCalls : []) {
       const name = stringValue(call?.name ?? call?.function?.name);
       if (!name) continue;
+      const argumentsValue = call.args ?? parseMaybeJson(call.function?.arguments);
       events.push(
         transcriptEvent(
           provider,
           nativeSessionId,
           "tool-call",
           {
+            ...toolCallData(name, argumentsValue, state.context.cwd),
             tool_call_id: stringValue(call.id ?? call.toolCallId),
-            tool_name: name,
-            tool_kind: classifyTool(name),
-            arguments: call.args ?? parseMaybeJson(call.function?.arguments),
           },
           record,
         ),
@@ -340,16 +339,15 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
       if (event.toolCallId && state.seenToolEvents.has(key)) return [];
       if (event.toolCallId) state.seenToolEvents.add(key);
       const name = stringValue(event.name) ?? "tool";
+      const argumentsValue = event.args ?? null;
       return [
         transcriptEvent(
           provider,
           nativeSessionId,
           "tool-call",
           {
+            ...toolCallData(name, argumentsValue, state.context.cwd),
             tool_call_id: stringValue(event.toolCallId),
-            tool_name: name,
-            tool_kind: classifyTool(name),
-            arguments: event.args ?? null,
           },
           record,
         ),
@@ -534,6 +532,20 @@ function classifyTool(name) {
   if (/web|http|browser|network/.test(value)) return "network";
   if (/mcp/.test(value)) return "mcp";
   return "other";
+}
+
+function toolCallData(name, argumentsValue, cwd) {
+  const resourceAccesses = extractResourceAccesses({
+    tool_name: name,
+    arguments: argumentsValue,
+    cwd,
+  });
+  return compact({
+    tool_name: name,
+    tool_kind: classifyTool(name),
+    arguments: argumentsValue,
+    resource_accesses: resourceAccesses.length > 0 ? resourceAccesses : undefined,
+  });
 }
 
 function parseMaybeJson(value) {

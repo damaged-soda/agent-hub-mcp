@@ -61,15 +61,21 @@ agent-session serve --host 127.0.0.1 --port 8765 \
   --frame-origin https://preview.example.ts.net:24443
 ```
 
-`inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
-visible prompts, assistant text, tool arguments, and tool results, but never projects thinking
-blocks. Both commands only read provider-native files; they do not run cleanup, repair state, probe
-models, launch agents, or create another session database.
+`inspect` defaults to the body-free `metadata` profile. The explicit `inspect` profile includes
+visible prompts, assistant text, tool arguments, tool results, and per-step high-confidence file /
+Skill accesses, but never projects thinking blocks. Long inspect fields are bounded and carry
+truncation metadata. Both commands only read provider-native files; they do not run cleanup, repair
+state, probe models, launch agents, or create another session database.
+
+Metadata omits command and message bodies but may retain normalized resource paths derived from
+explicit file operands so the exact read/write step remains auditable. Shell writes are not inferred;
+only structured write tools and patch headers currently produce write accesses.
 
 `serve` hosts the same contract and a dependency-free browser UI. It rejects non-loopback binds,
 foreign browser origins, and mutating HTTP methods; every API and asset response is `no-store` and
-uses a restrictive Content Security Policy. The page starts in `metadata` mode and requires an
-inline second confirmation before requesting transcript bodies.
+uses a restrictive Content Security Policy. The private page explicitly requests bounded `inspect`
+by default, renders full structured event details, and marks read/write resources on the exact tool
+step; users can switch back to metadata.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.
 `--base-path` moves the UI, assets, and API together under one canonical prefix; root remains the
@@ -82,7 +88,7 @@ it does not enable CORS or let the parent read iframe content.
 
 The inspector server has no authentication of its own. `--public-origin` is routing validation,
 not authorization: the reverse proxy and its network policy are the only access-control boundary,
-and callers can request `?profile=inspect` directly without the UI confirmation. Use it only behind
+and callers can request `?profile=inspect` directly. Use it only behind
 an access-controlled private proxy such as tailnet-only Tailscale Serve; never place it behind
 Tailscale Funnel or another public tunnel. Bind addresses are intentionally limited to the literal
 `127.0.0.1` and `::1`; `localhost` is rejected rather than resolved.

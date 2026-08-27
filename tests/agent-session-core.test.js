@@ -3,9 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_SESSION_INSPECT_LIMITS,
   AGENT_SESSION_SCHEMA_VERSION,
   canonicalProvider,
   createContextObservation,
+  createSessionEvent,
   createSessionIdentity,
   projectLiveRecord,
   projectLiveStream,
@@ -175,6 +177,28 @@ describe("provider conformance fixtures", () => {
     expect(tool.data.argument_bytes).toBeGreaterThan(0);
     expect(context.data.plugins).toEqual([{ name: "feature-dev", source: "marketplace" }]);
     expect(context.data.mcp_servers).toEqual([{ name: "docs", status: "connected" }]);
+  });
+
+  it("bounds inspect bodies and reports exact truncation provenance", () => {
+    const content = "x".repeat(AGENT_SESSION_INSPECT_LIMITS.string_chars + 17);
+    const [event] = projectSessionEvents([
+      createSessionEvent({
+        provider: "codex",
+        native_session_id: "thread-1",
+        kind: "message",
+        data: { role: "assistant", content },
+      }),
+    ], "inspect");
+    expect(event.data.content).toContain("[truncated 17 chars]");
+    expect(event.truncation).toMatchObject({
+      truncated: true,
+      fields: [{
+        path: "data.content",
+        kind: "string",
+        original_chars: content.length,
+        retained_chars: AGENT_SESSION_INSPECT_LIMITS.string_chars,
+      }],
+    });
   });
 });
 

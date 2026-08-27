@@ -43,13 +43,17 @@ It also returns the selectable model catalog for each adapter. Use
 ## Session Inspector Operations
 
 `npm run install:local` links `agent-session` into the same active npm prefix as `agenthub`.
-Verify the content-free path before exposing a reverse proxy:
+Verify the body-free metadata path before exposing a reverse proxy:
 
 ```sh
 agent-session list --limit 5
 agent-session inspect --provider codex --session-id SESSION_ID --profile metadata --limit 20
 agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
 ```
+
+The CLI/API still default to metadata. The private browser inspector requests bounded inspect by
+default, shows every structured event detail, and annotates literal file/Skill reads and writes on
+their tool-call steps. Treat the page as sensitive even though long values are truncated.
 
 From another terminal, verify the no-body path:
 

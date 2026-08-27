@@ -4,12 +4,12 @@
   const state = {
     sessions: [],
     selected: null,
-    profile: "metadata",
+    profile: "inspect",
     events: [],
     nextSequence: 0,
     hasMore: false,
     loading: false,
-    revealPending: false,
+    loadToken: 0,
   };
 
   const listRoot = document.querySelector("#session-list");
@@ -86,18 +86,18 @@
 
   async function selectSession(session) {
     state.selected = session;
-    state.profile = "metadata";
+    state.profile = "inspect";
     state.events = [];
     state.nextSequence = 0;
     state.hasMore = false;
-    state.revealPending = false;
     renderSessionList();
     renderDetailLoading();
     await loadEvents(false);
   }
 
   async function loadEvents(append) {
-    if (!state.selected || state.loading) return;
+    if (!state.selected) return;
+    const loadToken = ++state.loadToken;
     state.loading = true;
     const after = append ? state.nextSequence : 0;
     try {
@@ -111,6 +111,7 @@
       url.searchParams.set("limit", "200");
       const response = await fetch(url, { cache: "no-store" });
       const document = await response.json();
+      if (loadToken !== state.loadToken) return;
       if (!response.ok || document.kind !== "agent-session-inspect") {
         throw new Error(document.error?.message || "会话读取失败");
       }
@@ -121,9 +122,10 @@
       renderDetail();
       renderSessionList();
     } catch (error) {
+      if (loadToken !== state.loadToken) return;
       detailRoot.replaceChildren(errorBox(error.message));
     } finally {
-      state.loading = false;
+      if (loadToken === state.loadToken) state.loading = false;
     }
   }
 
@@ -146,11 +148,10 @@
     const contentButton = el(
       "button",
       state.profile === "inspect" ? "button-warning" : "button-primary",
-      state.profile === "inspect" ? "隐藏正文" : "显示 prompt / 参数",
+      state.profile === "inspect" ? "切换为脱正文" : "显示全部明细",
     );
     contentButton.type = "button";
     contentButton.addEventListener("click", toggleContent);
-    contentButton.disabled = state.revealPending;
     const reloadButton = el("button", "", "重读");
     reloadButton.type = "button";
     reloadButton.addEventListener("click", () => loadEvents(false));
@@ -163,7 +164,7 @@
       notice.append(
         el("strong", "", "正文已显示。"),
         document.createTextNode(
-          " 当前响应可能包含 system/developer/user prompt、assistant 文本、tool arguments 与结果；服务端禁止缓存，但请勿截图或转发敏感内容。",
+          " 当前响应可能包含 system/developer/user prompt、assistant 文本、tool arguments 与结果；服务端禁止缓存，但请勿截图或转发敏感内容。过长字段会有界截断，并在事件明细中标出原始大小和截断位置。",
         ),
       );
     } else {
@@ -176,32 +177,6 @@
     }
     detailRoot.append(notice);
 
-    if (state.revealPending) {
-      const confirm = el("div", "reveal-confirm");
-      const copy = el("div", "");
-      copy.append(
-        el("strong", "", "确认读取当前会话正文？"),
-        el(
-          "p",
-          "",
-          "这会从 provider 原生文件读取 prompt、assistant 文本、tool arguments 和结果；不会写入数据库或缓存。",
-        ),
-      );
-      const confirmActions = el("div", "reveal-confirm-actions");
-      const accept = el("button", "button-warning", "确认显示");
-      accept.type = "button";
-      accept.addEventListener("click", revealContent);
-      const cancel = el("button", "", "取消");
-      cancel.type = "button";
-      cancel.addEventListener("click", () => {
-        state.revealPending = false;
-        renderDetail();
-      });
-      confirmActions.append(accept, cancel);
-      confirm.append(copy, confirmActions);
-      detailRoot.append(confirm);
-    }
-
     const context = latestContext(state.events);
     const usedTools = distinct(
       state.events.filter((event) => event.kind === "tool-call").map((event) => event.data?.tool_name),
@@ -209,12 +184,15 @@
     const availableTools = toolNames(context.values.tools);
     const messages = state.events.filter((event) => event.kind === "message");
     const calls = state.events.filter((event) => event.kind === "model-call");
+    const resourceAccesses = state.events.flatMap((event) => event.data?.resource_accesses || []);
     const summary = el("div", "summary-grid");
     summary.append(
       summaryCard("events", `${state.events.length}${state.hasMore ? "+" : ""}`),
       summaryCard("messages", String(messages.length)),
       summaryCard("tools used", String(usedTools.length)),
       summaryCard("model calls", String(calls.length)),
+      summaryCard("file reads", String(resourceAccesses.filter((item) => item.operation === "read").length)),
+      summaryCard("file writes", String(resourceAccesses.filter((item) => item.operation === "write").length)),
     );
     detailRoot.append(summary);
 
@@ -241,7 +219,11 @@
       ["system_instruction_bytes", "system prompt 大小"],
       ["context_summary_bytes", "context summary 大小"],
     ];
-    for (const [key, label] of definitions) {
+    const labels = new Map(definitions);
+    const keys = [...definitions.map(([key]) => key),
+      ...Object.keys(context.values).filter((key) => !labels.has(key)).sort()];
+    for (const key of keys) {
+      const label = labels.get(key) || key;
       const evidence = context.evidence.get(key);
       let value = context.values[key];
       if (key.endsWith("_bytes") && Number.isFinite(value)) value = `${formatNumber(value)} bytes`;
@@ -288,8 +270,28 @@
     card.append(head);
     const body = eventBody(event);
     if (body) card.append(el("div", "event-body", body));
+    const resources = Array.isArray(event.data?.resource_accesses) ? event.data.resource_accesses : [];
+    if (resources.length > 0) {
+      const resourceList = el("div", "event-resources");
+      for (const resource of resources) {
+        const chip = el(
+          "span",
+          `resource-chip is-${resource.operation || "unknown"}`,
+          `${resource.operation === "write" ? "写" : "读"} ${resource.path || "unknown"}`,
+        );
+        chip.title = `${resource.evidence || "unknown"} · ${resource.coverage || "unknown"}`;
+        resourceList.append(chip);
+      }
+      card.append(resourceList);
+    }
     const json = eventJson(event);
-    if (json) card.append(el("pre", "event-json", json));
+    if (json) {
+      const details = el("details", "event-details");
+      details.open = true;
+      details.append(el("summary", "event-details-summary", "完整事件明细"));
+      details.append(el("pre", "event-json", json));
+      card.append(details);
+    }
     card.append(
       el(
         "div",
@@ -334,34 +336,16 @@
   }
 
   function eventJson(event) {
-    let value = null;
-    if (event.kind === "context") value = event.data;
-    if (event.kind === "tool-call" && event.data?.arguments !== undefined) value = event.data.arguments;
-    if (event.kind === "tool-result" && event.data?.output !== undefined) value = event.data.output;
-    if (event.kind === "model-call") value = event.data;
-    if (!value) return "";
-    return JSON.stringify(value, null, 2);
+    return JSON.stringify({
+      data: event.data || {},
+      provenance: event.provenance || {},
+      occurred_at: event.occurred_at ?? null,
+      truncation: event.truncation || null,
+    }, null, 2);
   }
 
   async function toggleContent() {
-    if (state.profile === "metadata") {
-      state.revealPending = true;
-      renderDetail();
-      return;
-    } else {
-      state.profile = "metadata";
-    }
-    state.revealPending = false;
-    state.events = [];
-    state.nextSequence = 0;
-    state.hasMore = false;
-    renderDetailLoading();
-    await loadEvents(false);
-  }
-
-  async function revealContent() {
-    state.profile = "inspect";
-    state.revealPending = false;
+    state.profile = state.profile === "inspect" ? "metadata" : "inspect";
     state.events = [];
     state.nextSequence = 0;
     state.hasMore = false;
