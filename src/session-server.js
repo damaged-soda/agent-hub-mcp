@@ -25,7 +25,8 @@ export async function startSessionServer(options = {}) {
     throw new Error("agent-session serve host must be the literal 127.0.0.1 or ::1");
   }
   const publicOrigin = normalizePublicOrigin(options.publicOrigin);
-  const serverOptions = { ...options, publicOrigin };
+  const basePath = normalizeBasePath(options.basePath);
+  const serverOptions = { ...options, publicOrigin, basePath };
   const port = boundedPort(options.port ?? 8765);
   const server = http.createServer((request, response) => {
     handleRequest(request, response, serverOptions).catch((error) => {
@@ -60,7 +61,20 @@ async function handleRequest(request, response, options) {
     return;
   }
   const url = new URL(request.url, "http://127.0.0.1");
-  if (url.pathname === "/api/sessions") {
+  const routedPath = routePath(url.pathname, options.basePath);
+  if (routedPath.redirect) {
+    response.writeHead(308, {
+      Location: `${options.basePath}/${url.search}`,
+      "Cache-Control": "no-store",
+    });
+    response.end();
+    return;
+  }
+  if (routedPath.pathname === null) {
+    sendJson(response, 404, { error: { code: "not_found", message: "Not found" } }, request.method);
+    return;
+  }
+  if (routedPath.pathname === "/api/sessions") {
     const data = await discoverNativeSessions({
       provider: optionalQuery(url, "provider"),
       limit: optionalQuery(url, "limit") ?? 50,
@@ -70,7 +84,7 @@ async function handleRequest(request, response, options) {
     sendJson(response, 200, { api_version: 1, kind: "agent-session-list", data }, request.method);
     return;
   }
-  const match = /^\/api\/sessions\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+  const match = /^\/api\/sessions\/([^/]+)\/([^/]+)$/.exec(routedPath.pathname);
   if (match) {
     const document = await inspectNativeSession(
       {
@@ -85,7 +99,7 @@ async function handleRequest(request, response, options) {
     sendJson(response, 200, document, request.method);
     return;
   }
-  const asset = ASSETS.get(url.pathname);
+  const asset = ASSETS.get(routedPath.pathname);
   if (asset) {
     const [fileName, contentType] = asset;
     const body = await fsp.readFile(path.join(assetRoot, fileName));
@@ -189,6 +203,26 @@ export function normalizePublicOrigin(value) {
     throw new Error("public origin must be an absolute HTTPS origin without path or credentials");
   }
   return parsed.origin;
+}
+
+export function normalizeBasePath(value) {
+  if (value === undefined || value === null || value === "" || value === "/") return "";
+  if (typeof value !== "string") throw new Error("base path must be a string");
+  if (!/^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)\/?$/.test(value)) {
+    throw new Error("base path must be an absolute URL path without query, fragment, or dot segments");
+  }
+  const normalized = value.endsWith("/") ? value.slice(0, -1) : value;
+  if (normalized.split("/").some((segment) => segment === "." || segment === "..")) {
+    throw new Error("base path must be an absolute URL path without query, fragment, or dot segments");
+  }
+  return normalized;
+}
+
+function routePath(pathname, basePath) {
+  if (!basePath) return { pathname, redirect: false };
+  if (pathname === basePath) return { pathname: null, redirect: true };
+  if (!pathname.startsWith(`${basePath}/`)) return { pathname: null, redirect: false };
+  return { pathname: pathname.slice(basePath.length), redirect: false };
 }
 
 function statusForError(error) {

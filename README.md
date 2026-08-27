@@ -55,7 +55,7 @@ agent-session inspect --provider codex --session-id SESSION_ID --limit 200
 agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
 agent-session serve --host 127.0.0.1 --port 8765
 agent-session serve --host 127.0.0.1 --port 8765 \
-  --public-origin https://agent-session.example.ts.net
+  --public-origin https://cockpit.example.ts.net --base-path /agent-session
 ```
 
 `inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
@@ -69,6 +69,8 @@ uses a restrictive Content Security Policy. The page starts in `metadata` mode a
 inline second confirmation before requesting transcript bodies.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.
+`--base-path` moves the UI, assets, and API together under one canonical prefix; root remains the
+default, and the prefix without its trailing slash redirects to the canonical URL.
 
 The inspector server has no authentication of its own. `--public-origin` is routing validation,
 not authorization: the reverse proxy and its network policy are the only access-control boundary,

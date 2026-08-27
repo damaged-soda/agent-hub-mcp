@@ -18,6 +18,8 @@
   const providerFilter = document.querySelector("#provider-filter");
   const searchInput = document.querySelector("#session-search");
   const refreshButton = document.querySelector("#refresh-button");
+  const apiListUrl = new URL("api/sessions", document.baseURI);
+  const apiItemRoot = new URL(`${apiListUrl.href}/`);
 
   providerFilter.addEventListener("change", renderSessionList);
   searchInput.addEventListener("input", renderSessionList);
@@ -29,7 +31,9 @@
     refreshButton.disabled = true;
     refreshButton.textContent = "刷新中";
     try {
-      const response = await fetch("/api/sessions?limit=200", { cache: "no-store" });
+      const url = new URL(apiListUrl);
+      url.searchParams.set("limit", "200");
+      const response = await fetch(url, { cache: "no-store" });
       const document = await response.json();
       if (!response.ok || document.kind !== "agent-session-list") {
         throw new Error(document.error?.message || "会话目录不可用");
@@ -99,10 +103,8 @@
     try {
       const session = state.selected;
       const url = new URL(
-        `/api/sessions/${encodeURIComponent(session.provider)}/${encodeURIComponent(
-          session.native_session_id,
-        )}`,
-        window.location.origin,
+        `${encodeURIComponent(session.provider)}/${encodeURIComponent(session.native_session_id)}`,
+        apiItemRoot,
       );
       url.searchParams.set("profile", state.profile);
       url.searchParams.set("after", String(after));

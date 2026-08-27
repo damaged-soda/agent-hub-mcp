@@ -50,12 +50,15 @@ loopback binds are rejected. For a trusted private reverse proxy, pass one exact
 
 ```sh
 agent-session serve --host 127.0.0.1 --port 8765 \
-  --public-origin https://agent-session.example.ts.net
+  --public-origin https://cockpit.example.ts.net --base-path /agent-session
 ```
 
 `--public-origin` only validates Host/Origin routing. The server has no authentication and the UI
 confirmation is not a server-side content gate, so authorization must be enforced by the private
 proxy/network policy. Never publish this endpoint through Funnel or another public tunnel.
+`--base-path` places the page, static assets, and both API routes below the same canonical prefix;
+the default remains `/`, requests outside a configured prefix return 404, and a missing trailing
+slash redirects to the canonical page URL.
 
 ## Optional MCP Server Registration
 

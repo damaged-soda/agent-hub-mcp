@@ -61,11 +61,12 @@ Discovery roots follow `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `KIMI_CODE_HOME`; 
 when the expected provider sessions do not appear.
 
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
-origin, restart it with `--public-origin https://exact-private-origin`; paths, credentials, HTTP
-origins are rejected. Wildcards are unsupported and never match a real Host. This setting is not
-authentication. Keep authorization at the private proxy/network layer, never use Funnel or another
-public tunnel, and treat direct `?profile=inspect` requests as capable of returning transcript
-bodies without the UI confirmation.
+origin and mount the complete surface below a path, restart it with
+`--public-origin https://exact-private-origin --base-path /agent-session`. Public-origin paths,
+credentials, and HTTP origins are rejected. Wildcards are unsupported and never match a real Host.
+The base path is routing, not authorization: keep authorization at the private proxy/network layer,
+never use Funnel or another public tunnel, and treat direct `?profile=inspect` requests as capable
+of returning transcript bodies without the UI confirmation.
 
 ## Environment Variables
 
@@ -183,6 +184,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `discussion_lease_held` | Another Discussion worker or optional HTTP daemon currently owns that Discussion. | Keep one coordinator per store entry, or wait at least 20 seconds after an unclean owner loss. |
 | `agent-session` rejects the bind address | The host is not the literal `127.0.0.1` or `::1`. | Bind to a literal loopback address; `localhost` is intentionally rejected. |
 | Inspector returns `host_forbidden` / `origin_forbidden` behind a proxy | The proxy Host/Origin differs from the exact HTTPS `--public-origin`. | Align the single private origin exactly; do not widen to a wildcard or public tunnel. |
+| Inspector assets or API return 404 below a reverse-proxy path | The proxy prefix and `--base-path` differ, or the page URL omitted its canonical trailing slash. | Route the same prefix to the backend, pass the matching absolute base path, and use the redirected trailing-slash URL. |
 | `protocol_integrity: degraded` | Quorum was met, but a participant missed or failed a later formal turn. | Inspect participant statuses and `events.jsonl`; the DecisionRecord may still be valid. |
 | Discussion `failed` with `quorum_not_met`, `moderation_failed`, or `decision_failed` | The fixed protocol could not produce the required formal record. | Inspect linked run artifacts and structured validation errors; start a new Discussion after correcting inputs/config. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |

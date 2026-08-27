@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { discoverNativeSessions, inspectNativeSession } from "./agent-session-sources.js";
-import { normalizePublicOrigin, startSessionServer } from "./session-server.js";
+import { normalizeBasePath, normalizePublicOrigin, startSessionServer } from "./session-server.js";
 
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
@@ -39,12 +39,14 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (command === "serve") {
-    rejectUnknown(flags, new Set(["host", "port", "public-origin"]));
+    rejectUnknown(flags, new Set(["host", "port", "public-origin", "base-path"]));
     const publicOrigin = normalizePublicOrigin(flags["public-origin"]);
+    const basePath = normalizeBasePath(flags["base-path"]);
     const server = await startSessionServer({
       host: flags.host,
       port: flags.port,
       publicOrigin,
+      basePath,
     });
     const address = server.address();
     const host = typeof address === "object" && address ? address.address : flags.host || "127.0.0.1";
@@ -52,8 +54,11 @@ async function main(argv = process.argv.slice(2)) {
     printJson({
       api_version: 1,
       kind: "agent-session-server",
-      url: `http://${host.includes(":") ? `[${host}]` : host}:${port}`,
+      url: `http://${host.includes(":") ? `[${host}]` : host}:${port}${
+        basePath ? `${basePath}/` : "/"
+      }`,
       public_origin: publicOrigin || undefined,
+      base_path: basePath || undefined,
     });
     const close = () => server.close(() => process.exit(0));
     process.once("SIGINT", close);
@@ -100,7 +105,7 @@ Usage:
   agent-session inspect --provider ID --session-id ID
       [--profile metadata|inspect] [--after N] [--limit N]
   agent-session serve [--host 127.0.0.1] [--port 8765]
-      [--public-origin https://agent-session.example.ts.net]
+      [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
 
 The default inspect profile is metadata. Use --profile inspect explicitly to include
 visible prompts, assistant text, tool arguments, and tool results. Thinking blocks are
