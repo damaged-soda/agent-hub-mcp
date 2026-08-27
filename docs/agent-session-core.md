@@ -1,7 +1,7 @@
 # Agent Session Core
 
 `src/agent-session-core.js` defines the provider-neutral, read-only projection contract shared by
-Agent Hub execution adapters, a future local session inspector, and telemetry consumers. It does
+Agent Hub execution adapters, the local session inspector, and telemetry consumers. It does
 not own an agent process, native transcript, cache, database, retention policy, or UI.
 
 ## Authority boundary
@@ -94,14 +94,13 @@ gate. Deployments MUST supply authorization at the private reverse proxy/network
 publish the inspector through Funnel or another public tunnel. Bind addresses are restricted to the
 literal `127.0.0.1` and `::1`; `localhost` is deliberately rejected.
 
-Migration order:
+Stable evolution rules:
 
 1. Keep the schema and provider fixtures stable and versioned.
-2. Move shared live-event semantics behind this module without changing Agent Hub run behavior.
-3. Keep transcript discovery/read adapters side-effect free and use them as the local inspector
-   boundary.
-4. Let Cockpit validate its Python scanner against the same conformance fixtures before deciding
+2. Keep shared live-event semantics behind this module without changing Agent Hub run behavior.
+3. Keep transcript discovery/read adapters side-effect free as the local inspector boundary.
+4. Cockpit validates its Python scanner against the same conformance fixtures before deciding
    whether to consume a core-generated metadata JSONL stream.
 
-This order avoids adding a Node subprocess dependency to Cockpit's production Python scanner before
+These rules avoid adding a Node subprocess dependency to Cockpit's production Python scanner before
 the shared contract has proven equivalent on real provider fixtures.

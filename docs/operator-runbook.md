@@ -29,6 +29,8 @@ It also returns the selectable model catalog for each adapter. Use
 | Command | Purpose |
 |---|---|
 | `npm run install:local` | Link the `agenthub` CLI and install the bundled Codex Skill. |
+| `agent-session list …` / `agent-session inspect …` | Read provider-native sessions without mutating them. |
+| `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local inspector UI/API. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
@@ -37,6 +39,33 @@ It also returns the selectable model catalog for each adapter. Use
 | `npm test` | Run the Vitest suite. |
 | `npm run selftest:mcp` | Call the local server through `scripts/mcp-client.js`. |
 | `npm run review:self` | Ask Claude Code to review this repository through Agent Hub. |
+
+## Session Inspector Operations
+
+`npm run install:local` links `agent-session` into the same active npm prefix as `agenthub`.
+Verify the content-free path before exposing a reverse proxy:
+
+```sh
+agent-session list --limit 5
+agent-session inspect --provider codex --session-id SESSION_ID --profile metadata --limit 20
+agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
+```
+
+From another terminal, verify the no-body path:
+
+```sh
+curl -fsS 'http://127.0.0.1:8765/api/sessions?limit=1'
+```
+
+Discovery roots follow `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `KIMI_CODE_HOME`; check those values
+when the expected provider sessions do not appear.
+
+The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
+origin, restart it with `--public-origin https://exact-private-origin`; paths, credentials, HTTP
+origins are rejected. Wildcards are unsupported and never match a real Host. This setting is not
+authentication. Keep authorization at the private proxy/network layer, never use Funnel or another
+public tunnel, and treat direct `?profile=inspect` requests as capable of returning transcript
+bodies without the UI confirmation.
 
 ## Environment Variables
 
@@ -152,6 +181,8 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `session_busy` | Another run currently owns the same CLI session. | Wait for or cancel the active run; do not retry concurrently. |
 | `session_generation_conflict` / `session_reserved` | A continuation or sibling follow-up tried to fork an already advanced lineage. | Start a fresh session; Discussion follow-ups rebuild from handoff automatically. |
 | `discussion_lease_held` | Another Discussion worker or optional HTTP daemon currently owns that Discussion. | Keep one coordinator per store entry, or wait at least 20 seconds after an unclean owner loss. |
+| `agent-session` rejects the bind address | The host is not the literal `127.0.0.1` or `::1`. | Bind to a literal loopback address; `localhost` is intentionally rejected. |
+| Inspector returns `host_forbidden` / `origin_forbidden` behind a proxy | The proxy Host/Origin differs from the exact HTTPS `--public-origin`. | Align the single private origin exactly; do not widen to a wildcard or public tunnel. |
 | `protocol_integrity: degraded` | Quorum was met, but a participant missed or failed a later formal turn. | Inspect participant statuses and `events.jsonl`; the DecisionRecord may still be valid. |
 | Discussion `failed` with `quorum_not_met`, `moderation_failed`, or `decision_failed` | The fixed protocol could not produce the required formal record. | Inspect linked run artifacts and structured validation errors; start a new Discussion after correcting inputs/config. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |
