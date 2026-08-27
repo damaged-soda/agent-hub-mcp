@@ -3,6 +3,7 @@
 
   const LONG_TEXT_CHARACTERS = 320;
   const LONG_TEXT_LINES = 6;
+  const LONG_TEXT_PREVIEW_CHARACTERS = 140;
 
   const state = {
     sessions: [],
@@ -276,7 +277,7 @@
     head.append(title, el("span", "event-sequence", `#${event.sequence}`));
     card.append(head);
     const body = eventBody(event);
-    if (body) card.append(textBlock("event-body", body, "展开正文", `${event.sequence}:body`));
+    if (body) card.append(textBlock("event-body", body, `${event.sequence}:body`));
     const resources = Array.isArray(event.data?.resource_accesses) ? event.data.resource_accesses : [];
     if (resources.length > 0) {
       const resourceList = el("div", "event-resources");
@@ -385,7 +386,7 @@
     const displayed = value === undefined || value === null || value === "" ? "未知" : displayValue(value);
     row.append(
       el("div", "evidence-key", label),
-      textBlock("evidence-value", displayed, "展开长文本", `evidence:${key}`),
+      textBlock("evidence-value", displayed, `evidence:${key}`),
       el("div", "evidence-stage", ""),
       el("div", "evidence-source", event?.provenance?.native_type || "no evidence"),
     );
@@ -428,20 +429,39 @@
     return JSON.stringify(value);
   }
 
-  function textBlock(className, value, summary, expansionKey) {
+  function textBlock(className, value, expansionKey) {
     const text = String(value);
     if (!isLongText(text)) return el("div", className, text);
     const details = el("details", `${className} collapsible-text`);
     details.append(
-      el(
-        "summary",
-        "collapsible-text-summary",
-        `${summary} · ${formatNumber(textLength(text))} 字符`,
-      ),
+      collapsibleSummary(text),
       el("div", "collapsible-text-body", text),
     );
     rememberExpanded(details, expansionKey);
     return details;
+  }
+
+  function collapsibleSummary(text) {
+    const summary = el("summary", "collapsible-text-summary");
+    const normalized = text.replace(/\s+/g, " ").trim();
+    const characters = Array.from(normalized);
+    const preview = characters.slice(0, LONG_TEXT_PREVIEW_CHARACTERS).join("");
+    const previewNode = el("span", "collapsible-text-preview", `${preview}… `);
+    previewNode.setAttribute("aria-hidden", "true");
+    summary.append(
+      previewNode,
+      el(
+        "span",
+        "collapsible-text-action collapsible-text-action-collapsed",
+        `展开 · ${formatNumber(textLength(text))} 字符`,
+      ),
+      el(
+        "span",
+        "collapsible-text-action collapsible-text-action-expanded",
+        `收起 · ${formatNumber(textLength(text))} 字符`,
+      ),
+    );
+    return summary;
   }
 
   function rememberExpanded(details, key) {
