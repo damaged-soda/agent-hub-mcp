@@ -70,7 +70,9 @@ inline second confirmation before requesting transcript bodies.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.
 `--base-path` moves the UI, assets, and API together under one canonical prefix; root remains the
-default, and the prefix without its trailing slash redirects to the canonical URL.
+default, and the prefix without its trailing slash redirects to the canonical URL. Base-path mode
+also permits same-origin framing so a trusted parent page on that exact origin can embed the UI;
+root mode keeps `frame-ancestors 'none'` and `X-Frame-Options: DENY`.
 
 The inspector server has no authentication of its own. `--public-origin` is routing validation,
 not authorization: the reverse proxy and its network policy are the only access-control boundary,

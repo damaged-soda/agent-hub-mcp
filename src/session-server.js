@@ -46,7 +46,7 @@ export async function startSessionServer(options = {}) {
 }
 
 async function handleRequest(request, response, options) {
-  setSecurityHeaders(response);
+  setSecurityHeaders(response, options);
   if (!requestHostAllowed(request.headers.host, options.publicOrigin)) {
     sendJson(response, 403, { error: { code: "host_forbidden", message: "Loopback Host required" } });
     return;
@@ -115,16 +115,17 @@ async function handleRequest(request, response, options) {
   sendJson(response, 404, { error: { code: "not_found", message: "Not found" } }, request.method);
 }
 
-function setSecurityHeaders(response) {
+function setSecurityHeaders(response, options) {
+  const frameAncestors = options.basePath ? "'self'" : "'none'";
   response.setHeader("Cache-Control", "no-store");
   response.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`,
   );
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("X-Frame-Options", options.basePath ? "SAMEORIGIN" : "DENY");
 }
 
 function sendJson(response, status, document, method = "GET") {

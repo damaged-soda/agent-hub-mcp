@@ -90,7 +90,9 @@ confirmation.
 An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
 the process still refuses non-literal loopback bind addresses.
 An optional `base-path` moves the complete UI/API surface under one path prefix without changing
-the native session roots, content profiles, or authorization boundary.
+the native session roots, content profiles, or authorization boundary. Because the parent already
+shares that origin and can call the API directly, base-path mode permits only same-origin framing;
+root mode remains non-embeddable.
 The server does not authenticate API clients, and the UI confirmation is not a server-side content
 gate. Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT
 publish the inspector through Funnel or another public tunnel. Bind addresses are restricted to the

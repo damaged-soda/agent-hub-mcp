@@ -57,6 +57,8 @@ describe("agent session server", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
     expect(await response.text()).toContain("Agent 会话检查器");
     const app = await (await fetch(`${baseUrl}/app.js`)).text();
     expect(app).toContain("reveal-confirm");
@@ -189,6 +191,8 @@ describe("agent session server", () => {
 
       const index = await fetch(`${prefixedBase}/agent-session/`);
       expect(index.status).toBe(200);
+      expect(index.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
+      expect(index.headers.get("x-frame-options")).toBe("SAMEORIGIN");
       expect(await index.text()).toContain('src="./app.js"');
       expect((await fetch(`${prefixedBase}/agent-session/index.html`)).status).toBe(200);
       expect((await fetch(`${prefixedBase}/agent-session/style.css`)).status).toBe(200);
