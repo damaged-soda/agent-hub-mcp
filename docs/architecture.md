@@ -641,7 +641,7 @@ server/transport，但共享同一个 manager。MCP stdio 只保留普通 run to
 
 每场讨论的 `events.jsonl` 是提交记录，`state.json` 是可恢复投影。提交在短时 discussion
 lock 内验证 lease 的 `owner_id + generation`，先 append/fsync 事件，再原子替换投影。
-daemon 每 5 秒续 lease，20 秒无心跳后另一实例才能接管。启动时扫描非终态记录、修复唯一
+coordinator 每 5 秒续 lease，20 秒无心跳后另一实例才能接管。启动时扫描非终态记录、修复唯一
 的残缺尾部、查询所有 active run，并通过稳定幂等键重新挂接或派发。普通 query 不执行
 尾部修复，避免与活跃 writer 竞争。
 
@@ -654,7 +654,7 @@ Session registry 对 `agent_id + native_session_id` 保存单调 generation、ac
 lineage claim。已知 session ID 的新 run 与所有 continuation 都必须先取得独占 lease；
 Codex 在观察到 `thread.started` 后先登记 lease，再把 ref 写入公开 state。终态释放 lease。
 follow-up 对 parent generation 做 compare-and-swap 认领，因此同一 CLI 历史不能形成 sibling
-分叉。daemon 关闭只停止新 turn 并释放 discussion lease，不取消已经 detached 的 run。
+分叉。coordinator 关闭只停止新 turn 并释放 discussion lease，不取消已经 detached 的 run。
 
 Discussion 的权限来自 adapter `capabilities.discussion`：preferred permission 必须是
 `read-only` 或 `auto`。当前 Claude/Codex 选 read-only，Kimi 选 auto。请求 metadata 不能
@@ -678,7 +678,7 @@ Cleanup 在 `list_agents`、`dispatch_to_agent`、`query_agent_run`、`wait_agen
 - 非终态 run 的 pid/pgid 不存在时，query/wait 把状态写为 `failed`，错误码为
   `process_missing`。
 - 默认 TTL 为 604800 秒。
-- HTTP daemon 同时清理已过 `expires_at` 的终态 Discussion；非终态 Discussion 永不由
+- `DiscussionManager` 同时清理已过 `expires_at` 的终态 Discussion；非终态 Discussion 永不由
   TTL cleaner 直接删除。
 
 ## 安全默认值

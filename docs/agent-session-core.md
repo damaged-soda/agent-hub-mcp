@@ -99,7 +99,7 @@ Stable evolution rules:
 1. Keep the schema and provider fixtures stable and versioned.
 2. Keep shared live-event semantics behind this module without changing Agent Hub run behavior.
 3. Keep transcript discovery/read adapters side-effect free as the local inspector boundary.
-4. Cockpit must validate its Python scanner against the same conformance fixtures before deciding
+4. Cockpit validates its Python scanner against the same conformance fixtures before deciding
    whether to consume a core-generated metadata JSONL stream.
 
 These rules avoid adding a Node subprocess dependency to Cockpit's production Python scanner before

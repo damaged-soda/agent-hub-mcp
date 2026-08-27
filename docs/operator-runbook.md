@@ -48,15 +48,24 @@ Verify the content-free path before exposing a reverse proxy:
 ```sh
 agent-session list --limit 5
 agent-session inspect --provider codex --session-id SESSION_ID --profile metadata --limit 20
-agent-session serve --host 127.0.0.1 --port 8765
-curl -fsS http://127.0.0.1:8765/api/sessions?limit=1
+agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
 ```
+
+From another terminal, verify the no-body path:
+
+```sh
+curl -fsS 'http://127.0.0.1:8765/api/sessions?limit=1'
+```
+
+Discovery roots follow `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `KIMI_CODE_HOME`; check those values
+when the expected provider sessions do not appear.
 
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
 origin, restart it with `--public-origin https://exact-private-origin`; paths, credentials, HTTP
-origins, and wildcard origins are rejected. This setting is not authentication. Keep authorization
-at the private proxy/network layer, never use Funnel or another public tunnel, and treat direct
-`?profile=inspect` requests as capable of returning transcript bodies without the UI confirmation.
+origins are rejected. Wildcards are unsupported and never match a real Host. This setting is not
+authentication. Keep authorization at the private proxy/network layer, never use Funnel or another
+public tunnel, and treat direct `?profile=inspect` requests as capable of returning transcript
+bodies without the UI confirmation.
 
 ## Environment Variables
 
