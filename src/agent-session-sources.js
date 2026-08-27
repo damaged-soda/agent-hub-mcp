@@ -13,6 +13,8 @@ import {
   AGENT_SESSION_EVENT_ID_VERSION,
   AGENT_SESSION_REFERENCE_VERSION,
   createNativeEventReferenceProjector,
+  formatAgentSessionReference,
+  parseAgentSessionReference,
   parseAgentSessionEventReference,
 } from "./agent-session-references.js";
 import { createTranscriptProjector } from "./agent-session-transcripts.js";
@@ -163,6 +165,25 @@ export async function resolveNativeSessionEventReference(value, options = {}) {
   };
 }
 
+export async function resolveNativeSessionReference(value, options = {}) {
+  const parsed = parseAgentSessionReference(value);
+  if (parsed.reference_kind === "event") {
+    return resolveNativeSessionEventReference(value, options);
+  }
+  const roots = options.roots ?? nativeSessionRoots(options.env);
+  const descriptor = await findSession(parsed.provider, parsed.native_session_id, roots);
+  if (!descriptor) {
+    throw new Error(`Unknown ${parsed.provider} native_session_id: ${parsed.native_session_id}`);
+  }
+  return {
+    api_version: 1,
+    kind: "agent-session-resolution",
+    reference: parsed.reference,
+    reference_protocol: { version: AGENT_SESSION_REFERENCE_VERSION },
+    session: await enrichDescriptor(descriptor),
+  };
+}
+
 async function walkNativeSessionEvents(descriptor, identity, visitor) {
   const projector = createTranscriptProjector(identity.provider, identity.native_session_id);
   const referenceProjector = createNativeEventReferenceProjector(
@@ -306,6 +327,10 @@ async function baseDescriptor(provider, nativeSessionId, sourcePath, sourceKind)
     schema_version: 1,
     provider,
     native_session_id: nativeSessionId,
+    session_ref: formatAgentSessionReference({
+      provider,
+      native_session_id: nativeSessionId,
+    }),
     source_kind: sourceKind,
     source_path: sourcePath,
     size_bytes: stat.size,

@@ -4,6 +4,8 @@ import {
   attachNativeEventReferences,
   createNativeEventReferenceProjector,
   formatAgentSessionEventReference,
+  formatAgentSessionReference,
+  parseAgentSessionReference,
   parseAgentSessionEventReference,
 } from "../src/agent-session-references.js";
 
@@ -28,6 +30,24 @@ function event(kind, data) {
 }
 
 describe("Agent Session event references", () => {
+  it("round-trips a canonical session-level v1 URI", () => {
+    const reference = formatAgentSessionReference({
+      provider: "codex",
+      native_session_id: SESSION_ID,
+    });
+    expect(reference).toBe("agenthub://session/v1/codex/thread%3Astable-1");
+    expect(parseAgentSessionReference(reference)).toEqual({
+      reference_version: 1,
+      reference_kind: "session",
+      provider: "codex",
+      native_session_id: SESSION_ID,
+      reference,
+    });
+    expect(() => parseAgentSessionEventReference(reference)).toThrow(/include an event id/);
+    expect(() => parseAgentSessionReference(`${reference}/`)).toThrow(/canonical/);
+    expect(() => parseAgentSessionReference(reference.replace("%3A", "%3a"))).toThrow(/canonical/);
+  });
+
   it("round-trips one canonical self-contained v1 URI", () => {
     const reference = formatAgentSessionEventReference({
       provider: "codex",
@@ -44,6 +64,7 @@ describe("Agent Session event references", () => {
       event_id: `e1_${"a".repeat(43)}`,
       reference,
     });
+    expect(parseAgentSessionReference(reference).reference_kind).toBe("event");
   });
 
   it("rejects non-canonical, unsupported, and decorated references", () => {

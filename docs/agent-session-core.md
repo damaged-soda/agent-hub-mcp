@@ -80,12 +80,13 @@ The access stays on the exact tool-call sequence so an inspector can audit which
 Shell write commands are intentionally outside this bounded adapter set; writes are currently
 reported only from structured write tools and patch headers.
 
-## Stable event references
+## Stable session references
 
-Every event read through a provider-native session source with an established session id carries one
-canonical, self-contained reference:
+Every discovered native session has a canonical `session_ref`; every event read through a source
+with an established session id has an `event_ref` below that session:
 
 ```text
+agenthub://session/v1/<provider>/<native-session-id>
 agenthub://session/v1/<provider>/<native-session-id>/event/e1_<digest>
 ```
 
@@ -116,11 +117,12 @@ Consequences:
 - identical provider records are disambiguated by their occurrence among identical bodies without
   making unrelated record order part of identity.
 
-`agent-session resolve REF` is the parsing and resolution authority. It returns bounded `inspect`
-projections for the exact target, the paired tool call/result when available, and the effective
-context at that event. It may scan the native transcript but never persists a reference registry or
-body cache. The bundled Skill must pass the opaque reference to this command rather than reimplement
-URI parsing.
+`agent-session resolve REF` is the parsing and resolution authority. A session reference returns
+identity and metadata without eagerly reading transcript bodies. An event reference additionally
+returns bounded `inspect` projections for the exact target, the paired tool call/result when
+available, and the effective context at that event. Resolution never persists a reference registry
+or body cache. The bundled Skill must pass the opaque reference to this command rather than
+reimplement URI parsing.
 
 When one provider/session id has multiple native source files, readers hash every candidate. Exact
 copies resolve through a deterministic active-first/path order and report `duplicate_source_count`;
@@ -152,8 +154,9 @@ summarize a sensitive topic, so the list remains part of the private inspector s
 `inspect` uses normalized event sequence cursors, defaults to `metadata`, and requires an explicit
 `--profile inspect` to return transcript bodies. None of these commands accepts arbitrary source
 paths or mutates provider/session state.
-`resolve` accepts exactly one canonical event reference and always returns the bounded diagnostic
-package described above. The reference grants no network access and contains no transcript body.
+`resolve` accepts exactly one canonical session or event reference. Only the event form returns the
+bounded body-bearing diagnostic package described above. Neither reference contains transcript body
+or grants network access.
 
 `serve` exposes the same list/inspect contract and the static inspector UI on loopback only. It
 does not add a database or background coordinator. Responses are `no-store`, cross-origin browser

@@ -30,6 +30,7 @@ agent-session list --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID
 agent-session inspect --provider codex --session-id SESSION_ID \
   --profile inspect --after 0 --limit 200
+agent-session resolve 'agenthub://session/v1/codex/SESSION_ID'
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID/event/EVENT_ID'
 agent-session serve --host 127.0.0.1 --port 8765
 ```
@@ -40,9 +41,9 @@ thinking blocks are never projected. Long inspect fields are bounded with explic
 metadata. Discovery and reads are side-effect free: they do not mutate provider stores, repair
 state, launch agents, or create another session database.
 
-Each provider-native event has a stable, self-contained `event_ref`. The reference omits machine and
-file location and remains stable across display cursor, content profile, archive moves, and unrelated
-projection changes. `resolve` accepts exactly one canonical reference and returns
+Each discovered session has a stable `session_ref`, and each provider-native event has a stable
+`event_ref`. Both omit machine and file location. Session resolution returns
+`kind: "agent-session-resolution"` with identity and metadata only; event resolution returns
 `kind: "agent-session-event-resolution"` with the bounded inspect target, an available paired tool
 call/result, and the effective context. A missing or rewritten native event fails as stale; clients
 must not substitute a similar event.
