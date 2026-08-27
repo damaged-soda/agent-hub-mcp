@@ -1,23 +1,9 @@
 import http from "node:http";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { discoverNativeSessions, inspectNativeSession } from "./agent-session-sources.js";
 
-const assetRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "ui",
-  "session-inspector",
-);
 const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1"]);
 const LOOPBACK_REQUEST_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
-const ASSETS = new Map([
-  ["/", ["index.html", "text/html; charset=utf-8"]],
-  ["/index.html", ["index.html", "text/html; charset=utf-8"]],
-  ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
-  ["/style.css", ["style.css", "text/css; charset=utf-8"]],
-]);
+const API_VERSION = 1;
 
 export async function startSessionServer(options = {}) {
   const host = options.host ?? "127.0.0.1";
@@ -26,11 +12,7 @@ export async function startSessionServer(options = {}) {
   }
   const publicOrigin = normalizePublicOrigin(options.publicOrigin);
   const basePath = normalizeBasePath(options.basePath);
-  const frameOrigin = normalizeFrameOrigin(options.frameOrigin);
-  if (frameOrigin && !basePath) {
-    throw new Error("frame origin requires a non-root base path");
-  }
-  const serverOptions = { ...options, publicOrigin, basePath, frameOrigin };
+  const serverOptions = { ...options, publicOrigin, basePath };
   const port = boundedPort(options.port ?? 8765);
   const server = http.createServer((request, response) => {
     handleRequest(request, response, serverOptions).catch((error) => {
@@ -78,6 +60,30 @@ async function handleRequest(request, response, options) {
     sendJson(response, 404, { error: { code: "not_found", message: "Not found" } }, request.method);
     return;
   }
+  if (routedPath.pathname === "/") {
+    sendJson(response, 200, {
+      api_version: API_VERSION,
+      kind: "agent-session-service",
+      data: {
+        read_only: true,
+        profiles: ["metadata", "inspect"],
+        endpoints: {
+          health: "healthz",
+          sessions: "api/sessions",
+          inspect: "api/sessions/{provider}/{native_session_id}",
+        },
+      },
+    }, request.method);
+    return;
+  }
+  if (routedPath.pathname === "/healthz") {
+    sendJson(response, 200, {
+      api_version: API_VERSION,
+      kind: "agent-session-health",
+      status: "ok",
+    }, request.method);
+    return;
+  }
   if (routedPath.pathname === "/api/sessions") {
     const data = await discoverNativeSessions({
       provider: optionalQuery(url, "provider"),
@@ -85,7 +91,11 @@ async function handleRequest(request, response, options) {
       roots: options.roots,
       env: options.env,
     });
-    sendJson(response, 200, { api_version: 1, kind: "agent-session-list", data }, request.method);
+    sendJson(response, 200, {
+      api_version: API_VERSION,
+      kind: "agent-session-list",
+      data,
+    }, request.method);
     return;
   }
   const match = /^\/api\/sessions\/([^/]+)\/([^/]+)$/.exec(routedPath.pathname);
@@ -103,35 +113,16 @@ async function handleRequest(request, response, options) {
     sendJson(response, 200, document, request.method);
     return;
   }
-  const asset = ASSETS.get(routedPath.pathname);
-  if (asset) {
-    const [fileName, contentType] = asset;
-    const body = await fsp.readFile(path.join(assetRoot, fileName));
-    response.writeHead(200, {
-      "Content-Type": contentType,
-      "Content-Length": body.length,
-      "Cache-Control": "no-store",
-    });
-    if (request.method === "HEAD") response.end();
-    else response.end(body);
-    return;
-  }
   sendJson(response, 404, { error: { code: "not_found", message: "Not found" } }, request.method);
 }
 
-function setSecurityHeaders(response, options) {
-  const frameAncestors = options.frameOrigin || (options.basePath ? "'self'" : "'none'");
+function setSecurityHeaders(response) {
   response.setHeader("Cache-Control", "no-store");
-  response.setHeader(
-    "Content-Security-Policy",
-    `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'none'`,
-  );
+  response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
-  if (!options.frameOrigin) {
-    response.setHeader("X-Frame-Options", options.basePath ? "SAMEORIGIN" : "DENY");
-  }
+  response.setHeader("X-Frame-Options", "DENY");
 }
 
 function sendJson(response, status, document, method = "GET") {
@@ -210,17 +201,6 @@ export function normalizePublicOrigin(value) {
     throw new Error("public origin must be an absolute HTTPS origin without path or credentials");
   }
   return parsed.origin;
-}
-
-export function normalizeFrameOrigin(value) {
-  if (value === undefined || value === null || value === "") return null;
-  try {
-    const normalized = normalizePublicOrigin(value);
-    if (new URL(normalized).hostname.includes("*")) throw new Error("wildcard");
-    return normalized;
-  } catch {
-    throw new Error("frame origin must be an absolute HTTPS origin without path or credentials");
-  }
 }
 
 export function normalizeBasePath(value) {

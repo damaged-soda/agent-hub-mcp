@@ -58,9 +58,6 @@ agent-session resolve 'agenthub://session/v1/codex/SESSION_ID/event/EVENT_ID'
 agent-session serve --host 127.0.0.1 --port 8765
 agent-session serve --host 127.0.0.1 --port 8765 \
   --public-origin https://cockpit.example.ts.net --base-path /agent-session
-agent-session serve --host 127.0.0.1 --port 8765 \
-  --public-origin https://inspector.example.ts.net:24444 --base-path /agent-session \
-  --frame-origin https://preview.example.ts.net:24443
 ```
 
 `inspect` defaults to the body-free `metadata` profile. The explicit `inspect` profile includes
@@ -79,27 +76,20 @@ Metadata omits command and message bodies but may retain normalized resource pat
 explicit file operands so the exact read/write step remains auditable. Shell writes are not inferred;
 only structured write tools and patch headers currently produce write accesses.
 
-`serve` hosts the same contract and a dependency-free browser UI. It rejects non-loopback binds,
-foreign browser origins, and mutating HTTP methods; every API and asset response is `no-store` and
-uses a restrictive Content Security Policy. The private page explicitly requests bounded `inspect`
-by default, renders full structured event details, and marks read/write resources on the exact tool
-step; users can switch back to metadata.
-Double-click the selected session title or any event title to copy its stable reference. Copyable
-titles use the pointer cursor, and success or failure appears beside the pointer instead of replacing
-the distant sequence label. Focused titles also support Enter or Space.
+`serve` hosts the same read-only JSON contract for Cockpit. It rejects non-loopback binds, foreign
+browser origins, and mutating HTTP methods; every response is `no-store`. Its root returns a
+versioned service description, `/healthz` is a side-effect-free readiness endpoint, and UI assets
+remain a Cockpit responsibility.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.
-`--base-path` moves the UI, assets, and API together under one canonical prefix; root remains the
-default, and the prefix without its trailing slash redirects to the canonical URL. Base-path mode
-also permits same-origin framing so a trusted parent page on that exact origin can embed the UI;
-root mode keeps `frame-ancestors 'none'` and `X-Frame-Options: DENY`.
-An explicit `--frame-origin` is available only with a non-root base path for a private preview on a
-different exact HTTPS origin. It replaces SAMEORIGIN with that single CSP ancestor and omits XFO;
-it does not enable CORS or let the parent read iframe content.
+`--base-path` moves the service description, health check, and API together under one canonical
+prefix; root remains the default, and the prefix without its trailing slash redirects to the
+canonical URL.
 
-The inspector server has no authentication of its own. `--public-origin` is routing validation,
+The session server has no authentication of its own. `--public-origin` is routing validation,
 not authorization: the reverse proxy and its network policy are the only access-control boundary,
-and callers can request `?profile=inspect` directly. Use it only behind
+and callers can request `?profile=inspect` directly. Cockpit must require an explicit user action
+before making that request. Use the server only behind
 an access-controlled private proxy such as tailnet-only Tailscale Serve; never place it behind
 Tailscale Funnel or another public tunnel. Bind addresses are intentionally limited to the literal
 `127.0.0.1` and `::1`; `localhost` is rejected rather than resolved.

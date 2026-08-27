@@ -55,11 +55,13 @@ write tools and patch headers.
 The loopback server exposes the same contract:
 
 ```text
+GET /
+GET /healthz
 GET /api/sessions?provider=&limit=
 GET /api/sessions/<provider>/<native-session-id>?profile=&after=&limit=
 ```
 
-Every API and asset response is `no-store`; mutating methods, foreign origins, and non-literal
+Every response is `no-store`; mutating methods, foreign origins, and non-literal
 loopback binds are rejected. For a trusted private reverse proxy, pass one exact HTTPS origin:
 
 ```sh
@@ -67,17 +69,12 @@ agent-session serve --host 127.0.0.1 --port 8765 \
   --public-origin https://cockpit.example.ts.net --base-path /agent-session
 ```
 
-`--public-origin` only validates Host/Origin routing. The server has no authentication and the UI
-profile is not a server-side content gate, so authorization must be enforced by the private
+`--public-origin` only validates Host/Origin routing. The server has no authentication and the
+content profile is not a server-side gate, so authorization must be enforced by the private
 proxy/network policy. Never publish this endpoint through Funnel or another public tunnel.
-`--base-path` places the page, static assets, and both API routes below the same canonical prefix;
-the default remains `/`, requests outside a configured prefix return 404, and a missing trailing
-slash redirects to the canonical page URL. A configured base path changes frame policy from DENY to
-SAMEORIGIN so a page on the exact admitted origin may embed the inspector; cross-origin framing is
-still rejected.
-An explicitly authorized private preview may add one exact HTTPS `--frame-origin` while keeping a
-separate `--public-origin`. This requires a non-root base path, emits that exact CSP ancestor without
-XFO, and does not grant the parent CORS or DOM access.
+`--base-path` places the service description, health check, and API routes below the same canonical
+prefix; the default remains `/`, requests outside a configured prefix return 404, and a missing
+trailing slash redirects to the canonical service URL.
 
 ## Optional MCP Server Registration
 

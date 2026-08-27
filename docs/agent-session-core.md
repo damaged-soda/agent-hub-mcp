@@ -143,7 +143,6 @@ agent-session inspect --provider ... --session-id ...
 agent-session resolve 'agenthub://session/v1/...'
 agent-session serve [--host 127.0.0.1] [--port 8765]
   [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
-  [--frame-origin https://preview.example.ts.net:24443]
 ```
 
 `list` derives identity from provider-native stores. Its nullable, bounded `title` is copied only
@@ -158,22 +157,16 @@ paths or mutates provider/session state.
 bounded body-bearing diagnostic package described above. Neither reference contains transcript body
 or grants network access.
 
-`serve` exposes the same list/inspect contract and the static inspector UI on loopback only. It
-does not add a database or background coordinator. Responses are `no-store`, cross-origin browser
-requests are rejected, and the private UI explicitly requests bounded `inspect` by default while
-retaining a metadata switch.
+`serve` exposes the same list/inspect contract as a loopback-only JSON API for Cockpit. It does not
+add a database or background coordinator. Responses are `no-store`, cross-origin browser requests
+are rejected, the root returns a versioned service description, and `/healthz` is side-effect free.
 An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
 the process still refuses non-literal loopback bind addresses.
-An optional `base-path` moves the complete UI/API surface under one path prefix without changing
-the native session roots, content profiles, or authorization boundary. Because the parent already
-shares that origin and can call the API directly, base-path mode permits only same-origin framing;
-root mode remains non-embeddable.
-For an explicitly authorized private preview, `frame-origin` may replace `self` with one exact HTTPS
-ancestor only when a non-root base path is configured. It does not change Host/Origin admission,
-enable CORS, or allow the parent to inspect the framed document.
-The server does not authenticate API clients, and the UI profile is not a server-side content gate.
+An optional `base-path` moves the service description, readiness endpoint, and API under one path
+prefix without changing the native session roots, content profiles, or authorization boundary.
+The server does not authenticate API clients, and the content profile is not a server-side gate.
 Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT
-publish the inspector through Funnel or another public tunnel. Bind addresses are restricted to the
+publish the session API through Funnel or another public tunnel. Bind addresses are restricted to the
 literal `127.0.0.1` and `::1`; `localhost` is deliberately rejected.
 
 Stable evolution rules:

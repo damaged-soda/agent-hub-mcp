@@ -30,7 +30,7 @@ It also returns the selectable model catalog for each adapter. Use
 |---|---|
 | `npm run install:local` | Link the `agenthub` CLI and install the bundled Codex Skill. |
 | `agent-session list …` / `agent-session inspect …` | Read provider-native sessions without mutating them. |
-| `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local inspector UI/API. |
+| `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local session API for Cockpit. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
@@ -51,11 +51,9 @@ agent-session inspect --provider codex --session-id SESSION_ID --profile metadat
 agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
 ```
 
-The CLI/API still default to metadata. The private browser inspector requests bounded inspect by
-default, shows every structured event detail, and annotates literal file/Skill reads and writes on
-their tool-call steps. Double-click the selected session title or an event title to copy its stable
-reference. Copyable titles use the pointer cursor; feedback appears beside the pointer. Treat the
-page as sensitive even though long values are truncated.
+The CLI/API default to metadata. Cockpit owns the private browser page and must request bounded
+`inspect` only after an explicit user action. Treat inspect responses as sensitive even though long
+values are truncated.
 
 Resolving a session reference is metadata-only; resolving an event is deliberately body-bearing and
 returns the target, related event, and effective context in bounded `inspect` form:
@@ -80,11 +78,8 @@ origin and mount the complete surface below a path, restart it with
 credentials, and HTTP origins are rejected. Wildcards are unsupported and never match a real Host.
 The base path is routing, not authorization: keep authorization at the private proxy/network layer,
 never use Funnel or another public tunnel, and treat direct `?profile=inspect` requests as capable
-of returning transcript bodies without the UI confirmation. Base-path mode permits same-origin
-iframe embedding and root mode remains `DENY` unless the explicit preview option below is used.
-For a private preview on a different origin, add one exact HTTPS `--frame-origin` together with a
-non-root base path. This changes only CSP framing; the inspector still validates its own exact
-`--public-origin`, and the parent cannot read the framed DOM through the browser same-origin policy.
+of returning transcript bodies without the UI confirmation. The service description, readiness
+endpoint, and API remain below the same canonical prefix.
 
 ## Environment Variables
 
