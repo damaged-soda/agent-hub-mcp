@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./agent-session-core": "./src/agent-session-core.js",
+    "./agent-session-references": "./src/agent-session-references.js",
     "./agent-session-resources": "./src/agent-session-resources.js",
     "./agent-session-sources": "./src/agent-session-sources.js",
     "./agent-session-transcripts": "./src/agent-session-transcripts.js",

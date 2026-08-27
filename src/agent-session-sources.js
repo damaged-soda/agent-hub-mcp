@@ -1,11 +1,21 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { createSessionIdentity } from "./agent-session-core.js";
+import {
+  createContextObservation,
+  createSessionIdentity,
+  projectSessionEvents,
+} from "./agent-session-core.js";
+import {
+  AGENT_SESSION_EVENT_ID_VERSION,
+  AGENT_SESSION_REFERENCE_VERSION,
+  createNativeEventReferenceProjector,
+  parseAgentSessionEventReference,
+} from "./agent-session-references.js";
 import { createTranscriptProjector } from "./agent-session-transcripts.js";
-import { projectSessionEvents } from "./agent-session-core.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KIMI_ID_PATTERN = /^(?:session|ses)_[0-9a-f-]{36}$/i;
@@ -50,8 +60,115 @@ export async function inspectNativeSession(input, options = {}) {
   if (!descriptor) {
     throw new Error(`Unknown ${identity.provider} native_session_id: ${identity.native_session_id}`);
   }
-  const projector = createTranscriptProjector(identity.provider, identity.native_session_id);
   const projected = [];
+  const scan = await walkNativeSessionEvents(descriptor, identity, (event) => {
+    if (event.sequence < after) return true;
+    projected.push(event);
+    return projected.length <= limit;
+  });
+  const hasMore = projected.length > limit;
+  const events = projectSessionEvents(projected.slice(0, limit), profile);
+  return {
+    api_version: 1,
+    kind: "agent-session-inspect",
+    profile,
+    session: await enrichDescriptor(descriptor),
+    after,
+    next_sequence: events.length > 0 ? events.at(-1).sequence + 1 : after,
+    has_more: hasMore,
+    malformed_lines: scan.malformed_lines,
+    data: events,
+  };
+}
+
+export async function resolveNativeSessionEventReference(value, options = {}) {
+  const parsed = parseAgentSessionEventReference(value);
+  const roots = options.roots ?? nativeSessionRoots(options.env);
+  const descriptor = await findSession(parsed.provider, parsed.native_session_id, roots);
+  if (!descriptor) {
+    throw new Error(`Unknown ${parsed.provider} native_session_id: ${parsed.native_session_id}`);
+  }
+
+  let target = null;
+  let related = null;
+  let precedingToolCallSequence = null;
+  const toolCallSequences = new Map();
+  const effectiveContext = {};
+  const scan = await walkNativeSessionEvents(descriptor, parsed, (event) => {
+    if (!target) {
+      if (event.kind === "context") Object.assign(effectiveContext, event.data ?? {});
+      const toolCallId = event.data?.tool_call_id;
+      if (event.kind === "tool-call" && typeof toolCallId === "string") {
+        toolCallSequences.set(toolCallId, event.sequence);
+      }
+      if (event.event_ref !== parsed.reference) return true;
+      target = event;
+      if (event.kind === "tool-result" && typeof toolCallId === "string") {
+        precedingToolCallSequence = toolCallSequences.get(toolCallId) ?? null;
+        return false;
+      }
+      return event.kind === "tool-call" && typeof toolCallId === "string";
+    }
+
+    const targetToolCallId = target.data?.tool_call_id;
+    if (
+      target.kind === "tool-call" &&
+      event.kind === "tool-result" &&
+      typeof targetToolCallId === "string" &&
+      event.data?.tool_call_id === targetToolCallId
+    ) {
+      related = event;
+      return false;
+    }
+    return true;
+  });
+
+  if (!target) {
+    throw new Error(`Stale Agent Session event reference: ${parsed.reference}`);
+  }
+  if (!related && Number.isInteger(precedingToolCallSequence)) {
+    related = await readEventAtSequence(descriptor, parsed, precedingToolCallSequence);
+  }
+  const boundedTarget = projectSessionEvents([target], "inspect")[0];
+  const boundedRelated = related ? projectSessionEvents([related], "inspect") : [];
+  const boundedContext = Object.keys(effectiveContext).length > 0
+    ? projectSessionEvents([
+        createContextObservation({
+          provider: parsed.provider,
+          native_session_id: parsed.native_session_id,
+          sequence: target.sequence,
+          context: effectiveContext,
+          occurred_at: target.occurred_at,
+          stage: "inferred",
+          source: "native-transcript",
+          native_type: "agenthub/effective-context",
+        }),
+      ], "inspect")[0]
+    : null;
+  return {
+    api_version: 1,
+    kind: "agent-session-event-resolution",
+    reference: parsed.reference,
+    reference_protocol: {
+      version: AGENT_SESSION_REFERENCE_VERSION,
+      event_id_version: AGENT_SESSION_EVENT_ID_VERSION,
+    },
+    session: await enrichDescriptor(descriptor),
+    malformed_lines: scan.malformed_lines,
+    data: {
+      target: boundedTarget,
+      related: boundedRelated,
+      effective_context: boundedContext,
+    },
+  };
+}
+
+async function walkNativeSessionEvents(descriptor, identity, visitor) {
+  const projector = createTranscriptProjector(identity.provider, identity.native_session_id);
+  const referenceProjector = createNativeEventReferenceProjector(
+    identity.provider,
+    identity.native_session_id,
+  );
   let sequence = 0;
   let malformedLines = 0;
   const stream = fs.createReadStream(descriptor.source_path, { encoding: "utf8" });
@@ -66,35 +183,33 @@ export async function inspectNativeSession(input, options = {}) {
         malformedLines += 1;
         continue;
       }
-      for (const event of projector.project(record)) {
+      const events = referenceProjector.attach(record, projector.project(record));
+      for (const event of events) {
         const sequenced = { ...event, sequence };
         sequence += 1;
-        if (sequenced.sequence < after) continue;
-        projected.push(sequenced);
-        if (projected.length > limit) break;
+        if (visitor(sequenced) === false) {
+          return { malformed_lines: malformedLines, next_sequence: sequence, stopped: true };
+        }
       }
-      if (projected.length > limit) break;
     }
   } finally {
     lines.close();
     stream.destroy();
   }
-  const hasMore = projected.length > limit;
-  const events = projectSessionEvents(projected.slice(0, limit), profile);
-  return {
-    api_version: 1,
-    kind: "agent-session-inspect",
-    profile,
-    session: await enrichDescriptor(descriptor),
-    after,
-    next_sequence: events.length > 0 ? events.at(-1).sequence + 1 : after,
-    has_more: hasMore,
-    malformed_lines: malformedLines,
-    data: events,
-  };
+  return { malformed_lines: malformedLines, next_sequence: sequence, stopped: false };
 }
 
-async function discoverCodex(root) {
+async function readEventAtSequence(descriptor, identity, targetSequence) {
+  let selected = null;
+  await walkNativeSessionEvents(descriptor, identity, (event) => {
+    if (event.sequence < targetSequence) return true;
+    if (event.sequence === targetSequence) selected = event;
+    return false;
+  });
+  return selected;
+}
+
+async function discoverCodex(root, options = {}) {
   const titles = await codexTitleIndex(root);
   const files = [
     ...(await collectFiles(path.join(root, "sessions"), isJsonl)),
@@ -115,10 +230,10 @@ async function discoverCodex(root) {
     descriptor.title = titles.get(match[1]) ?? null;
     descriptors.push(descriptor);
   }
-  return dedupeDescriptors(descriptors);
+  return options.dedupe === false ? descriptors : dedupeDescriptors(descriptors);
 }
 
-async function discoverClaude(root) {
+async function discoverClaude(root, options = {}) {
   const projectsRoot = path.join(root, "projects");
   const projectDirs = await directoryEntries(projectsRoot);
   const descriptors = [];
@@ -133,10 +248,10 @@ async function discoverClaude(root) {
       );
     }
   }
-  return descriptors;
+  return options.dedupe === false ? descriptors : dedupeDescriptors(descriptors);
 }
 
-async function discoverKimi(root) {
+async function discoverKimi(root, options = {}) {
   const indexPath = path.join(root, "session_index.jsonl");
   const text = await fsp.readFile(indexPath, "utf8").catch((error) => {
     if (error?.code === "ENOENT") return "";
@@ -163,17 +278,26 @@ async function discoverKimi(root) {
     descriptor.state_path = path.join(sessionDir, "state.json");
     descriptors.push(descriptor);
   }
-  return dedupeDescriptors(descriptors);
+  return options.dedupe === false ? descriptors : dedupeDescriptors(descriptors);
 }
 
 async function findSession(provider, nativeSessionId, roots) {
   const descriptors =
     provider === "codex"
-      ? await discoverCodex(roots.codex)
+      ? await discoverCodex(roots.codex, { dedupe: false })
       : provider === "claude"
-        ? await discoverClaude(roots.claude)
-        : await discoverKimi(roots.kimi);
-  return descriptors.find((item) => item.native_session_id === nativeSessionId) ?? null;
+        ? await discoverClaude(roots.claude, { dedupe: false })
+        : await discoverKimi(roots.kimi, { dedupe: false });
+  const matches = descriptors.filter((item) => item.native_session_id === nativeSessionId);
+  if (matches.length <= 1) return matches[0] ?? null;
+  const digests = await Promise.all(matches.map((item) => fileSha256(item.source_path)));
+  if (new Set(digests).size !== 1) {
+    throw new Error(
+      `Ambiguous ${provider} native_session_id has conflicting transcript sources: ${nativeSessionId}`,
+    );
+  }
+  const selected = [...matches].sort(compareDuplicateSources)[0];
+  return { ...selected, duplicate_source_count: matches.length };
 }
 
 async function baseDescriptor(provider, nativeSessionId, sourcePath, sourceKind) {
@@ -327,6 +451,18 @@ function dedupeDescriptors(descriptors) {
     }
   }
   return Array.from(selected.values());
+}
+
+function compareDuplicateSources(left, right) {
+  const leftRank = left.source_kind === "codex-rollout" ? 0 : 1;
+  const rightRank = right.source_kind === "codex-rollout" ? 0 : 1;
+  return leftRank - rightRank || left.source_path.localeCompare(right.source_path);
+}
+
+async function fileSha256(sourcePath) {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(sourcePath)) hash.update(chunk);
+  return hash.digest("hex");
 }
 
 function safeChildPath(root, candidate) {

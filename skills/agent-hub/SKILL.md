@@ -1,6 +1,6 @@
 ---
 name: agent-hub
-description: Dispatch and coordinate local Claude Code, Codex, and Kimi Code processes through the daemon-free agenthub CLI. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, continue a native CLI session, or participate in a durable structured discussion.
+description: Dispatch and coordinate local Claude Code, Codex, and Kimi Code processes through the daemon-free agenthub CLI, and resolve copied agenthub:// session event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, continue or inspect a native CLI session, resolve an Agent Hub event reference, or participate in a durable structured discussion.
 ---
 
 # Agent Hub
@@ -47,6 +47,30 @@ agenthub dispatch \
 ```
 
 Keep Agent Hub `run_id` values separate from native session IDs.
+
+## Resolve a copied session event
+
+Treat a user-supplied `agenthub://session/v1/...` value as an opaque event reference. Do not parse,
+rewrite, or guess its components. Resolve it through the stable read CLI:
+
+```sh
+agent-session resolve 'agenthub://session/v1/PROVIDER/SESSION_ID/event/EVENT_ID'
+```
+
+Directly sending the reference authorizes inspection of its complete provider-native session. The
+resolve command returns a bounded inspect diagnostic containing the exact target event, its paired
+tool call/result when present, and the effective context at that step. Start there, then read only
+the additional session pages needed for the user's task:
+
+```sh
+agent-session inspect --provider PROVIDER --session-id SESSION_ID \
+  --profile inspect --after SEQUENCE --limit 200
+```
+
+You may inspect the whole session when useful without asking again, but do not eagerly load it when
+the bounded diagnostic is sufficient. Never persist transcript bodies or send them to third parties.
+If resolution reports a stale reference, report that exact failure; do not substitute a similar
+event.
 
 ## Supply structured input
 

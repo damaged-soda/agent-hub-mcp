@@ -119,4 +119,31 @@ describe("native transcript projections", () => {
       .toEqual(call.data.resource_accesses);
     expect(JSON.stringify(metadata)).not.toContain("sed -n");
   });
+
+  it("keeps native event references identical across content profiles and sequence cursors", () => {
+    const transcript = fixture("codex-transcript.jsonl");
+    const inspect = projectNativeTranscript("codex", transcript, { start_sequence: 0 });
+    const metadata = projectNativeTranscript("codex", transcript, {
+      profile: "metadata",
+      start_sequence: 900,
+    });
+    expect(inspect.every((event) => event.event_ref?.startsWith("agenthub://session/v1/")))
+      .toBe(true);
+    expect(metadata.map((event) => event.event_ref)).toEqual(
+      inspect.map((event) => event.event_ref),
+    );
+    expect(metadata.map((event) => event.sequence)).not.toEqual(
+      inspect.map((event) => event.sequence),
+    );
+
+    const records = transcript.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const withUnrelatedRecord = projectNativeTranscript("codex", [
+      { type: "unprojected.future-record", value: true },
+      ...records,
+    ]);
+    const target = (events) => events.find((event) =>
+      event.kind === "tool-call" && event.data.tool_call_id === "call-1"
+    );
+    expect(target(withUnrelatedRecord).event_ref).toBe(target(inspect).event_ref);
+  });
 });

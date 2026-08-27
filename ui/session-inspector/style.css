@@ -269,6 +269,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .event-card.is-error::before { background: var(--danger); }
 .event-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .event-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.event-title.is-copyable { cursor: copy; user-select: none; }
+.event-title.is-copyable:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 5px; }
 .event-sequence { color: var(--text-muted); font: 10px/1 var(--mono); }
 .event-body { margin-top: 10px; color: var(--text-soft); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .collapsible-text-summary { color: var(--text-soft); cursor: pointer; font: inherit; list-style: none; }
