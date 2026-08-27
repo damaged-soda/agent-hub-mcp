@@ -182,13 +182,25 @@ describe("agent session server", () => {
       const redirect = await fetch(`${prefixedBase}/agent-session`, { redirect: "manual" });
       expect(redirect.status).toBe(308);
       expect(redirect.headers.get("location")).toBe("/agent-session/");
+      const queryRedirect = await fetch(`${prefixedBase}/agent-session?limit=5&x=1`, {
+        redirect: "manual",
+      });
+      expect(queryRedirect.headers.get("location")).toBe("/agent-session/?limit=5&x=1");
 
       const index = await fetch(`${prefixedBase}/agent-session/`);
       expect(index.status).toBe(200);
       expect(await index.text()).toContain('src="./app.js"');
+      expect((await fetch(`${prefixedBase}/agent-session/index.html`)).status).toBe(200);
+      expect((await fetch(`${prefixedBase}/agent-session/style.css`)).status).toBe(200);
+      const head = await fetch(`${prefixedBase}/agent-session/`, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
       const app = await fetch(`${prefixedBase}/agent-session/app.js`);
       expect(app.status).toBe(200);
-      expect(await app.text()).not.toContain('fetch("/api/');
+      const appText = await app.text();
+      expect(appText).toContain("document.baseURI");
+      expect(appText).not.toContain('fetch("/api/');
+      expect(appText).not.toContain("window.location.origin");
 
       const list = await fetch(`${prefixedBase}/agent-session/api/sessions?limit=1`);
       expect(list.status).toBe(200);
