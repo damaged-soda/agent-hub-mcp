@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import { discoverNativeSessions, inspectNativeSession } from "./agent-session-sources.js";
-import { normalizeBasePath, normalizePublicOrigin, startSessionServer } from "./session-server.js";
+import {
+  normalizeBasePath,
+  normalizeFrameOrigin,
+  normalizePublicOrigin,
+  startSessionServer,
+} from "./session-server.js";
 
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
@@ -39,14 +44,19 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (command === "serve") {
-    rejectUnknown(flags, new Set(["host", "port", "public-origin", "base-path"]));
+    rejectUnknown(
+      flags,
+      new Set(["host", "port", "public-origin", "base-path", "frame-origin"]),
+    );
     const publicOrigin = normalizePublicOrigin(flags["public-origin"]);
     const basePath = normalizeBasePath(flags["base-path"]);
+    const frameOrigin = normalizeFrameOrigin(flags["frame-origin"]);
     const server = await startSessionServer({
       host: flags.host,
       port: flags.port,
       publicOrigin,
       basePath,
+      frameOrigin,
     });
     const address = server.address();
     const host = typeof address === "object" && address ? address.address : flags.host || "127.0.0.1";
@@ -59,6 +69,7 @@ async function main(argv = process.argv.slice(2)) {
       }`,
       public_origin: publicOrigin || undefined,
       base_path: basePath || undefined,
+      frame_origin: frameOrigin || undefined,
     });
     const close = () => server.close(() => process.exit(0));
     process.once("SIGINT", close);
@@ -106,6 +117,7 @@ Usage:
       [--profile metadata|inspect] [--after N] [--limit N]
   agent-session serve [--host 127.0.0.1] [--port 8765]
       [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
+      [--frame-origin https://preview.example.ts.net:24443]
 
 The default inspect profile is metadata. Use --profile inspect explicitly to include
 visible prompts, assistant text, tool arguments, and tool results. Thinking blocks are
