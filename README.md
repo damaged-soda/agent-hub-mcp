@@ -54,6 +54,8 @@ agent-session list --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID --limit 200
 agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
 agent-session serve --host 127.0.0.1 --port 8765
+agent-session serve --host 127.0.0.1 --port 8765 \
+  --public-origin https://agent-session.example.ts.net
 ```
 
 `inspect` defaults to the content-free `metadata` profile. The explicit `inspect` profile includes
@@ -65,6 +67,15 @@ models, launch agents, or create another session database.
 foreign browser origins, and mutating HTTP methods; every API and asset response is `no-store` and
 uses a restrictive Content Security Policy. The page starts in `metadata` mode and requires an
 inline second confirmation before requesting transcript bodies.
+`--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
+Tailscale Serve; it never changes the loopback-only bind.
+
+The inspector server has no authentication of its own. `--public-origin` is routing validation,
+not authorization: the reverse proxy and its network policy are the only access-control boundary,
+and callers can request `?profile=inspect` directly without the UI confirmation. Use it only behind
+an access-controlled private proxy such as tailnet-only Tailscale Serve; never place it behind
+Tailscale Funnel or another public tunnel. Bind addresses are intentionally limited to the literal
+`127.0.0.1` and `::1`; `localhost` is rejected rather than resolved.
 
 Dispatch a smoke prompt:
 

@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +9,16 @@ import { startSessionServer } from "../src/session-server.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = path.join(repoRoot, "fixtures", "agent-session");
 const CODEX_ID = "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6";
+
+function requestStatus(url, headers) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, { headers }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response.statusCode));
+    });
+    request.once("error", reject);
+  });
+}
 
 let tempRoot;
 let roots;
@@ -79,7 +90,81 @@ describe("agent session server", () => {
       ).status,
     ).toBe(403);
     await expect(startSessionServer({ host: "0.0.0.0", port: 0, roots })).rejects.toThrow(
-      /loopback/,
+      /literal 127\.0\.0\.1 or ::1/,
     );
+    await expect(startSessionServer({ host: "localhost", port: 0, roots })).rejects.toThrow(
+      /literal 127\.0\.0\.1 or ::1/,
+    );
+  });
+
+  it("accepts one exact HTTPS public origin for a trusted reverse proxy", async () => {
+    const publicOrigin = "https://agent-session.example.ts.net";
+    const publicServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots,
+      publicOrigin,
+    });
+    const localUrl = `http://127.0.0.1:${publicServer.address().port}/api/sessions?limit=1`;
+    try {
+      const accepted = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net",
+        Origin: publicOrigin,
+      });
+      expect(accepted).toBe(200);
+      const wrongOrigin = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net",
+        Origin: "https://attacker.invalid",
+      });
+      expect(wrongOrigin).toBe(403);
+      const downgradedOrigin = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net",
+        Origin: "http://agent-session.example.ts.net",
+      });
+      expect(downgradedOrigin).toBe(403);
+      const nativeClient = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net",
+      });
+      expect(nativeClient).toBe(200);
+      const wrongHost = await requestStatus(localUrl, {
+        Host: "other.example.ts.net",
+        Origin: publicOrigin,
+      });
+      expect(wrongHost).toBe(403);
+      const wrongPort = await requestStatus(localUrl, {
+        Host: "agent-session.example.ts.net:8443",
+        Origin: publicOrigin,
+      });
+      expect(wrongPort).toBe(403);
+    } finally {
+      await new Promise((resolve) => publicServer.close(resolve));
+    }
+    await expect(
+      startSessionServer({
+        host: "127.0.0.1",
+        port: 0,
+        roots,
+        publicOrigin: "http://agent-session.example.ts.net/path",
+      }),
+    ).rejects.toThrow(/HTTPS origin/);
+    const canonicalServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots,
+      publicOrigin: "https://Agent-Session.EXAMPLE.ts.net:443/",
+    });
+    try {
+      expect(
+        await requestStatus(
+          `http://127.0.0.1:${canonicalServer.address().port}/api/sessions?limit=1`,
+          {
+            Host: "agent-session.example.ts.net",
+            Origin: "https://agent-session.example.ts.net",
+          },
+        ),
+      ).toBe(200);
+    } finally {
+      await new Promise((resolve) => canonicalServer.close(resolve));
+    }
   });
 });
