@@ -13,6 +13,7 @@
     hasMore: false,
     loading: false,
     loadToken: 0,
+    expandedDetails: new Set(),
   };
 
   const listRoot = document.querySelector("#session-list");
@@ -78,7 +79,6 @@
         el("span", "session-age", relativeTime(session.updated_at)),
       );
       const title = el("span", "session-title", sessionDisplayTitle(session));
-      title.title = sessionDisplayTitle(session);
       const cwd = el("span", "session-cwd", session.cwd || "cwd unknown");
       cwd.title = session.cwd || "";
       const id = el("span", "session-id", session.native_session_id);
@@ -95,6 +95,7 @@
     state.events = [];
     state.nextSequence = 0;
     state.hasMore = false;
+    state.expandedDetails.clear();
     renderSessionList();
     renderDetailLoading();
     await loadEvents(false);
@@ -233,7 +234,7 @@
       const evidence = context.evidence.get(key);
       let value = context.values[key];
       if (key.endsWith("_bytes") && Number.isFinite(value)) value = `${formatNumber(value)} bytes`;
-      table.append(evidenceRow(label, value, evidence));
+      table.append(evidenceRow(key, label, value, evidence));
     }
     section.append(heading, table);
     return section;
@@ -275,7 +276,7 @@
     head.append(title, el("span", "event-sequence", `#${event.sequence}`));
     card.append(head);
     const body = eventBody(event);
-    if (body) card.append(textBlock("event-body", body, "展开正文"));
+    if (body) card.append(textBlock("event-body", body, "展开正文", `${event.sequence}:body`));
     const resources = Array.isArray(event.data?.resource_accesses) ? event.data.resource_accesses : [];
     if (resources.length > 0) {
       const resourceList = el("div", "event-resources");
@@ -301,6 +302,7 @@
         ),
       );
       details.append(el("pre", "event-json", json));
+      rememberExpanded(details, `${event.sequence}:json`);
       card.append(details);
     }
     card.append(
@@ -360,6 +362,7 @@
     state.events = [];
     state.nextSequence = 0;
     state.hasMore = false;
+    state.expandedDetails.clear();
     renderDetailLoading();
     await loadEvents(false);
   }
@@ -376,13 +379,13 @@
     return { values, evidence };
   }
 
-  function evidenceRow(label, value, event) {
+  function evidenceRow(key, label, value, event) {
     const row = el("div", "evidence-row");
     const stage = event?.provenance?.stage || "unknown";
     const displayed = value === undefined || value === null || value === "" ? "未知" : displayValue(value);
     row.append(
       el("div", "evidence-key", label),
-      textBlock("evidence-value", displayed, "展开长文本"),
+      textBlock("evidence-value", displayed, "展开长文本", `evidence:${key}`),
       el("div", "evidence-stage", ""),
       el("div", "evidence-source", event?.provenance?.native_type || "no evidence"),
     );
@@ -425,7 +428,7 @@
     return JSON.stringify(value);
   }
 
-  function textBlock(className, value, summary) {
+  function textBlock(className, value, summary, expansionKey) {
     const text = String(value);
     if (!isLongText(text)) return el("div", className, text);
     const details = el("details", `${className} collapsible-text`);
@@ -437,7 +440,17 @@
       ),
       el("div", "collapsible-text-body", text),
     );
+    rememberExpanded(details, expansionKey);
     return details;
+  }
+
+  function rememberExpanded(details, key) {
+    if (!key) return;
+    details.open = state.expandedDetails.has(key);
+    details.addEventListener("toggle", () => {
+      if (details.open) state.expandedDetails.add(key);
+      else state.expandedDetails.delete(key);
+    });
   }
 
   function isLongText(value) {

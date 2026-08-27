@@ -45,7 +45,12 @@ beforeEach(async () => {
     fsp.copyFile(path.join(fixtureRoot, "kimi-transcript.jsonl"), kimiPath),
     fsp.writeFile(
       path.join(kimiDir, "state.json"),
-      JSON.stringify({ id: KIMI_ID, cwd: "/workspace/example", title: "检查 Kimi 会话" }),
+      JSON.stringify({
+        id: KIMI_ID,
+        cwd: "/workspace/example",
+        title: "检查 Kimi 会话",
+        isCustomTitle: true,
+      }),
     ),
   ]);
   await fsp.appendFile(
@@ -105,6 +110,52 @@ describe("native session sources", () => {
     );
     const sessions = await discoverNativeSessions({ roots, provider: "kimi", limit: 10 });
     expect(sessions.map((item) => item.native_session_id)).toEqual([KIMI_ID]);
+  });
+
+  it("normalizes bounded titles and keeps missing titles explicit", async () => {
+    await fsp.writeFile(
+      path.join(roots.codex, "session_index.jsonl"),
+      `${JSON.stringify({ id: CODEX_ID, thread_name: `  标题  换行\n${"x".repeat(300)}` })}\n`,
+    );
+    let sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(sessions[0].title).toHaveLength(256);
+    expect(sessions[0].title).toMatch(/^标题 换行 x+$/);
+
+    await fsp.writeFile(
+      path.join(roots.codex, "session_index.jsonl"),
+      `${JSON.stringify({ id: CODEX_ID, thread_name: " \n " })}\n`,
+    );
+    sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(sessions[0].title).toBeNull();
+  });
+
+  it("uses only recent Claude ai-title metadata", async () => {
+    await fsp.appendFile(
+      sourcePaths.claudePath,
+      `${JSON.stringify({ type: "ai-title", sessionId: CLAUDE_ID, aiTitle: "更新后的标题" })}\n`,
+    );
+    let sessions = await discoverNativeSessions({ roots, provider: "claude", limit: 10 });
+    expect(sessions[0].title).toBe("更新后的标题");
+
+    await fsp.appendFile(
+      sourcePaths.claudePath,
+      `${JSON.stringify({ type: "noise", value: "x".repeat(64 * 1024) })}\n`,
+    );
+    sessions = await discoverNativeSessions({ roots, provider: "claude", limit: 10 });
+    expect(sessions[0].title).toBeNull();
+  });
+
+  it("does not expose Kimi automatic prompt titles", async () => {
+    await fsp.writeFile(
+      path.join(path.dirname(path.dirname(path.dirname(sourcePaths.kimiPath))), "state.json"),
+      JSON.stringify({
+        cwd: "/workspace/example",
+        title: "这是第一条 prompt 的原文",
+        isCustomTitle: false,
+      }),
+    );
+    const sessions = await discoverNativeSessions({ roots, provider: "kimi", limit: 10 });
+    expect(sessions[0].title).toBeNull();
   });
 
   it("uses metadata by default and requires inspect profile for transcript bodies", async () => {

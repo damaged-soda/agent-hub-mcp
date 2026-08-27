@@ -97,9 +97,10 @@ agent-session serve [--host 127.0.0.1] [--port 8765]
 ```
 
 `list` derives identity from provider-native stores. Its nullable, bounded `title` is copied only
-from provider-written title metadata (Codex's session index, Claude's `ai-title`, or Kimi's session
-state); it never derives a fallback from prompt text or launches a model call. A native title can
-still summarize a sensitive topic, so the list remains part of the private inspector surface.
+from provider-written title metadata (Codex's session index, Claude's `ai-title`, or a Kimi title
+explicitly marked custom); it never derives a fallback from prompt text or launches a model call.
+Kimi's automatic title mirrors the prompt and is deliberately excluded. A native title can still
+summarize a sensitive topic, so the list remains part of the private inspector surface.
 `inspect` uses normalized event sequence cursors, defaults to `metadata`, and requires an explicit
 `--profile inspect` to return transcript bodies. Neither command accepts arbitrary source paths or
 mutates provider/session state.

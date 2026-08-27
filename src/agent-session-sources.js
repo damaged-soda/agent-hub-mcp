@@ -12,7 +12,7 @@ const KIMI_ID_PATTERN = /^(?:session|ses)_[0-9a-f-]{36}$/i;
 const MAX_LIST_LIMIT = 500;
 const MAX_EVENT_LIMIT = 1000;
 const MAX_TITLE_LENGTH = 256;
-const CLAUDE_TITLE_TAIL_BYTES = 256 * 1024;
+const CLAUDE_TITLE_TAIL_BYTES = 64 * 1024;
 
 export function nativeSessionRoots(env = process.env) {
   const home = os.homedir();
@@ -198,7 +198,7 @@ async function enrichDescriptor(descriptor) {
     return {
       ...descriptor,
       cwd: descriptor.cwd ?? (typeof state?.cwd === "string" ? state.cwd : null),
-      title: nativeTitle(state?.title),
+      title: state?.isCustomTitle === true ? nativeTitle(state.title) : null,
     };
   }
   const metadata = await firstMetadataRecord(descriptor);
@@ -234,9 +234,13 @@ async function codexTitleIndex(root) {
 async function latestClaudeTitle(descriptor) {
   const retained = Math.min(descriptor.size_bytes, CLAUDE_TITLE_TAIL_BYTES);
   if (retained <= 0) return null;
-  const handle = await fsp.open(descriptor.source_path, "r");
+  const handle = await fsp.open(descriptor.source_path, "r").catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!handle) return null;
   try {
-    const buffer = Buffer.alloc(retained);
+    const buffer = Buffer.allocUnsafe(retained);
     const offset = descriptor.size_bytes - retained;
     const { bytesRead } = await handle.read(buffer, 0, retained, offset);
     let text = buffer.subarray(0, bytesRead).toString("utf8");
