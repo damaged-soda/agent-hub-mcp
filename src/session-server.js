@@ -32,7 +32,7 @@ export async function startSessionServer(options = {}) {
 }
 
 async function handleRequest(request, response, options) {
-  setSecurityHeaders(response, options);
+  setSecurityHeaders(response);
   if (!requestHostAllowed(request.headers.host, options.publicOrigin)) {
     sendJson(response, 403, { error: { code: "host_forbidden", message: "Loopback Host required" } });
     return;

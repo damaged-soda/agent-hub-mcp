@@ -124,6 +124,9 @@ Usage:
   agent-session serve [--host 127.0.0.1] [--port 8765]
       [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
 
+HTTP endpoints: GET /, GET /healthz, GET /api/sessions,
+and GET /api/sessions/PROVIDER/SESSION_ID (all below --base-path when set).
+
 The default inspect profile is metadata. Resolve identifies one copied session reference;
 event references additionally return a bounded inspect diagnostic. Use --profile inspect
 to include visible prompts, assistant text, tool arguments, and tool results when paging

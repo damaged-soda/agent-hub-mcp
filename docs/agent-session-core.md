@@ -162,7 +162,7 @@ add a database or background coordinator. Responses are `no-store`, cross-origin
 are rejected, the root returns a versioned service description, and `/healthz` is side-effect free.
 An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
 the process still refuses non-literal loopback bind addresses.
-An optional `base-path` moves the service description, readiness endpoint, and API under one path
+An optional `base-path` moves the service description, liveness endpoint, and API under one path
 prefix without changing the native session roots, content profiles, or authorization boundary.
 The server does not authenticate API clients, and the content profile is not a server-side gate.
 Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT

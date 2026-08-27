@@ -78,7 +78,7 @@ origin and mount the complete surface below a path, restart it with
 credentials, and HTTP origins are rejected. Wildcards are unsupported and never match a real Host.
 The base path is routing, not authorization: keep authorization at the private proxy/network layer,
 never use Funnel or another public tunnel, and treat direct `?profile=inspect` requests as capable
-of returning transcript bodies without the UI confirmation. The service description, readiness
+of returning transcript bodies without the UI confirmation. The service description, liveness
 endpoint, and API remain below the same canonical prefix.
 
 ## Environment Variables

@@ -78,7 +78,7 @@ only structured write tools and patch headers currently produce write accesses.
 
 `serve` hosts the same read-only JSON contract for Cockpit. It rejects non-loopback binds, foreign
 browser origins, and mutating HTTP methods; every response is `no-store`. Its root returns a
-versioned service description, `/healthz` is a side-effect-free readiness endpoint, and UI assets
+versioned service description, `/healthz` is a side-effect-free liveness endpoint, and UI assets
 remain a Cockpit responsibility.
 `--public-origin` adds one exact HTTPS Host/Origin pair for a trusted loopback reverse proxy such as
 Tailscale Serve; it never changes the loopback-only bind.

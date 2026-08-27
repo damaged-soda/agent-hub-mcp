@@ -198,6 +198,11 @@ describe("agent session server", () => {
         Host: "agent-session.example.ts.net",
       });
       expect(nativeClient).toBe(200);
+      const publicHealthUrl =
+        `http://127.0.0.1:${publicServer.address().port}/healthz`;
+      expect(await requestStatus(publicHealthUrl, {
+        Host: "agent-session.example.ts.net",
+      })).toBe(200);
       const wrongHost = await requestStatus(localUrl, {
         Host: "other.example.ts.net",
         Origin: publicOrigin,
