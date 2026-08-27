@@ -97,6 +97,22 @@ describe("agent session server", () => {
     await expect(startSessionServer({ host: "localhost", port: 0, roots })).rejects.toThrow(
       /literal 127\.0\.0\.1 or ::1/,
     );
+
+    const slashRootServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots,
+      basePath: "/",
+    });
+    try {
+      const slashRoot = await fetch(`http://127.0.0.1:${slashRootServer.address().port}/`);
+      expect(slashRoot.headers.get("content-security-policy")).toContain(
+        "frame-ancestors 'none'",
+      );
+      expect(slashRoot.headers.get("x-frame-options")).toBe("DENY");
+    } finally {
+      await new Promise((resolve) => slashRootServer.close(resolve));
+    }
   });
 
   it("accepts one exact HTTPS public origin for a trusted reverse proxy", async () => {
