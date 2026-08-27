@@ -71,6 +71,7 @@ describe("agent session server", () => {
     expect(app).toContain("sessionDisplayTitle");
     expect(app).toContain("collapsible-text");
     expect(app).toContain("LONG_TEXT_PREVIEW_CHARACTERS");
+    expect(app).toContain("LONG_TEXT_PREVIEW_CHARACTERS = 140");
     expect(app).toContain("collapsible-text-preview");
     expect(app).toContain("collapsible-text-action-expanded");
     expect(app).not.toContain("details.open = true");
