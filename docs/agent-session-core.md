@@ -56,12 +56,21 @@ state.
 `projectLiveStream` supports two projections:
 
 - `inspect`: keeps visible assistant text, tool arguments, tool results, and normalized provider
-  context for an explicit local inspection request. Thinking blocks are never projected.
+  context for an explicit local inspection request. Thinking blocks are never projected. Long
+  strings, arrays, objects, and nesting are bounded; truncated events carry field paths plus
+  original and retained sizes/counts.
 - `metadata`: removes message text, tool arguments/results, result/error text, and private plugin
   paths while retaining byte counts and structural metadata.
 
 `metadata` is a safe common baseline, not a replacement for Cockpit's stricter source projection.
 Cockpit may retain fewer fields and remains responsible for its own fail-loud redaction tests.
+
+Tool-call events may carry `resource_accesses[]`. Each row records `read|write`, normalized path,
+`file|skill`, evidence, and coverage. The extractor only accepts structured path fields, patch
+headers, explicit `SKILL.md` literals, and bounded adapters for literal operands of
+`sed/cat/head/tail/wc` plus explicit file operands of `rg/grep` and `git show/diff --`. Variables,
+globs, directory-wide searches, and indirect process I/O remain unknown rather than being guessed.
+The access stays on the exact tool-call sequence so an inspector can audit which step touched it.
 
 ## Adapter facets and read API
 
@@ -86,8 +95,8 @@ bodies. Neither command accepts arbitrary source paths or mutates provider/sessi
 
 `serve` exposes the same list/inspect contract and the static inspector UI on loopback only. It
 does not add a database or background coordinator. Responses are `no-store`, cross-origin browser
-requests are rejected, and the UI does not request the `inspect` profile until an inline explicit
-confirmation.
+requests are rejected, and the private UI explicitly requests bounded `inspect` by default while
+retaining a metadata switch.
 An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
 the process still refuses non-literal loopback bind addresses.
 An optional `base-path` moves the complete UI/API surface under one path prefix without changing
@@ -97,8 +106,8 @@ root mode remains non-embeddable.
 For an explicitly authorized private preview, `frame-origin` may replace `self` with one exact HTTPS
 ancestor only when a non-root base path is configured. It does not change Host/Origin admission,
 enable CORS, or allow the parent to inspect the framed document.
-The server does not authenticate API clients, and the UI confirmation is not a server-side content
-gate. Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT
+The server does not authenticate API clients, and the UI profile is not a server-side content gate.
+Deployments MUST supply authorization at the private reverse proxy/network layer and MUST NOT
 publish the inspector through Funnel or another public tunnel. Bind addresses are restricted to the
 literal `127.0.0.1` and `::1`; `localhost` is deliberately rejected.
 

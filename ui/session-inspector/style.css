@@ -206,24 +206,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 }
 .content-notice strong { color: var(--warning); }
 
-.reveal-confirm {
-  margin: -8px 0 18px;
-  padding: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
-  border-radius: 10px;
-  background: var(--surface-raised);
-}
-.reveal-confirm strong { color: var(--warning); }
-.reveal-confirm p { margin: 4px 0 0; color: var(--text-soft); line-height: 1.45; }
-.reveal-confirm-actions { display: flex; flex: 0 0 auto; gap: 8px; }
-
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 9px;
   margin: 18px 0 26px;
 }
@@ -274,6 +259,22 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .event-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .event-sequence { color: var(--text-muted); font: 10px/1 var(--mono); }
 .event-body { margin-top: 10px; color: var(--text-soft); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.event-resources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.resource-chip {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font: 10px/1.2 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resource-chip.is-read { color: var(--accent-strong); }
+.resource-chip.is-write { color: var(--warning); }
+.event-details { margin-top: 10px; }
+.event-details-summary { color: var(--text-muted); font: 10px/1.4 var(--mono); cursor: pointer; }
 .event-meta { margin-top: 9px; color: var(--text-muted); font: 10px/1.4 var(--mono); }
 pre.event-json { max-height: 300px; margin: 10px 0 0; overflow: auto; padding: 10px; border-radius: 8px; background: var(--surface-raised); color: var(--text-soft); font: 10px/1.5 var(--mono); white-space: pre-wrap; }
 .load-more { display: block; margin: 18px auto 0; }
@@ -297,6 +298,5 @@ pre.event-json { max-height: 300px; margin: 10px 0 0; overflow: auto; padding: 1
   .detail { padding: 18px 14px 60px; }
   .detail-header { display: block; }
   .detail-actions { justify-content: flex-start; margin-top: 14px; }
-  .reveal-confirm { align-items: flex-start; flex-direction: column; }
   .summary-grid { grid-template-columns: 1fr; }
 }

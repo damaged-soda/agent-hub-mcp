@@ -1,8 +1,16 @@
+import { extractResourceAccesses } from "./agent-session-resources.js";
+
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/;
 
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
 export const AGENT_SESSION_PROVIDERS = Object.freeze(["claude", "codex", "kimi"]);
 export const AGENT_SESSION_CONTENT_PROFILES = Object.freeze(["inspect", "metadata"]);
+export const AGENT_SESSION_INSPECT_LIMITS = Object.freeze({
+  string_chars: 8192,
+  array_items: 100,
+  object_keys: 100,
+  depth: 8,
+});
 export const AGENT_SESSION_EVENT_KINDS = Object.freeze([
   "session",
   "context",
@@ -194,7 +202,7 @@ export function projectSessionEvents(events, profile = "inspect") {
     throw new Error(`Unsupported agent session content profile: ${profile}`);
   }
   if (profile === "inspect") {
-    return structuredClone(events);
+    return events.map(boundInspectEvent);
   }
   return events.map(projectMetadataEvent);
 }
@@ -319,12 +327,11 @@ function projectClaudeRecord(record, base) {
     if (content) events.push(makeEvent(base, "message", { role: "assistant", content }));
     for (const block of blocks) {
       if (block?.type === "tool_use" && typeof block.name === "string") {
+        const argumentsValue = block.input ?? null;
         events.push(
           makeEvent(base, "tool-call", {
+            ...toolCallData(block.name, argumentsValue),
             tool_call_id: optionalString(block.id),
-            tool_name: block.name,
-            tool_kind: classifyTool(block.name),
-            arguments: block.input ?? null,
           }),
         );
       }
@@ -386,12 +393,11 @@ function projectCodexRecord(record, base) {
   }
   if (item.type === "command_execution") {
     if (record.type === "item.started") {
+      const argumentsValue = { command: optionalString(item.command) };
       return [
         makeEvent(base, "tool-call", {
+          ...toolCallData("shell", argumentsValue),
           tool_call_id: optionalString(item.id),
-          tool_name: "shell",
-          tool_kind: "shell",
-          arguments: { command: optionalString(item.command) },
         }),
       ];
     }
@@ -406,11 +412,11 @@ function projectCodexRecord(record, base) {
   }
   if (item.type === "file_change" && record.type === "item.completed") {
     const changes = Array.isArray(item.changes) ? item.changes : [];
+    const argumentsValue = { changes, files: changes.map((change) => change?.path).filter(Boolean) };
     return [
       makeEvent(base, "tool-call", {
+        ...toolCallData("file_change", argumentsValue),
         tool_call_id: optionalString(item.id),
-        tool_name: "file_change",
-        tool_kind: "edit",
         target_paths: changes.map((change) => change?.path).filter((path) => typeof path === "string"),
         arguments: { changes },
         status: optionalString(item.status) ?? "completed",
@@ -420,8 +426,8 @@ function projectCodexRecord(record, base) {
   if (item.type === "mcp_tool_call") {
     const toolName = [item.server, item.tool].filter((part) => typeof part === "string").join("/");
     const common = {
+      ...toolCallData(toolName || "mcp", item.arguments ?? null),
       tool_call_id: optionalString(item.id),
-      tool_name: toolName || "mcp",
       tool_kind: "mcp",
     };
     return record.type === "item.started"
@@ -457,12 +463,11 @@ function projectKimiRecord(record, base) {
     for (const call of Array.isArray(record.tool_calls) ? record.tool_calls : []) {
       const name = call?.function?.name;
       if (typeof name !== "string") continue;
+      const argumentsValue = parseArguments(call.function?.arguments);
       events.push(
         makeEvent(base, "tool-call", {
+          ...toolCallData(name, argumentsValue),
           tool_call_id: optionalString(call.id),
-          tool_name: name,
-          tool_kind: classifyTool(name),
-          arguments: parseArguments(call.function?.arguments),
         }),
       );
     }
@@ -529,6 +534,7 @@ function projectMetadataEvent(event) {
       tool_kind: optionalString(data.tool_kind),
       status: optionalString(data.status),
       target_paths: stringArray(data.target_paths),
+      resource_accesses: resourceAccessArray(data.resource_accesses),
       argument_bytes: contentBytes(data.arguments),
     });
     return projected;
@@ -713,6 +719,88 @@ function classifyTool(name) {
   if (/web|http|browser|network/.test(value)) return "network";
   if (/mcp/.test(value)) return "mcp";
   return "other";
+}
+
+function toolCallData(name, argumentsValue) {
+  const resourceAccesses = extractResourceAccesses({
+    tool_name: name,
+    arguments: argumentsValue,
+  });
+  return compact({
+    tool_name: name,
+    tool_kind: classifyTool(name),
+    arguments: argumentsValue,
+    resource_accesses: resourceAccesses.length > 0 ? resourceAccesses : undefined,
+  });
+}
+
+function resourceAccessArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => compact({
+      operation: optionalString(item.operation),
+      path: optionalString(item.path),
+      resource_kind: optionalString(item.resource_kind),
+      evidence: optionalString(item.evidence),
+      coverage: optionalString(item.coverage),
+    }))
+    .filter((item) => item.operation && item.path);
+}
+
+function boundInspectEvent(event) {
+  const projected = structuredClone(event);
+  const fields = [];
+  projected.data = boundInspectValue(projected.data, "data", 0, fields);
+  if (fields.length > 0) projected.truncation = { truncated: true, fields };
+  return projected;
+}
+
+function boundInspectValue(value, fieldPath, depth, fields) {
+  if (typeof value === "string") {
+    if (value.length <= AGENT_SESSION_INSPECT_LIMITS.string_chars) return value;
+    fields.push({
+      path: fieldPath,
+      kind: "string",
+      original_chars: value.length,
+      original_bytes: Buffer.byteLength(value),
+      retained_chars: AGENT_SESSION_INSPECT_LIMITS.string_chars,
+    });
+    return `${value.slice(0, AGENT_SESSION_INSPECT_LIMITS.string_chars)}\n… [truncated ${
+      value.length - AGENT_SESSION_INSPECT_LIMITS.string_chars
+    } chars]`;
+  }
+  if (value === null || value === undefined || typeof value !== "object") return value;
+  if (depth >= AGENT_SESSION_INSPECT_LIMITS.depth) {
+    fields.push({ path: fieldPath, kind: "depth", original_count: 1, retained_count: 0 });
+    return "[truncated: maximum inspect depth]";
+  }
+  if (Array.isArray(value)) {
+    const retained = value.slice(0, AGENT_SESSION_INSPECT_LIMITS.array_items);
+    if (retained.length < value.length) {
+      fields.push({
+        path: fieldPath,
+        kind: "array",
+        original_count: value.length,
+        retained_count: retained.length,
+      });
+    }
+    return retained.map((item, index) => boundInspectValue(item, `${fieldPath}[${index}]`, depth + 1, fields));
+  }
+  const entries = Object.entries(value);
+  const retained = entries.slice(0, AGENT_SESSION_INSPECT_LIMITS.object_keys);
+  if (retained.length < entries.length) {
+    fields.push({
+      path: fieldPath,
+      kind: "object",
+      original_count: entries.length,
+      retained_count: retained.length,
+    });
+  }
+  return Object.fromEntries(retained.map(([key, item]) => [
+    key,
+    boundInspectValue(item, `${fieldPath}.${key}`, depth + 1, fields),
+  ]));
 }
 
 function providerLabel(provider) {

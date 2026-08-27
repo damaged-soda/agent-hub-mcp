@@ -51,6 +51,10 @@ agent-session inspect --provider codex --session-id SESSION_ID --profile metadat
 agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
 ```
 
+The CLI/API still default to metadata. The private browser inspector requests bounded inspect by
+default, shows every structured event detail, and annotates literal file/Skill reads and writes on
+their tool-call steps. Treat the page as sensitive even though long values are truncated.
+
 From another terminal, verify the no-body path:
 
 ```sh

@@ -42,6 +42,31 @@
       "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
     },
     "data": { "type": "object" },
+    "truncation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["truncated", "fields"],
+      "properties": {
+        "truncated": { "const": true },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "kind"],
+            "properties": {
+              "path": { "type": "string" },
+              "kind": { "enum": ["string", "array", "object", "depth"] },
+              "original_chars": { "type": "integer", "minimum": 0 },
+              "original_bytes": { "type": "integer", "minimum": 0 },
+              "retained_chars": { "type": "integer", "minimum": 0 },
+              "original_count": { "type": "integer", "minimum": 0 },
+              "retained_count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
     "provenance": {
       "type": "object",
       "additionalProperties": false,

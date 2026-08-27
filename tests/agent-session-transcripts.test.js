@@ -94,4 +94,29 @@ describe("native transcript projections", () => {
     expect(contexts[0].data.tools).toEqual(["Bash"]);
     expect(contexts[1].data).not.toHaveProperty("tools");
   });
+
+  it("marks the exact transcript step that read a file", () => {
+    const records = [
+      { type: "session_meta", timestamp: "2026-08-26T10:00:00Z", payload: {
+        id: "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6", cwd: "/workspace/example",
+      } },
+      { type: "response_item", timestamp: "2026-08-26T10:00:01Z", payload: {
+        type: "custom_tool_call", call_id: "call-read", name: "exec",
+        input: String.raw`const r = await tools.exec_command({"cmd":"sed -n '1,40p' docs/guide.md","workdir":"/workspace/example"});`,
+      } },
+    ];
+    const events = projectNativeTranscript("codex", records);
+    const call = events.find((event) => event.kind === "tool-call");
+    expect(call.data.resource_accesses).toEqual([{
+      operation: "read",
+      path: "/workspace/example/docs/guide.md",
+      resource_kind: "file",
+      evidence: "shell-explicit-operand",
+      coverage: "high-confidence",
+    }]);
+    const metadata = projectNativeTranscript("codex", records, { profile: "metadata" });
+    expect(metadata.find((event) => event.kind === "tool-call").data.resource_accesses)
+      .toEqual(call.data.resource_accesses);
+    expect(JSON.stringify(metadata)).not.toContain("sed -n");
+  });
 });
