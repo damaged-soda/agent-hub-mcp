@@ -17,6 +17,7 @@ import {
   queryDiscussionFromCli,
   waitDiscussionFromCli,
 } from "./discussion-cli.js";
+import { dispatchReview, reviewStatus, setReviewRoute } from "./review-routing.js";
 
 const HELP = `agenthub — run local coding agents without a resident daemon
 
@@ -27,6 +28,9 @@ Usage:
   agenthub query RUN_ID
   agenthub wait RUN_ID [--timeout-ms MS]
   agenthub cancel RUN_ID [--reason TEXT] [--actor TEXT]
+  agenthub review status [--cwd DIR]
+  agenthub review set --requester ID --reviewer ID --model ID [--cwd DIR]
+  agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
   agenthub discussion dispatch (--json JSON | --json-file FILE)
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
   agenthub discussion wait DISCUSSION_ID [--timeout-ms MS] [--after-sequence N]
@@ -105,9 +109,45 @@ export async function execute(argv, io = defaultIo()) {
     if (parsed.options.actor !== undefined) input.actor = parsed.options.actor;
     return cancelAgentRun(input);
   }
+  if (command === "review") return executeReview(args, io);
   if (command === "discussion") return executeDiscussion(args);
 
   throw usageError(`Unknown command: ${command}`);
+}
+
+async function executeReview(args, io) {
+  const command = args.shift();
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    return { usage: HELP };
+  }
+  if (command === "status") {
+    const parsed = parseArgs(args, new Set(["cwd"]));
+    rejectPositionals(parsed);
+    return reviewStatus({ cwd: path.resolve(parsed.options.cwd ?? process.cwd()) });
+  }
+  if (command === "set") {
+    const parsed = parseArgs(args, new Set(["requester", "reviewer", "model", "cwd"]));
+    rejectPositionals(parsed);
+    return setReviewRoute({
+      requester: required(parsed.options.requester, "--requester is required"),
+      reviewer: required(parsed.options.reviewer, "--reviewer is required"),
+      model: required(parsed.options.model, "--model is required"),
+      cwd: path.resolve(parsed.options.cwd ?? process.cwd()),
+    });
+  }
+  if (command === "dispatch") {
+    const parsed = parseArgs(
+      args,
+      new Set(["requester", "cwd", "prompt", "prompt-file"]),
+    );
+    rejectPositionals(parsed);
+    return dispatchReview({
+      requester: required(parsed.options.requester, "--requester is required"),
+      cwd: path.resolve(parsed.options.cwd ?? process.cwd()),
+      prompt: await readPrompt(parsed.options, io),
+    });
+  }
+  throw usageError(`Unknown review command: ${command}`);
 }
 
 async function executeDiscussion(args) {
@@ -252,6 +292,10 @@ function parseArgs(argv, allowed) {
     options[name] = value;
   }
   return { options, positionals };
+}
+
+function rejectPositionals(parsed) {
+  if (parsed.positionals.length) throw usageError("Unexpected positional arguments");
 }
 
 async function rawInput(options) {

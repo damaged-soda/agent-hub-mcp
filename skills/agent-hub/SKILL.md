@@ -7,6 +7,25 @@ description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and Op
 
 Use `agenthub` as the stable interface. Each command runs in the caller's current login and Keychain context; do not start the HTTP daemon for ordinary collaboration.
 
+## Review a pull request
+
+When the task is a PR or change review governed by the machine review policy, do not choose the
+reviewer or model manually. Dispatch through the requester-specific route and retain the run ID:
+
+```sh
+agenthub review dispatch \
+  --requester codex \
+  --cwd "$PWD" \
+  --prompt "Review the current PR and report actionable findings with severity."
+agenthub wait RUN_ID
+```
+
+Use the current CLI's stable agent ID as `--requester`: `codex`, `claude-code`, or `kimi-code`.
+Cockpit may change the route between reviews; `review dispatch` reads and validates it
+at dispatch time. If the configured reviewer or model is unavailable, report the failure instead
+of choosing a fallback. Use `review status --cwd "$PWD"` only when the effective route needs to be
+shown or diagnosed.
+
 ## Dispatch work
 
 1. Discover available agents in the target workspace:
