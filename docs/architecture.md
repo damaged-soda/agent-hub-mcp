@@ -171,8 +171,9 @@ PR review 是 CLI-only 的窄控制面，不扩张普通 dispatch 或 MCP schema
 - `review dispatch` 在每次派发前重新读取并校验有效路由，再把 model 作为统一 metadata 调
   `dispatch_to_agent`，响应仍是普通 run ref。
 
-内建默认值保持原有交叉审习惯：Codex → Claude Code `default`；Claude Code、Kimi Code、
-OpenCode → Codex `gpt-5.6-sol`。文件只存与默认值不同的覆盖，位于
+内建默认值保持原有交叉审习惯：Codex → Claude Code `default`；Claude Code、Kimi Code →
+Codex `gpt-5.6-sol`。OpenCode 可作为 reviewer，但在机器级指令发现链接入前不作为
+requester。文件只存与默认值不同的覆盖，位于
 `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`（可由
 `AGENT_HUB_REVIEW_CONFIG` 覆盖）；它是用户偏好状态，不是 run artifact。配置损坏、reviewer
 下线或 model 从目录消失均 fail loud，不自动回退，也不允许 self-review。Cockpit 只能经

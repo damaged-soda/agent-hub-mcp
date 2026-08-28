@@ -125,8 +125,8 @@ agenthub review dispatch --requester codex --cwd "$PWD" \
 `review set` accepts only a reviewer and model present in the live `agents` catalog, rejects
 self-review, and atomically stores overrides in
 `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. With no override, Codex uses
-Claude Code's `default` model (currently resolved by Claude Code to Opus 5); Claude Code, Kimi Code,
-and OpenCode use Codex `gpt-5.6-sol`. `review dispatch` revalidates the configured route and fails
+Claude Code's `default` model (currently resolved by Claude Code to Opus 5); Claude Code and Kimi
+Code use Codex `gpt-5.6-sol`. `review dispatch` revalidates the configured route and fails
 instead of silently falling back when either the reviewer or model is unavailable. Its response is
 the ordinary detached run response, so waiting and inspection remain unchanged.
 

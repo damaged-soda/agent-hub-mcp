@@ -96,9 +96,10 @@ agenthub review set --requester codex --reviewer kimi-code \
   --model kimi-code/k3 --cwd "$PWD"
 ```
 
-The supported requester IDs are `codex`, `claude-code`, `kimi-code`, and `opencode`. Reviewer and
+The supported requester IDs are `codex`, `claude-code`, and `kimi-code`. Reviewer and
 model must appear together in the current `agenthub agents` result, and reviewer must differ from
-requester. Selecting the built-in default pair removes that requester's stored override. Corrupt
+requester. OpenCode remains selectable as a reviewer; it is not a requester until the machine-level
+instruction discovery chain covers it. Selecting the built-in default pair removes that requester's stored override. Corrupt
 configuration, missing reviewers, and removed models remain explicit errors.
 
 Agents dispatch through the route and keep the returned run ID:

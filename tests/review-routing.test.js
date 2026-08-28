@@ -95,6 +95,9 @@ describe("review routing", () => {
     await expect(setReviewRoute({
       requester: "codex", reviewer: "kimi-code", model: "missing", cwd: root,
     }, internal())).rejects.toMatchObject({ code: "review_route_invalid" });
+    await expect(dispatchReview({
+      requester: "codex", cwd: root, prompt: "",
+    }, internal())).rejects.toMatchObject({ code: "review_route_invalid" });
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
     await fsp.writeFile(configPath, JSON.stringify({ version: 99, routes: {} }));
     await expect(reviewStatus({}, internal())).rejects.toMatchObject({

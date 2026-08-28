@@ -12,7 +12,6 @@ export const DEFAULT_REVIEW_ROUTES = Object.freeze({
   codex: Object.freeze({ reviewer: "claude-code", model: "default" }),
   "claude-code": Object.freeze({ reviewer: "codex", model: "gpt-5.6-sol" }),
   "kimi-code": Object.freeze({ reviewer: "codex", model: "gpt-5.6-sol" }),
-  opencode: Object.freeze({ reviewer: "codex", model: "gpt-5.6-sol" }),
 });
 
 export function getReviewConfigPath(env = process.env) {
@@ -68,9 +67,7 @@ export async function setReviewRoute(input, internal = {}) {
 export async function dispatchReview(input, internal = {}) {
   const requester = requiredString(input?.requester, "requester");
   assertRequester(requester);
-  if (typeof input?.prompt !== "string") {
-    throw reviewRouteError("prompt must be a string");
-  }
+  const prompt = requiredString(input?.prompt, "prompt");
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
   const catalog = await (internal.listAgents ?? listAgents)({ cwd: input.cwd });
   const config = await readReviewConfig(configPath);
@@ -79,7 +76,7 @@ export async function dispatchReview(input, internal = {}) {
   return (internal.dispatch ?? dispatchToAgent)({
     agent_id: route.reviewer,
     cwd: input.cwd,
-    prompt: input.prompt,
+    prompt,
     metadata: { model: route.model },
   });
 }
