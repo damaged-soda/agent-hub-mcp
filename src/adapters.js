@@ -26,6 +26,16 @@ import {
   interpretKimiExit,
   listKimiAgent,
 } from "./kimi-adapter.js";
+import {
+  OPENCODE_AGENT_ID,
+  OPENCODE_DISCUSSION_CAPABILITIES,
+  buildOpenCodeCommand,
+  createOpenCodeSessionRef,
+  getOpenCodeAvailability,
+  interpretOpenCodeExit,
+  listOpenCodeAgent,
+  openCodeSessionRefFromEvent,
+} from "./opencode-adapter.js";
 
 const ADAPTERS = new Map([
   [
@@ -71,6 +81,21 @@ const ADAPTERS = new Map([
       interpretExit: interpretKimiExit,
       sessionRefFromEvent: null,
       discussionCapabilities: KIMI_DISCUSSION_CAPABILITIES,
+    },
+  ],
+  [
+    OPENCODE_AGENT_ID,
+    {
+      agentId: OPENCODE_AGENT_ID,
+      displayName: "OpenCode",
+      metadataKey: OPENCODE_AGENT_ID,
+      getAvailability: getOpenCodeAvailability,
+      listAgent: listOpenCodeAgent,
+      createSessionRef: createOpenCodeSessionRef,
+      buildCommand: buildOpenCodeCommand,
+      interpretExit: interpretOpenCodeExit,
+      sessionRefFromEvent: openCodeSessionRefFromEvent,
+      discussionCapabilities: OPENCODE_DISCUSSION_CAPABILITIES,
     },
   ],
 ]);

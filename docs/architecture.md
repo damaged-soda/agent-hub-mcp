@@ -21,7 +21,7 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 上下文与**整体的会话轴状态**（`NS` / `NS_UNDO` / `PATH`），置 `NS_REBIND=1`，再以
 `/bin/zsh -c 'exec …'` 把 agent CLI 起在 run 的 cwd——`~/.zshenv` 的 glue 先卸掉继承的
 域再按 cwd 绑定（charter 汇聚段），hub 对域一无所知。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
-命令可以由全新的 CLI 进程继续。容器根（Claude/Codex/Kimi）为机器级单根。
+命令可以由全新的 CLI 进程继续。容器根（Claude/Codex/Kimi/OpenCode）为机器级单根。
 
 Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
 `agenthub discussion dispatch` 启动一个 detached Discussion worker；query/wait/cancel
@@ -42,7 +42,8 @@ adapter metadata。Adapter 只把这些字段映射成目标 CLI 的 argv、stdi
 - Agent Hub 不通过 prompt 要求目标 agent 写 result file。
 - Agent Hub 将 prompt 原文写入 `input.txt`，runner 再把 `input.txt` 内容通过 stdin
   传给 CLI。例外：kimi `-p` 只接受 argv prompt（不读 stdin），kimi adapter 从
-  `request.json` 的 `prompt` 字段拼 argv，`input.txt` 仍照常保存。
+  `request.json` 的 `prompt` 字段拼 argv，`input.txt` 仍照常保存。OpenCode 必须只读
+  stdin；它会合并 argv prompt 与 stdin，同时传两份会造成重复和引号变形。
 
 CLI 参数处理规则：
 
@@ -53,25 +54,25 @@ CLI 参数处理规则：
 ### 统一 metadata 层
 
 `metadata` 顶层提供一组跨 adapter 的统一字段，adapter 负责翻译成各自 CLI 的原生参数；
-`metadata.claude.*` / `metadata.codex.*` / `metadata["kimi-code"].*` 命名空间是原生逃生通道，
+`metadata.claude.*` / `metadata.codex.*` / `metadata["kimi-code"].*` / `metadata.opencode.*` 命名空间是原生逃生通道，
 同名语义字段以命名空间为准：
 
-| 统一字段 | 含义 | claude-code 映射 | codex 映射 | kimi-code 映射 |
-|---|---|---|---|---|
-| `model` | 模型名（按目标 CLI 的命名） | `--model` | `--model` | `-m` |
-| `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` | 仅接受 `auto`（kimi `-p` 内建 auto 审批；其余值拒绝而非静默改语义） |
-| `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` | `--add-dir` |
+| 统一字段 | 含义 | claude-code 映射 | codex 映射 | kimi-code 映射 | opencode 映射 |
+|---|---|---|---|---|---|
+| `model` | 模型名（按目标 CLI 的命名） | `--model` | `--model` | `-m` | `--model` |
+| `permission` | `read-only` / `auto`（默认）/ `full` | `plan` / `auto` / `bypassPermissions` | `read-only` / `workspace-write`+联网 / `danger-full-access` | 仅接受 `auto`（内建 auto 审批） | 仅接受 `auto`，映射到 `--auto` |
+| `add_dirs` | 额外可写目录（经 `security.js` 校验） | `--add-dir` | `--add-dir` | `--add-dir` | 非空即拒绝（无原生边界） |
 
 effort 不在统一层：各 CLI 的取值集合不同且随版本演进，Agent Hub 不枚举合法值，
 一律原样透传，由目标 CLI 自行接受或报错（报错按正常失败路径透传）。它只出现在
 adapter 命名空间（`metadata.claude.effort` / `metadata.codex.effort` /
-`metadata["kimi-code"].effort`），未提供时回退服务端环境变量
-`AGENT_HUB_CLAUDE_EFFORT` / `AGENT_HUB_CODEX_EFFORT` / `AGENT_HUB_KIMI_EFFORT`。
+`metadata["kimi-code"].effort` / `metadata.opencode.effort`），未提供时回退对应的
+`AGENT_HUB_*_EFFORT` 环境变量。
 codex 侧仅有 `[A-Za-z0-9_-]+` 字符集校验——这是 `-c` TOML 值的注入防护，不是取值假设；
 kimi 侧走子进程环境变量 `KIMI_MODEL_THINKING_EFFORT`，无注入面，不做校验。
 
 错误码同样统一：模型侧失败（Claude `is_error`、Codex `turn.failed`、kimi stderr 的
-`failed to run prompt`）一律记为 `agent_error`；`cli_exit_nonzero`、
+`failed to run prompt`、OpenCode JSON `error` event）一律记为 `agent_error`；`cli_exit_nonzero`、
 `stdout_parse_failed` 等 hub 层错误码本就与 adapter 无关。原生细节保留在
 `error.message` 与 `result.txt`。
 
@@ -128,6 +129,8 @@ Session ID 的产生方式由 adapter 决定：
   `session.resume_hint` meta 事件上报。新会话的 dispatch 响应 `cli_session_ref` 为
   `null`；终态快照携带可用于 continuation 的 `cli_session_ref`。与 Codex 不同，kimi
   只在结束时上报，因此取消的 run 没有可 resume 的 session ref。
+- OpenCode：session id 由 OpenCode 自己分配，并出现在每条 JSON 事件的 `sessionID`。
+  dispatch 响应先返回 `null`；runner 从首事件写回，因此取消的 run 也可保留 ref。
 
 ## CLI Commands 与 MCP Tools
 
@@ -151,8 +154,10 @@ Adapter 出现在列表中的条件：
   instructions 等内部字段不会进入 MCP 响应或持久化 artifact。
 - Kimi Code：读取 `kimi provider list --json`，只保留 `models` 下的安全模型字段；
   `providers` 中的 API key、base URL 等配置不会进入响应。
+- OpenCode：读取 `opencode models` 的 `provider/model` 行；凭证存储不会进入 stdout、
+  响应或持久化 artifact。
 
-探测并行执行，按 `cwd` + 配置根 / base URL 缓存 30 秒，单个命令限时 5 秒、输出限
+探测并行执行，按 `cwd` + 配置根 / base URL 缓存 30 秒，单个命令通常限时 5 秒（OpenCode 10 秒）、输出限
 8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，
 不会改变 adapter 自身的 `available` 状态。
 
@@ -431,8 +436,9 @@ AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE
 Runner 分别捕获 CLI stdout 和 stderr。
 
 stdout 是 result 的来源。stderr 是诊断日志来源。对 JSONL 事件流输出（Claude Code 与
-kimi 的 `stream-json`、Codex 的 `--json`），runner 还会把同一事件流写入
-`events.jsonl`，供 running snapshot 生成 `progress_events`。
+kimi 的 `stream-json`、Codex 的 `--json`、OpenCode 的 `--format json`），runner 还会把
+同一事件流写入 `events.jsonl`。running snapshot 当前只投影 Claude/Kimi/Codex 的
+`progress_events`；OpenCode 原始事件保留为 artifact，live projection 另行演进。
 
 ### result.txt / result.json
 
@@ -473,6 +479,9 @@ Agent Hub 返回 CLI 的最终输出，不通过 prompt 建立额外结果通道
 
 对 Kimi Code adapter，stdout 是 `kimi -p --output-format stream-json` 的 JSONL 事件流；
 adapter 从最后一条带 `content` 的 `assistant` 事件写入 `result.txt` 和 `result.json`。
+
+对 OpenCode adapter，stdout 是 `opencode run --format json` 的 JSONL 事件流；adapter
+从最后一条 `text` event 写入 `result.txt` 和 `result.json`。
 
 ## Claude Code Adapter
 
@@ -616,6 +625,41 @@ Kimi stdout 处理规则：
 - exit code 为 0 但缺少 `assistant` 消息或 `session_id` 时状态为 `failed`，错误码为
   `stdout_parse_failed`。
 
+## OpenCode Adapter
+
+OpenCode adapter 使用 `opencode run` 非交互模式。
+
+基础命令：
+
+```text
+opencode run --format json --auto
+```
+
+执行规则：
+
+- prompt 只通过 stdin 传入，内容来自 `input.txt`；不得同时添加 argv prompt，否则
+  OpenCode 会把两份输入拼接，造成重复、引号变形和 argv 大小上限。
+- 新会话不预设 session id；OpenCode 从首条 JSON event 起上报 `sessionID`（形如 `ses_*`）。
+- continuation 使用 `--session <native_session_id>`，session id 先做形态校验。
+- `metadata.opencode.model`（或统一的 `metadata.model`）映射到 `--model`，未提供时回退
+  `AGENT_HUB_OPENCODE_MODEL`。
+- `metadata.opencode.effort` 映射到 `--variant`，未提供时回退
+  `AGENT_HUB_OPENCODE_EFFORT`；值由 provider 校验。
+- `metadata.opencode.agent` 映射到 `--agent`。
+- 只接受统一 `permission: "auto"` 并映射到 `--auto`。OpenCode 对 asked permission 将
+  `--auto` 与 yolo 等价处理，不提供 workspace 文件系统边界；只有显式 deny 仍生效。
+  `read-only` 无法跨用户自定义 agent 保证，`full` 没有独立稳定映射，二者均拒绝。
+- OpenCode 不提供 add-dir 边界，非空 `add_dirs` 直接拒绝。
+
+stdout 处理规则：
+
+- 完整 JSONL 同时写入 `stdout.log` 与 `events.jsonl`。
+- 最后一条非空 `text` event 写入 `result.json`，其 `part.text` 写入 `result.txt`。
+- runner 从首条合法 `sessionID` 注册 session lease；续接可复用同一 ref。
+- 顶层 `error` event 映射为 `agent_error`，消息优先取 `error.data.message`。
+- 多个冲突 session id、缺少 text event 或缺少合法 session id 映射为
+  `stdout_parse_failed`；无结构化错误的非零退出映射为 `cli_exit_nonzero`。
+
 ## Discussion 编排
 
 Discussion 的主入口是 `agenthub discussion`：dispatch 创建 detached worker，后续
@@ -657,7 +701,7 @@ follow-up 对 parent generation 做 compare-and-swap 认领，因此同一 CLI �
 分叉。coordinator 关闭只停止新 turn 并释放 discussion lease，不取消已经 detached 的 run。
 
 Discussion 的权限来自 adapter `capabilities.discussion`：preferred permission 必须是
-`read-only` 或 `auto`。当前 Claude/Codex 选 read-only，Kimi 选 auto。请求 metadata 不能
+`read-only` 或 `auto`。当前 Claude/Codex 选 read-only，Kimi/OpenCode 选 auto。请求 metadata 不能
 覆盖 permission；这是尽力只读而不是强安全隔离。最终 Markdown 会披露每位成员的 effective
 permission、network access 和 session mode。
 

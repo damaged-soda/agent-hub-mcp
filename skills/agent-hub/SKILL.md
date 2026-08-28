@@ -1,6 +1,6 @@
 ---
 name: agent-hub
-description: Dispatch and coordinate local Claude Code, Codex, and Kimi Code processes through the daemon-free agenthub CLI, and resolve copied agenthub:// session or event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, continue or inspect a native CLI session, resolve an Agent Hub reference, or participate in a durable structured discussion.
+description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and OpenCode processes through the daemon-free agenthub CLI, and resolve copied agenthub:// session or event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, continue or inspect a native CLI session, resolve an Agent Hub reference, or participate in a durable structured discussion.
 ---
 
 # Agent Hub

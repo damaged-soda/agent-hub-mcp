@@ -1,14 +1,14 @@
 # Agent Hub
 
-Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus the bundled Codex Skill. It ships three adapters — Claude Code (`claude-code`), Codex CLI (`codex`), and Kimi Code (`kimi-code`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
+Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus the bundled Codex Skill. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
 
 ## Quick Start
 
 Prerequisites:
 
 - Node.js 20 or newer.
-- Claude Code CLI available as `claude`, Codex CLI available as `codex`, and/or Kimi Code CLI available as `kimi`.
-- CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`).
+- Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
+- CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
 
 Install dependencies, the local CLI, and the Skill:
 
@@ -104,13 +104,13 @@ agenthub dispatch \
   --prompt 'Reply with OK.'
 ```
 
-The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, and for Kimi Code with `"agent_id": "kimi-code"` and `metadata["kimi-code"]` (see the [integration guide](docs/integration-guide.md)). For a new Codex or Kimi session the dispatch response has `cli_session_ref: null`; the session id appears on the terminal snapshot once the CLI reports it.
+The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, Kimi Code with `"agent_id": "kimi-code"` and `metadata["kimi-code"]`, and OpenCode with `"agent_id": "opencode"` and `metadata.opencode` (see the [integration guide](docs/integration-guide.md)). For a new Codex, Kimi, or OpenCode session the dispatch response has `cli_session_ref: null`; the session id appears on a later snapshot once the CLI reports it.
 
 Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
 
 Every CLI invocation inherits the caller's login, environment, and macOS Keychain context. The dispatch command exits after creating a detached runner; later `query`, `wait`, and `cancel` commands reopen the same private on-disk state, so no Agent Hub daemon has to remain alive.
 
-`cwd` must be an existing absolute directory. Unified top-level metadata fields (`model`, `permission`, `add_dirs`) work for all adapters; the default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, and kimi `-p`'s built-in auto approval for Kimi Code (kimi has no permission flags in prompt mode, so `read-only`/`full` are rejected there rather than silently remapped). Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`) override the unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` environment defaults).
+`cwd` must be an existing absolute directory. Unified `model` and `permission` metadata map through every adapter; `add_dirs` maps only where the target CLI exposes an additional-directory boundary (OpenCode rejects non-empty values). The default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, kimi `-p`'s built-in auto approval, and OpenCode `--auto`. OpenCode treats `--auto` like its yolo mode for asked permissions and provides no workspace filesystem boundary; only explicit deny rules remain enforced. Kimi and OpenCode reject `read-only`/`full` rather than silently remapping them. Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`, `metadata.opencode`) override unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` environment defaults).
 
 Agent Hub does not resolve namespaces. It forwards the caller's session-axis state whole
 （`NS`、`NS_UNDO`、`PATH`…）, sets `NS_REBIND=1`, and starts the agent CLI through
@@ -194,7 +194,7 @@ node scripts/mcp-client.js dispatch_discussion --url http://127.0.0.1:8700/mcp -
 }'
 ```
 
-The caller chooses the host and complete participant roster before dispatch. The coordinator then runs the five-phase protocol. After completion, a follow-up may add a question and new materials but keeps the original roster. Discussion permissions come from adapter capabilities: Claude/Codex currently prefer read-only and Kimi uses auto. This is best-effort only, not a security boundary.
+The caller chooses the host and complete participant roster before dispatch. The coordinator then runs the five-phase protocol. After completion, a follow-up may add a question and new materials but keeps the original roster. Discussion permissions come from adapter capabilities: Claude/Codex currently prefer read-only, while Kimi/OpenCode use auto. This is best-effort only, not a security boundary.
 
 ## Configuration
 
@@ -213,6 +213,8 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_CODEX_EFFORT` | Default `model_reasoning_effort` for Codex runs when `metadata.codex.effort` is not provided. |
 | `AGENT_HUB_KIMI_MODEL` | Default `-m` for Kimi runs when `metadata["kimi-code"].model` is not provided. |
 | `AGENT_HUB_KIMI_EFFORT` | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when `metadata["kimi-code"].effort` is not provided. |
+| `AGENT_HUB_OPENCODE_MODEL` | Default `--model` for OpenCode runs when `metadata.opencode.model` is not provided. |
+| `AGENT_HUB_OPENCODE_EFFORT` | Default `--variant` for OpenCode runs when `metadata.opencode.effort` is not provided. |
 
 Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions. Discussion records are stored in the sibling `discussions` directory and retain linked run artifacts for the same seven-day terminal TTL.
 

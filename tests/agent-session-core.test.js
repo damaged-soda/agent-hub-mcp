@@ -233,6 +233,13 @@ describe("live adapter helpers", () => {
     expect(summarizeLiveRecord({ type: "error", message: "boom" }).message).toBe("boom");
     expect(
       summarizeLiveRecord({
+        type: "error",
+        sessionID: "ses_example",
+        error: { data: { message: "opencode boom" } },
+      }),
+    ).toBeNull();
+    expect(
+      summarizeLiveRecord({
         type: "assistant",
         message: {
           content: [
