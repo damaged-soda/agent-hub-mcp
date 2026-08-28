@@ -16,6 +16,7 @@ const fixtureRoot = path.join(repoRoot, "fixtures", "agent-session");
 const CLAUDE_ID = "550e8400-e29b-41d4-a716-446655440000";
 const CODEX_ID = "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6";
 const KIMI_ID = "session_437f4ac7-19f4-472b-be3c-a87be0f41419";
+const OPENCODE_ID = "ses_01a03dc9bffezOpenCodeFixture";
 
 let tempRoot;
 let roots;
@@ -27,6 +28,7 @@ beforeEach(async () => {
     claude: path.join(tempRoot, "claude"),
     codex: path.join(tempRoot, "codex"),
     kimi: path.join(tempRoot, "kimi"),
+    opencode: path.join(tempRoot, "opencode"),
   };
   const claudePath = path.join(roots.claude, "projects", "-workspace-example", `${CLAUDE_ID}.jsonl`);
   const codexPath = path.join(
@@ -204,6 +206,92 @@ describe("native session sources", () => {
     expect(sessions[0].title).toBeNull();
   });
 
+  it("discovers and inspects OpenCode sessions through read-only management commands", async () => {
+    await fsp.mkdir(roots.opencode, { recursive: true });
+    const databasePath = path.join(roots.opencode, "opencode.db");
+    await fsp.writeFile(databasePath, "fixture-db");
+    const exported = JSON.parse(
+      await fsp.readFile(path.join(fixtureRoot, "opencode-export.json"), "utf8"),
+    );
+    const calls = [];
+    const openCodeCommand = async (args) => {
+      calls.push(args);
+      if (args.includes("db")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{
+            id: OPENCODE_ID,
+            title: "检查 OpenCode 会话",
+            directory: "/workspace/example",
+            time_created: 1787738400000,
+            time_updated: 1787738405000,
+          }]),
+          stderr: "",
+        };
+      }
+      if (args.includes("export")) {
+        return { code: 0, stdout: JSON.stringify(exported), stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unexpected command" };
+    };
+
+    const sessions = await discoverNativeSessions({
+      roots,
+      provider: "opencode",
+      limit: 10,
+      openCodeCommand,
+    });
+    expect(sessions).toEqual([
+      expect.objectContaining({
+        provider: "opencode",
+        native_session_id: OPENCODE_ID,
+        session_ref: `agenthub://session/v1/opencode/${OPENCODE_ID}`,
+        title: "检查 OpenCode 会话",
+        cwd: "/workspace/example",
+        source_kind: "opencode-export",
+        source_path: databasePath,
+      }),
+    ]);
+
+    const metadata = await inspectNativeSession(
+      { provider: "opencode", native_session_id: OPENCODE_ID, limit: 100 },
+      { roots, openCodeCommand },
+    );
+    expect(metadata.profile).toBe("metadata");
+    expect(JSON.stringify(metadata)).not.toContain("Private OpenCode prompt");
+    expect(JSON.stringify(metadata)).not.toContain("hidden OpenCode reasoning");
+    const inspect = await inspectNativeSession(
+      {
+        provider: "opencode",
+        native_session_id: OPENCODE_ID,
+        profile: "inspect",
+        limit: 100,
+      },
+      { roots, openCodeCommand },
+    );
+    expect(JSON.stringify(inspect)).toContain("Private OpenCode prompt");
+    expect(JSON.stringify(inspect)).not.toContain("hidden OpenCode reasoning");
+    const call = inspect.data.find((event) => event.kind === "tool-call");
+    expect(call.event_ref).toMatch(
+      new RegExp(`^agenthub://session/v1/opencode/${OPENCODE_ID}/event/e1_`),
+    );
+    const resolved = await resolveNativeSessionEventReference(call.event_ref, {
+      roots,
+      openCodeCommand,
+    });
+    expect(resolved.data.target.data.arguments).toEqual({
+      command: "git status --short",
+      workdir: "/workspace/example",
+    });
+    expect(resolved.data.related).toEqual([
+      expect.objectContaining({
+        kind: "tool-result",
+        data: expect.objectContaining({ tool_call_id: "call_opencode_1" }),
+      }),
+    ]);
+    expect(calls.every((args) => args[0] === "--pure")).toBe(true);
+  });
+
   it("uses metadata by default and requires inspect profile for transcript bodies", async () => {
     const metadata = await inspectNativeSession(
       { provider: "codex", native_session_id: CODEX_ID, limit: 100 },
@@ -356,6 +444,7 @@ describe("native session sources", () => {
           CLAUDE_CONFIG_DIR: roots.claude,
           CODEX_HOME: roots.codex,
           KIMI_CODE_HOME: roots.kimi,
+          XDG_DATA_HOME: tempRoot,
         },
       },
     );
@@ -374,6 +463,7 @@ describe("native session sources", () => {
           CLAUDE_CONFIG_DIR: roots.claude,
           CODEX_HOME: roots.codex,
           KIMI_CODE_HOME: roots.kimi,
+          XDG_DATA_HOME: tempRoot,
         },
       },
     );
@@ -398,6 +488,7 @@ describe("native session sources", () => {
           CLAUDE_CONFIG_DIR: roots.claude,
           CODEX_HOME: roots.codex,
           KIMI_CODE_HOME: roots.kimi,
+          XDG_DATA_HOME: tempRoot,
         },
       },
     );
@@ -406,5 +497,83 @@ describe("native session sources", () => {
       kind: "agent-session-event-resolution",
       reference,
     });
+  });
+
+  it("reads OpenCode list and inspect through the public CLI commands", async () => {
+    const binDir = path.join(tempRoot, "bin");
+    const dataRoot = path.join(tempRoot, "opencode-data");
+    const databaseDir = path.join(dataRoot, "opencode");
+    await fsp.mkdir(binDir, { recursive: true });
+    await fsp.mkdir(databaseDir, { recursive: true });
+    await fsp.writeFile(path.join(databaseDir, "opencode.db"), "fixture-db");
+    const exportText = await fsp.readFile(
+      path.join(fixtureRoot, "opencode-export.json"),
+      "utf8",
+    );
+    await fsp.writeFile(
+      path.join(binDir, "opencode"),
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("db")) {
+  process.stdout.write(JSON.stringify([{
+    id: "${OPENCODE_ID}",
+    title: "检查 OpenCode 会话",
+    directory: "/workspace/example",
+    time_created: 1787738400000,
+    time_updated: 1787738405000
+  }]));
+  process.exit(0);
+}
+if (args.includes("export")) {
+  process.stdout.write(${JSON.stringify(exportText)});
+  process.exit(0);
+}
+process.stderr.write("unexpected opencode command");
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+    const env = {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+      XDG_DATA_HOME: dataRoot,
+    };
+    const listed = spawnSync(
+      process.execPath,
+      [
+        path.join(repoRoot, "src", "session-cli.js"),
+        "list",
+        "--provider",
+        "opencode",
+        "--limit",
+        "10",
+      ],
+      { encoding: "utf8", env },
+    );
+    expect(listed.status, listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).data).toEqual([
+      expect.objectContaining({ provider: "opencode", native_session_id: OPENCODE_ID }),
+    ]);
+
+    const inspected = spawnSync(
+      process.execPath,
+      [
+        path.join(repoRoot, "src", "session-cli.js"),
+        "inspect",
+        "--provider",
+        "opencode",
+        "--session-id",
+        OPENCODE_ID,
+        "--profile",
+        "inspect",
+        "--limit",
+        "100",
+      ],
+      { encoding: "utf8", env },
+    );
+    expect(inspected.status, inspected.stderr).toBe(0);
+    const document = JSON.parse(inspected.stdout);
+    expect(JSON.stringify(document)).toContain("Private OpenCode prompt");
+    expect(JSON.stringify(document)).not.toContain("hidden OpenCode reasoning");
   });
 });

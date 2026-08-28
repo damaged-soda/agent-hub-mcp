@@ -90,6 +90,7 @@ async function handleRequest(request, response, options) {
       limit: optionalQuery(url, "limit") ?? 50,
       roots: options.roots,
       env: options.env,
+      openCodeCommand: options.openCodeCommand,
     });
     sendJson(response, 200, {
       api_version: API_VERSION,
@@ -108,7 +109,11 @@ async function handleRequest(request, response, options) {
         after: optionalQuery(url, "after") ?? 0,
         limit: optionalQuery(url, "limit") ?? 200,
       },
-      { roots: options.roots, env: options.env },
+      {
+        roots: options.roots,
+        env: options.env,
+        openCodeCommand: options.openCodeCommand,
+      },
     );
     sendJson(response, 200, document, request.method);
     return;

@@ -10,7 +10,12 @@ import { extractResourceAccesses } from "./agent-session-resources.js";
 
 export function projectNativeTranscript(providerValue, input, options = {}) {
   const provider = canonicalProvider(providerValue);
-  const records = Array.isArray(input) ? input : parseJsonLines(input);
+  const records =
+    provider === "opencode"
+      ? openCodeExportRecords(input)
+      : Array.isArray(input)
+        ? input
+        : parseJsonLines(input);
   const nativeSessionId =
     options.native_session_id ?? inferTranscriptSessionId(provider, records) ?? null;
   const projector = createTranscriptProjector(provider, nativeSessionId);
@@ -42,9 +47,112 @@ export function createTranscriptProjector(providerValue, nativeSessionId) {
       if (provider === "codex") {
         return projectCodexTranscriptRecord(record, provider, nativeSessionId, state);
       }
+      if (provider === "opencode") {
+        return projectOpenCodeTranscriptRecord(record, provider, nativeSessionId, state);
+      }
       return projectKimiTranscriptRecord(record, provider, nativeSessionId, state);
     },
   };
+}
+
+export function openCodeExportRecords(input) {
+  const document =
+    typeof input === "string"
+      ? JSON.parse(input)
+      : input && typeof input === "object" && !Array.isArray(input)
+        ? input
+        : null;
+  const session = objectValue(document?.info);
+  const sessionId = stringValue(session.id);
+  if (!sessionId) throw new Error("OpenCode export is missing info.id");
+  if (!Array.isArray(document.messages)) {
+    throw new Error("OpenCode export is missing messages");
+  }
+
+  const records = [
+    {
+      type: "opencode.session",
+      session_id: sessionId,
+      timestamp: session.time?.created ?? null,
+      info: structuredClone(session),
+    },
+  ];
+  for (const item of document.messages) {
+    const info = objectValue(item?.info);
+    if (info.sessionID !== sessionId || !stringValue(info.id) || !stringValue(info.role)) {
+      throw new Error("OpenCode export contains an invalid message identity");
+    }
+    const created = info.time?.created ?? session.time?.created ?? null;
+    records.push({
+      type: "opencode.message.start",
+      session_id: sessionId,
+      timestamp: created,
+      info: structuredClone(info),
+    });
+    for (const partValue of Array.isArray(item.parts) ? item.parts : []) {
+      const part = objectValue(partValue);
+      if (part.sessionID !== sessionId || part.messageID !== info.id || !stringValue(part.type)) {
+        throw new Error("OpenCode export contains an invalid part identity");
+      }
+      if (part.type === "reasoning") continue;
+      if (part.type === "text" && typeof part.text === "string") {
+        records.push({
+          type: "opencode.part.text",
+          session_id: sessionId,
+          timestamp: part.time?.start ?? created,
+          role: info.role,
+          part: structuredClone(part),
+        });
+        continue;
+      }
+      if (part.type === "tool" && stringValue(part.tool) && stringValue(part.callID)) {
+        const stateValue = objectValue(part.state);
+        records.push({
+          type: "opencode.part.tool-call",
+          session_id: sessionId,
+          timestamp: stateValue.time?.start ?? created,
+          part: {
+            type: part.type,
+            tool: part.tool,
+            callID: part.callID,
+            state: {
+              status: stateValue.status ?? null,
+              input: structuredClone(stateValue.input ?? null),
+              title: stateValue.title ?? null,
+              time: structuredClone(stateValue.time ?? null),
+            },
+          },
+        });
+        if (["completed", "error", "failed"].includes(stateValue.status)) {
+          records.push({
+            type: "opencode.part.tool-result",
+            session_id: sessionId,
+            timestamp: stateValue.time?.end ?? stateValue.time?.start ?? created,
+            part: {
+              type: part.type,
+              tool: part.tool,
+              callID: part.callID,
+              state: {
+                status: stateValue.status,
+                output: structuredClone(stateValue.output ?? stateValue.error ?? null),
+                metadata: structuredClone(stateValue.metadata ?? null),
+                time: structuredClone(stateValue.time ?? null),
+              },
+            },
+          });
+        }
+      }
+    }
+    if (info.role === "assistant" && (info.time?.completed || info.error || info.finish)) {
+      records.push({
+        type: "opencode.message.finish",
+        session_id: sessionId,
+        timestamp: info.time?.completed ?? info.time?.created ?? created,
+        info: structuredClone(info),
+      });
+    }
+  }
+  return records;
 }
 
 function projectClaudeTranscriptRecord(record, provider, nativeSessionId, state) {
@@ -239,6 +347,157 @@ function projectCodexTranscriptRecord(record, provider, nativeSessionId, state) 
         record,
       ),
     ];
+  }
+  return [];
+}
+
+function projectOpenCodeTranscriptRecord(record, provider, nativeSessionId, state) {
+  if (record.type === "opencode.session") {
+    const info = objectValue(record.info);
+    const model = objectValue(info.model);
+    const events = [];
+    pushContext(
+      events,
+      state,
+      provider,
+      nativeSessionId,
+      compact({
+        cwd: stringValue(info.directory),
+        provider: stringValue(model.providerID),
+        model: stringValue(model.id),
+        effort: stringValue(model.variant),
+        profile: stringValue(info.agent),
+        entrypoint: "opencode",
+      }),
+      record,
+      "opencode/session",
+    );
+    return events;
+  }
+  if (record.type === "opencode.message.start") {
+    const info = objectValue(record.info);
+    const model = objectValue(info.model);
+    const pathValue = objectValue(info.path);
+    const events = [];
+    pushContext(
+      events,
+      state,
+      provider,
+      nativeSessionId,
+      compact({
+        cwd: stringValue(pathValue.cwd),
+        provider: stringValue(info.providerID ?? model.providerID),
+        model: stringValue(info.modelID ?? model.modelID),
+        effort: stringValue(info.variant ?? model.variant),
+        profile: stringValue(info.mode ?? info.agent),
+      }),
+      record,
+      "opencode/message-start",
+    );
+    if (info.role === "assistant") {
+      events.push(transcriptEvent(provider, nativeSessionId, "turn-start", { status: "running" }, record));
+    }
+    return events;
+  }
+  if (record.type === "opencode.part.text") {
+    return [
+      transcriptEvent(
+        provider,
+        nativeSessionId,
+        "message",
+        { role: stringValue(record.role), content: record.part?.text },
+        record,
+      ),
+    ];
+  }
+  if (record.type === "opencode.part.tool-call") {
+    const part = objectValue(record.part);
+    const stateValue = objectValue(part.state);
+    return [
+      transcriptEvent(
+        provider,
+        nativeSessionId,
+        "tool-call",
+        {
+          ...toolCallData(part.tool, stateValue.input ?? null, stateValue.input?.workdir ?? state.context.cwd),
+          tool_call_id: stringValue(part.callID),
+          status: stringValue(stateValue.status),
+        },
+        record,
+      ),
+    ];
+  }
+  if (record.type === "opencode.part.tool-result") {
+    const part = objectValue(record.part);
+    const stateValue = objectValue(part.state);
+    return [
+      transcriptEvent(
+        provider,
+        nativeSessionId,
+        "tool-result",
+        {
+          tool_call_id: stringValue(part.callID),
+          tool_name: stringValue(part.tool),
+          tool_kind: classifyTool(part.tool),
+          status: stateValue.status === "completed" ? "completed" : "failed",
+          exit_code: Number.isInteger(stateValue.metadata?.exit) ? stateValue.metadata.exit : null,
+          output: stateValue.output ?? null,
+        },
+        record,
+      ),
+    ];
+  }
+  if (record.type === "opencode.message.finish") {
+    const info = objectValue(record.info);
+    const tokens = objectValue(info.tokens);
+    const cache = objectValue(tokens.cache);
+    const usage = safeUsage({
+      total_tokens: tokens.total,
+      input_tokens: tokens.input,
+      output_tokens: tokens.output,
+      reasoning_tokens: tokens.reasoning,
+      cache_read_tokens: cache.read,
+      cache_write_tokens: cache.write,
+      cost: info.cost,
+    });
+    const events = [];
+    if (usage) {
+      events.push(
+        transcriptEvent(
+          provider,
+          nativeSessionId,
+          "model-call",
+          {
+            status: info.error ? "failed" : "completed",
+            model: stringValue(info.modelID),
+            effort: stringValue(info.variant),
+            usage,
+          },
+          record,
+        ),
+      );
+    }
+    if (info.error) {
+      events.push(
+        transcriptEvent(
+          provider,
+          nativeSessionId,
+          "error",
+          { status: "failed", message: info.error?.data?.message ?? info.error?.message ?? info.error?.name },
+          record,
+        ),
+      );
+    }
+    events.push(
+      transcriptEvent(
+        provider,
+        nativeSessionId,
+        "turn-end",
+        { status: info.error ? "failed" : "completed", usage },
+        record,
+      ),
+    );
+    return events;
   }
   return [];
 }
@@ -465,7 +724,9 @@ function inferTranscriptSessionId(provider, records) {
           ? record?.type === "session_meta"
             ? record.payload?.id ?? record.payload?.session_id
             : null
-          : record?.session_id ?? record?.sessionId;
+          : provider === "opencode"
+            ? record?.session_id ?? record?.sessionID
+            : record?.session_id ?? record?.sessionId;
     if (typeof value === "string" && value) return value;
   }
   return null;

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { runCommand } from "./adapter-utils.js";
 import {
   createContextObservation,
   createSessionIdentity,
@@ -17,14 +18,24 @@ import {
   parseAgentSessionReference,
   parseAgentSessionEventReference,
 } from "./agent-session-references.js";
-import { createTranscriptProjector } from "./agent-session-transcripts.js";
+import { createTranscriptProjector, openCodeExportRecords } from "./agent-session-transcripts.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KIMI_ID_PATTERN = /^(?:session|ses)_[0-9a-f-]{36}$/i;
+const OPENCODE_ID_PATTERN = /^ses_[0-9A-Za-z]{8,128}$/;
 const MAX_LIST_LIMIT = 500;
 const MAX_EVENT_LIMIT = 1000;
 const MAX_TITLE_LENGTH = 256;
 const CLAUDE_TITLE_TAIL_BYTES = 64 * 1024;
+const OPENCODE_COMMAND_TIMEOUT_MS = 15000;
+const OPENCODE_EXPORT_MAX_BYTES = 64 * 1024 * 1024;
+const OPENCODE_SESSION_QUERY = [
+  "select id, title, directory, time_created, time_updated",
+  "from session",
+  "where parent_id is null",
+  "order by time_updated desc",
+  "limit 5000",
+].join(" ");
 
 export function nativeSessionRoots(env = process.env) {
   const home = os.homedir();
@@ -32,6 +43,7 @@ export function nativeSessionRoots(env = process.env) {
     codex: path.resolve(env.CODEX_HOME || path.join(home, ".codex")),
     claude: path.resolve(env.CLAUDE_CONFIG_DIR || path.join(home, ".claude")),
     kimi: path.resolve(env.KIMI_CODE_HOME || path.join(home, ".kimi-code")),
+    opencode: path.resolve(env.XDG_DATA_HOME || path.join(home, ".local", "share"), "opencode"),
   };
 }
 
@@ -39,12 +51,13 @@ export async function discoverNativeSessions(options = {}) {
   const provider = optionalProvider(options.provider);
   const limit = boundedInteger(options.limit ?? 50, 1, MAX_LIST_LIMIT, "limit");
   const roots = options.roots ?? nativeSessionRoots(options.env);
-  const providers = provider ? [provider] : ["claude", "codex", "kimi"];
+  const providers = provider ? [provider] : ["claude", "codex", "kimi", "opencode"];
   const descriptors = [];
   for (const item of providers) {
     if (item === "claude") descriptors.push(...(await discoverClaude(roots.claude)));
     if (item === "codex") descriptors.push(...(await discoverCodex(roots.codex)));
     if (item === "kimi") descriptors.push(...(await discoverKimi(roots.kimi)));
+    if (item === "opencode") descriptors.push(...(await discoverOpenCode(roots.opencode, options)));
   }
   descriptors.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
   const selected = descriptors.slice(0, limit);
@@ -58,7 +71,7 @@ export async function inspectNativeSession(input, options = {}) {
   const after = boundedInteger(input.after ?? 0, 0, Number.MAX_SAFE_INTEGER, "after");
   const limit = boundedInteger(input.limit ?? 200, 1, MAX_EVENT_LIMIT, "limit");
   const roots = options.roots ?? nativeSessionRoots(options.env);
-  const descriptor = await findSession(identity.provider, identity.native_session_id, roots);
+  const descriptor = await findSession(identity.provider, identity.native_session_id, roots, options);
   if (!descriptor) {
     throw new Error(`Unknown ${identity.provider} native_session_id: ${identity.native_session_id}`);
   }
@@ -67,7 +80,7 @@ export async function inspectNativeSession(input, options = {}) {
     if (event.sequence < after) return true;
     projected.push(event);
     return projected.length <= limit;
-  });
+  }, options);
   const hasMore = projected.length > limit;
   const events = projectSessionEvents(projected.slice(0, limit), profile);
   return {
@@ -86,7 +99,7 @@ export async function inspectNativeSession(input, options = {}) {
 export async function resolveNativeSessionEventReference(value, options = {}) {
   const parsed = parseAgentSessionEventReference(value);
   const roots = options.roots ?? nativeSessionRoots(options.env);
-  const descriptor = await findSession(parsed.provider, parsed.native_session_id, roots);
+  const descriptor = await findSession(parsed.provider, parsed.native_session_id, roots, options);
   if (!descriptor) {
     throw new Error(`Unknown ${parsed.provider} native_session_id: ${parsed.native_session_id}`);
   }
@@ -123,13 +136,13 @@ export async function resolveNativeSessionEventReference(value, options = {}) {
       return false;
     }
     return true;
-  });
+  }, options);
 
   if (!target) {
     throw new Error(`Stale Agent Session event reference: ${parsed.reference}`);
   }
   if (!related && Number.isInteger(precedingToolCallSequence)) {
-    related = await readEventAtSequence(descriptor, parsed, precedingToolCallSequence);
+    related = await readEventAtSequence(descriptor, parsed, precedingToolCallSequence, options);
   }
   const boundedTarget = projectSessionEvents([target], "inspect")[0];
   const boundedRelated = related ? projectSessionEvents([related], "inspect") : [];
@@ -171,7 +184,7 @@ export async function resolveNativeSessionReference(value, options = {}) {
     return resolveNativeSessionEventReference(value, options);
   }
   const roots = options.roots ?? nativeSessionRoots(options.env);
-  const descriptor = await findSession(parsed.provider, parsed.native_session_id, roots);
+  const descriptor = await findSession(parsed.provider, parsed.native_session_id, roots, options);
   if (!descriptor) {
     throw new Error(`Unknown ${parsed.provider} native_session_id: ${parsed.native_session_id}`);
   }
@@ -184,7 +197,7 @@ export async function resolveNativeSessionReference(value, options = {}) {
   };
 }
 
-async function walkNativeSessionEvents(descriptor, identity, visitor) {
+async function walkNativeSessionEvents(descriptor, identity, visitor, options = {}) {
   const projector = createTranscriptProjector(identity.provider, identity.native_session_id);
   const referenceProjector = createNativeEventReferenceProjector(
     identity.provider,
@@ -192,6 +205,20 @@ async function walkNativeSessionEvents(descriptor, identity, visitor) {
   );
   let sequence = 0;
   let malformedLines = 0;
+  if (descriptor.provider === "opencode") {
+    const document = await readOpenCodeExport(descriptor.native_session_id, options);
+    for (const record of openCodeExportRecords(document)) {
+      const events = referenceProjector.attach(record, projector.project(record));
+      for (const event of events) {
+        const sequenced = { ...event, sequence };
+        sequence += 1;
+        if (visitor(sequenced) === false) {
+          return { malformed_lines: 0, next_sequence: sequence, stopped: true };
+        }
+      }
+    }
+    return { malformed_lines: 0, next_sequence: sequence, stopped: false };
+  }
   const stream = fs.createReadStream(descriptor.source_path, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
@@ -220,13 +247,13 @@ async function walkNativeSessionEvents(descriptor, identity, visitor) {
   return { malformed_lines: malformedLines, next_sequence: sequence, stopped: false };
 }
 
-async function readEventAtSequence(descriptor, identity, targetSequence) {
+async function readEventAtSequence(descriptor, identity, targetSequence, options = {}) {
   let selected = null;
   await walkNativeSessionEvents(descriptor, identity, (event) => {
     if (event.sequence < targetSequence) return true;
     if (event.sequence === targetSequence) selected = event;
     return false;
-  });
+  }, options);
   return selected;
 }
 
@@ -302,13 +329,84 @@ async function discoverKimi(root, options = {}) {
   return options.dedupe === false ? descriptors : dedupeDescriptors(descriptors);
 }
 
-async function findSession(provider, nativeSessionId, roots) {
+async function discoverOpenCode(root, options = {}) {
+  if (!root) return [];
+  const sourcePath = path.join(root, "opencode.db");
+  if (!(await fileExists(sourcePath))) return [];
+  const rows = await runOpenCodeJson(
+    ["--pure", "db", OPENCODE_SESSION_QUERY, "--format", "json"],
+    options,
+  );
+  if (!Array.isArray(rows)) throw new Error("OpenCode session query did not return an array");
+  const stat = await fsp.stat(sourcePath);
+  const descriptors = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    if (typeof row.id !== "string" || !OPENCODE_ID_PATTERN.test(row.id)) continue;
+    const createdAt = timestampValue(row.time_created);
+    const updatedAt = timestampValue(row.time_updated);
+    if (!createdAt || !updatedAt) continue;
+    descriptors.push({
+      schema_version: 1,
+      provider: "opencode",
+      native_session_id: row.id,
+      session_ref: formatAgentSessionReference({ provider: "opencode", native_session_id: row.id }),
+      source_kind: "opencode-export",
+      source_path: sourcePath,
+      size_bytes: stat.size,
+      created_at: createdAt,
+      updated_at: updatedAt,
+      cwd: typeof row.directory === "string" && row.directory ? row.directory : null,
+      title: nativeTitle(row.title),
+    });
+  }
+  return dedupeDescriptors(descriptors);
+}
+
+async function readOpenCodeExport(nativeSessionId, options = {}) {
+  if (!OPENCODE_ID_PATTERN.test(nativeSessionId)) {
+    throw new Error("Invalid OpenCode native_session_id");
+  }
+  const document = await runOpenCodeJson(
+    ["--pure", "export", nativeSessionId],
+    options,
+    OPENCODE_EXPORT_MAX_BYTES,
+  );
+  if (document?.info?.id !== nativeSessionId || !Array.isArray(document?.messages)) {
+    throw new Error("OpenCode export did not match the requested session");
+  }
+  return document;
+}
+
+async function runOpenCodeJson(args, options = {}, maxOutputBytes = 8 * 1024 * 1024) {
+  const execute = options.openCodeCommand ?? ((commandArgs, commandOptions) =>
+    runCommand("opencode", commandArgs, commandOptions));
+  const result = await execute(args, {
+    cwd: options.cwd ?? process.cwd(),
+    env: options.env ?? process.env,
+    maxOutputBytes,
+    timeoutMs: OPENCODE_COMMAND_TIMEOUT_MS,
+  });
+  if (result?.error || result?.code !== 0) {
+    const detail = result?.error?.message || result?.stderr?.trim() || `exit ${result?.code}`;
+    throw new Error(`OpenCode session read failed: ${detail}`);
+  }
+  try {
+    return JSON.parse(String(result.stdout ?? ""));
+  } catch {
+    throw new Error("OpenCode session read returned invalid JSON");
+  }
+}
+
+async function findSession(provider, nativeSessionId, roots, options = {}) {
   const descriptors =
     provider === "codex"
       ? await discoverCodex(roots.codex, { dedupe: false })
       : provider === "claude"
         ? await discoverClaude(roots.claude, { dedupe: false })
-        : await discoverKimi(roots.kimi, { dedupe: false });
+        : provider === "kimi"
+          ? await discoverKimi(roots.kimi, { dedupe: false })
+          : await discoverOpenCode(roots.opencode, options);
   const matches = descriptors.filter((item) => item.native_session_id === nativeSessionId);
   if (matches.length <= 1) return matches[0] ?? null;
   const digests = await Promise.all(matches.map((item) => fileSha256(item.source_path)));
@@ -342,6 +440,7 @@ async function baseDescriptor(provider, nativeSessionId, sourcePath, sourceKind)
 }
 
 async function enrichDescriptor(descriptor) {
+  if (descriptor.provider === "opencode") return descriptor;
   if (descriptor.provider === "kimi" && descriptor.state_path) {
     const state = await readJson(descriptor.state_path);
     return {

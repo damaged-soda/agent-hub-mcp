@@ -22,13 +22,15 @@ Use `--json` or `--json-file` to pass the same request objects documented below.
 
 ## Provider-native Session Inspector
 
-`agent-session` is a separate read-only CLI. It discovers Claude Code, Codex, and Kimi Code native
+`agent-session` is a separate read-only CLI. It discovers Claude Code, Codex, Kimi Code, and OpenCode native
 sessions whether or not Agent Hub launched them:
 
 ```sh
 agent-session list --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID
 agent-session inspect --provider codex --session-id SESSION_ID \
+  --profile inspect --after 0 --limit 200
+agent-session inspect --provider opencode --session-id SESSION_ID \
   --profile inspect --after 0 --limit 200
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID'
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID/event/EVENT_ID'
@@ -397,7 +399,9 @@ Kimi prompt mode takes no permission flags (`--plan`/`--auto`/`--yolo` conflict 
 
 OpenCode runs as `opencode run --format json --auto` and reads the exact prompt from stdin. Only unified `permission: "auto"` is supported: OpenCode treats `--auto` like its yolo flag for asked permissions, has no workspace filesystem boundary, and retains only explicit deny rules. `full` has no distinct stable mapping and `read-only` cannot be guaranteed across user-defined agents. Non-empty `add_dirs` is rejected because OpenCode exposes no additional-directory boundary. Unsupported `permission` or `add_dirs` values are accepted as runs and then fail during command construction with `runner_exception`, matching the validation stage used by other adapters.
 
-OpenCode JSONL is retained in `events.jsonl`, but provider-native transcript inspection and live `progress_events` projection are outside this adapter's initial scope; running snapshots still expose stderr/log artifacts and terminal results.
+OpenCode JSONL is retained in `events.jsonl`. Provider-native transcript inspection is available
+through `agent-session`; live run `progress_events` projection remains outside this adapter's
+initial scope, so running snapshots still rely on stderr/log artifacts until terminal results.
 
 ## Session Continuation
 

@@ -59,11 +59,42 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "model-call").data.model).toBe("k3");
   });
 
+  it("projects OpenCode exports while excluding reasoning", () => {
+    const events = projectNativeTranscript("opencode", fixture("opencode-export.json"));
+    expect(events.find((event) => event.kind === "context").data).toMatchObject({
+      cwd: "/workspace/example",
+      provider: "zai-coding-plan",
+      model: "glm-5.3-flash",
+      effort: "max",
+      profile: "build",
+    });
+    expect(events.filter((event) => event.kind === "message").map((event) => event.data.role))
+      .toEqual(["user", "assistant"]);
+    expect(events.find((event) => event.kind === "tool-call").data).toMatchObject({
+      tool_call_id: "call_opencode_1",
+      tool_name: "bash",
+      arguments: { command: "git status --short", workdir: "/workspace/example" },
+    });
+    expect(events.find((event) => event.kind === "tool-result").data).toMatchObject({
+      tool_call_id: "call_opencode_1",
+      status: "completed",
+      exit_code: 0,
+      output: "clean\n",
+    });
+    expect(events.find((event) => event.kind === "model-call").data.usage).toMatchObject({
+      total_tokens: 21,
+      input_tokens: 16,
+      output_tokens: 5,
+    });
+    expect(JSON.stringify(events)).not.toContain("hidden OpenCode reasoning");
+  });
+
   it("removes all transcript body fields from metadata projections", () => {
     for (const [provider, name, nativeSessionId] of [
       ["claude", "claude-transcript.jsonl", undefined],
       ["codex", "codex-transcript.jsonl", undefined],
       ["kimi", "kimi-transcript.jsonl", "session_437f4ac7-19f4-472b-be3c-a87be0f41419"],
+      ["opencode", "opencode-export.json", "ses_01a03dc9bffezOpenCodeFixture"],
     ]) {
       const events = projectNativeTranscript(provider, fixture(name), {
         native_session_id: nativeSessionId,
@@ -80,7 +111,7 @@ describe("native transcript projections", () => {
         expect(serialized).not.toContain(secret);
       }
       expect(events.some((event) => event.data.content_bytes > 0)).toBe(true);
-      if (provider !== "claude") {
+      if (["codex", "kimi"].includes(provider)) {
         expect(events.some((event) => event.data.system_instruction_bytes > 0)).toBe(true);
       }
     }

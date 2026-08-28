@@ -9,6 +9,7 @@ import { startSessionServer } from "../src/session-server.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = path.join(repoRoot, "fixtures", "agent-session");
 const CODEX_ID = "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6";
+const OPENCODE_ID = "ses_01a03dc9bffezOpenCodeFixture";
 
 function requestStatus(url, headers) {
   return new Promise((resolve, reject) => {
@@ -110,6 +111,58 @@ describe("agent session server", () => {
     expect(inspectDocument.data.every((event) => event.event_ref?.startsWith(
       `agenthub://session/v1/codex/${CODEX_ID}/event/e1_`,
     ))).toBe(true);
+  });
+
+  it("serves OpenCode list and inspect through the same API", async () => {
+    const openCodeRoot = path.join(tempRoot, "opencode");
+    await fsp.mkdir(openCodeRoot, { recursive: true });
+    await fsp.writeFile(path.join(openCodeRoot, "opencode.db"), "fixture-db");
+    const exported = await fsp.readFile(
+      path.join(fixtureRoot, "opencode-export.json"),
+      "utf8",
+    );
+    const openCodeCommand = async (args) => {
+      if (args.includes("db")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify([{
+            id: OPENCODE_ID,
+            title: "检查 OpenCode 会话",
+            directory: "/workspace/example",
+            time_created: 1787738400000,
+            time_updated: 1787738405000,
+          }]),
+          stderr: "",
+        };
+      }
+      return { code: 0, stdout: exported, stderr: "" };
+    };
+    const openCodeServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots: { ...roots, opencode: openCodeRoot },
+      openCodeCommand,
+    });
+    const openCodeBase = `http://127.0.0.1:${openCodeServer.address().port}`;
+    try {
+      const list = await fetch(`${openCodeBase}/api/sessions?provider=opencode&limit=10`);
+      expect(list.status).toBe(200);
+      expect((await list.json()).data).toEqual([
+        expect.objectContaining({ provider: "opencode", native_session_id: OPENCODE_ID }),
+      ]);
+      const metadata = await fetch(
+        `${openCodeBase}/api/sessions/opencode/${OPENCODE_ID}?profile=metadata&limit=100`,
+      );
+      expect(await metadata.text()).not.toContain("Private OpenCode prompt");
+      const inspect = await fetch(
+        `${openCodeBase}/api/sessions/opencode/${OPENCODE_ID}?profile=inspect&limit=100`,
+      );
+      const document = await inspect.json();
+      expect(JSON.stringify(document)).toContain("Private OpenCode prompt");
+      expect(JSON.stringify(document)).not.toContain("hidden OpenCode reasoning");
+    } finally {
+      await new Promise((resolve) => openCodeServer.close(resolve));
+    }
   });
 
   it("returns conflict instead of choosing between divergent sources for one session", async () => {

@@ -32,6 +32,7 @@ describe("agent session identity", () => {
     expect(canonicalProvider("claude-code")).toBe("claude");
     expect(canonicalProvider("codex")).toBe("codex");
     expect(canonicalProvider("kimi-code")).toBe("kimi");
+    expect(canonicalProvider("opencode")).toBe("opencode");
     expect(createSessionIdentity("codex", "thread-1")).toEqual({
       provider: "codex",
       native_session_id: "thread-1",
