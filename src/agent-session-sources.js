@@ -416,6 +416,7 @@ async function firstMetadataRecord(descriptor) {
   const stream = fs.createReadStream(descriptor.source_path, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let count = 0;
+  let claudeCreatedAt = null;
   try {
     for await (const line of lines) {
       count += 1;
@@ -434,15 +435,18 @@ async function firstMetadataRecord(descriptor) {
       }
       if (descriptor.provider === "claude" && record.sessionId === descriptor.native_session_id) {
         const cwd = typeof record.cwd === "string" ? record.cwd : null;
-        const createdAt = timestampValue(record.timestamp);
-        if (cwd || createdAt) {
-          return { cwd, created_at: createdAt ?? descriptor.created_at };
+        claudeCreatedAt ??= timestampValue(record.timestamp);
+        if (cwd) {
+          return { cwd, created_at: claudeCreatedAt ?? descriptor.created_at };
         }
       }
     }
   } finally {
     lines.close();
     stream.destroy();
+  }
+  if (descriptor.provider === "claude" && claudeCreatedAt) {
+    return { cwd: null, created_at: claudeCreatedAt };
   }
   return {};
 }
