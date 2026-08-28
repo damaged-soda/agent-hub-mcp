@@ -1,0 +1,116 @@
+{
+  "info": {
+    "id": "ses_01a03dc9bffezOpenCodeFixture",
+    "title": "检查 OpenCode 会话",
+    "directory": "/workspace/example",
+    "agent": "build",
+    "model": {
+      "id": "glm-5.3-flash",
+      "providerID": "zai-coding-plan",
+      "variant": "max"
+    },
+    "time": {
+      "created": 1787738400000,
+      "updated": 1787738405000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "msg_user_1",
+        "sessionID": "ses_01a03dc9bffezOpenCodeFixture",
+        "role": "user",
+        "agent": "build",
+        "model": {
+          "providerID": "zai-coding-plan",
+          "modelID": "glm-5.3-flash",
+          "variant": "max"
+        },
+        "time": {
+          "created": 1787738400100
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_user_text",
+          "sessionID": "ses_01a03dc9bffezOpenCodeFixture",
+          "messageID": "msg_user_1",
+          "type": "text",
+          "text": "Private OpenCode prompt"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_assistant_1",
+        "sessionID": "ses_01a03dc9bffezOpenCodeFixture",
+        "parentID": "msg_user_1",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "variant": "max",
+        "path": {
+          "cwd": "/workspace/example",
+          "root": "/workspace/example"
+        },
+        "modelID": "glm-5.3-flash",
+        "providerID": "zai-coding-plan",
+        "tokens": {
+          "total": 21,
+          "input": 16,
+          "output": 5,
+          "reasoning": 2
+        },
+        "cost": 0,
+        "time": {
+          "created": 1787738400200,
+          "completed": 1787738405000
+        },
+        "finish": "stop"
+      },
+      "parts": [
+        {
+          "id": "prt_reasoning",
+          "sessionID": "ses_01a03dc9bffezOpenCodeFixture",
+          "messageID": "msg_assistant_1",
+          "type": "reasoning",
+          "text": "hidden OpenCode reasoning"
+        },
+        {
+          "id": "prt_text",
+          "sessionID": "ses_01a03dc9bffezOpenCodeFixture",
+          "messageID": "msg_assistant_1",
+          "type": "text",
+          "text": "OpenCode result",
+          "time": {
+            "start": 1787738400300,
+            "end": 1787738400400
+          }
+        },
+        {
+          "id": "prt_tool",
+          "sessionID": "ses_01a03dc9bffezOpenCodeFixture",
+          "messageID": "msg_assistant_1",
+          "type": "tool",
+          "tool": "bash",
+          "callID": "call_opencode_1",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "git status --short",
+              "workdir": "/workspace/example"
+            },
+            "output": "clean\n",
+            "metadata": {
+              "exit": 0
+            },
+            "time": {
+              "start": 1787738400500,
+              "end": 1787738400600
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

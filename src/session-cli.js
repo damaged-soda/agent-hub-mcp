@@ -29,7 +29,12 @@ async function main(argv = process.argv.slice(2)) {
       provider: flags.provider,
       limit: flags.limit,
     });
-    printJson({ api_version: 1, kind: "agent-session-list", data });
+    printJson({
+      api_version: 1,
+      kind: "agent-session-list",
+      data,
+      ...(data.source_errors?.length > 0 ? { source_errors: data.source_errors } : {}),
+    });
     return;
   }
   if (command === "inspect") {
@@ -117,7 +122,7 @@ function helpText() {
   return `agent-session — inspect provider-native agent sessions without mutating them
 
 Usage:
-  agent-session list [--provider claude|codex|kimi] [--limit N]
+  agent-session list [--provider claude|codex|kimi|opencode] [--limit N]
   agent-session inspect --provider ID --session-id ID
       [--profile metadata|inspect] [--after N] [--limit N]
   agent-session resolve 'agenthub://session/v1/PROVIDER/SESSION_ID[/event/EVENT_ID]'

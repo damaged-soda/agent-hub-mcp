@@ -46,13 +46,14 @@ is best-effort: if a CLI cannot return its catalog, the agent remains available 
 
 ## Inspect native sessions
 
-`agent-session` is a separate read-only CLI for provider-native Claude Code, Codex, and Kimi Code
+`agent-session` is a separate read-only CLI for provider-native Claude Code, Codex, Kimi Code, and OpenCode
 sessions, including sessions that were not launched by Agent Hub:
 
 ```sh
 agent-session list --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID --limit 200
 agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
+agent-session inspect --provider opencode --session-id SESSION_ID --profile inspect --limit 200
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID'
 agent-session resolve 'agenthub://session/v1/codex/SESSION_ID/event/EVENT_ID'
 agent-session serve --host 127.0.0.1 --port 8765
@@ -65,6 +66,9 @@ visible prompts, assistant text, tool arguments, tool results, and per-step high
 Skill accesses, but never projects thinking blocks. Long inspect fields are bounded and carry
 truncation metadata. These commands only read provider-native files; they do not run cleanup, repair
 state, probe models, launch agents, or create another session database.
+OpenCode discovery and inspect read its provider-native SQLite database through
+`sqlite3 -readonly -json`; they exclude reasoning and never launch OpenCode or issue a model request.
+The `sqlite3` command is required only when an OpenCode database exists.
 
 Native sessions and transcript events include stable `agenthub://session/v1/...` references that
 exclude file paths, machine location, and display sequence. `resolve` validates either form; session

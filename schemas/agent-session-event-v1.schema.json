@@ -16,7 +16,7 @@
   ],
   "properties": {
     "schema_version": { "const": 1 },
-    "provider": { "enum": ["claude", "codex", "kimi"] },
+    "provider": { "enum": ["claude", "codex", "kimi", "opencode"] },
     "native_session_id": {
       "oneOf": [
         { "type": "string", "minLength": 1, "maxLength": 512 },
@@ -43,7 +43,7 @@
     },
     "event_ref": {
       "type": "string",
-      "pattern": "^agenthub://session/v1/(claude|codex|kimi)/[A-Za-z0-9][A-Za-z0-9._%:-]{0,1535}/event/e1_[A-Za-z0-9_-]{43}$"
+      "pattern": "^agenthub://session/v1/(claude|codex|kimi|opencode)/[A-Za-z0-9][A-Za-z0-9._%:-]{0,1535}/event/e1_[A-Za-z0-9_-]{43}$"
     },
     "data": { "type": "object" },
     "truncation": {

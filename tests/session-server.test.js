@@ -9,6 +9,7 @@ import { startSessionServer } from "../src/session-server.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureRoot = path.join(repoRoot, "fixtures", "agent-session");
 const CODEX_ID = "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6";
+const OPENCODE_ID = "ses_01a03dc9bffezOpenCodeFixture";
 
 function requestStatus(url, headers) {
   return new Promise((resolve, reject) => {
@@ -110,6 +111,104 @@ describe("agent session server", () => {
     expect(inspectDocument.data.every((event) => event.event_ref?.startsWith(
       `agenthub://session/v1/codex/${CODEX_ID}/event/e1_`,
     ))).toBe(true);
+  });
+
+  it("serves OpenCode list and inspect through the same API", async () => {
+    const openCodeRoot = path.join(tempRoot, "opencode");
+    await fsp.mkdir(openCodeRoot, { recursive: true });
+    await fsp.writeFile(path.join(openCodeRoot, "opencode.db"), "fixture-db");
+    const exported = JSON.parse(await fsp.readFile(
+      path.join(fixtureRoot, "opencode-export.json"),
+      "utf8",
+    ));
+    const sessionRow = {
+      id: OPENCODE_ID, project_id: "project-fixture", slug: "fixture-session",
+      directory: "/workspace/example", path: "", title: "检查 OpenCode 会话",
+      version: "1.18.25", summary_additions: 0, summary_deletions: 0,
+      summary_files: 0, summary_diffs: "[]", cost: 0, tokens_input: 16,
+      tokens_output: 5, tokens_reasoning: 2, tokens_cache_read: 0,
+      tokens_cache_write: 0, permission: "[]", agent: "build",
+      model: JSON.stringify(exported.info.model), time_created: 1787738400000,
+      time_updated: 1787738405000,
+    };
+    const messageRows = exported.messages.map((item) => {
+      const { id, sessionID, ...data } = item.info;
+      return { id, session_id: sessionID, time_created: item.info.time.created,
+        time_updated: item.info.time.completed ?? item.info.time.created,
+        data: JSON.stringify(data) };
+    });
+    const partRows = exported.messages.flatMap((item) => item.parts.map((part) => {
+      const { id, messageID, sessionID, ...data } = part;
+      return { id, message_id: messageID, session_id: sessionID,
+        time_created: part.time?.start ?? item.info.time.created,
+        time_updated: part.time?.end ?? part.time?.start ?? item.info.time.created,
+        data: JSON.stringify(data) };
+    }));
+    const sqliteCommand = async (args) => {
+      const query = args.at(-1);
+      const rows = query.includes("where id =") ? [sessionRow]
+        : query.includes("from message where") ? messageRows
+          : query.includes("from part where") ? partRows : [sessionRow];
+      return { code: 0, stdout: JSON.stringify(rows), stderr: "" };
+    };
+    const openCodeServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots: { ...roots, opencode: openCodeRoot },
+      sqliteCommand,
+    });
+    const openCodeBase = `http://127.0.0.1:${openCodeServer.address().port}`;
+    try {
+      const list = await fetch(`${openCodeBase}/api/sessions?provider=opencode&limit=10`);
+      expect(list.status).toBe(200);
+      expect((await list.json()).data).toEqual([
+        expect.objectContaining({ provider: "opencode", native_session_id: OPENCODE_ID }),
+      ]);
+      const metadata = await fetch(
+        `${openCodeBase}/api/sessions/opencode/${OPENCODE_ID}?profile=metadata&limit=100`,
+      );
+      expect(await metadata.text()).not.toContain("Private OpenCode prompt");
+      const inspect = await fetch(
+        `${openCodeBase}/api/sessions/opencode/${OPENCODE_ID}?profile=inspect&limit=100`,
+      );
+      const document = await inspect.json();
+      expect(JSON.stringify(document)).toContain("Private OpenCode prompt");
+      expect(JSON.stringify(document)).not.toContain("hidden OpenCode reasoning");
+    } finally {
+      await new Promise((resolve) => openCodeServer.close(resolve));
+    }
+  });
+
+  it("returns a partial aggregate list with source_errors when OpenCode fails", async () => {
+    const openCodeRoot = path.join(tempRoot, "opencode-failed");
+    await fsp.mkdir(openCodeRoot, { recursive: true });
+    await fsp.writeFile(path.join(openCodeRoot, "opencode.db"), "fixture-db");
+    const partialServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots: { ...roots, opencode: openCodeRoot },
+      sqliteCommand: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: "no such column: time_updated",
+      }),
+    });
+    const partialBase = `http://127.0.0.1:${partialServer.address().port}`;
+    try {
+      const response = await fetch(`${partialBase}/api/sessions?limit=10`);
+      expect(response.status).toBe(200);
+      const document = await response.json();
+      expect(document.data).toEqual([
+        expect.objectContaining({ provider: "codex", native_session_id: CODEX_ID }),
+      ]);
+      expect(document.source_errors).toEqual([
+        expect.objectContaining({ provider: "opencode", code: "source_unavailable" }),
+      ]);
+      expect((await fetch(`${partialBase}/api/sessions?provider=opencode&limit=10`)).status)
+        .toBe(500);
+    } finally {
+      await new Promise((resolve) => partialServer.close(resolve));
+    }
   });
 
   it("returns conflict instead of choosing between divergent sources for one session", async () => {

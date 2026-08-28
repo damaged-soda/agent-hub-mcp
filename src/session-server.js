@@ -90,11 +90,13 @@ async function handleRequest(request, response, options) {
       limit: optionalQuery(url, "limit") ?? 50,
       roots: options.roots,
       env: options.env,
+      sqliteCommand: options.sqliteCommand,
     });
     sendJson(response, 200, {
       api_version: API_VERSION,
       kind: "agent-session-list",
       data,
+      ...(data.source_errors?.length > 0 ? { source_errors: data.source_errors } : {}),
     }, request.method);
     return;
   }
@@ -108,7 +110,11 @@ async function handleRequest(request, response, options) {
         after: optionalQuery(url, "after") ?? 0,
         limit: optionalQuery(url, "limit") ?? 200,
       },
-      { roots: options.roots, env: options.env },
+      {
+        roots: options.roots,
+        env: options.env,
+        sqliteCommand: options.sqliteCommand,
+      },
     );
     sendJson(response, 200, document, request.method);
     return;

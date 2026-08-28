@@ -49,6 +49,7 @@ Verify the body-free metadata path before exposing a reverse proxy:
 ```sh
 agent-session list --limit 5
 agent-session inspect --provider codex --session-id SESSION_ID --profile metadata --limit 20
+agent-session inspect --provider opencode --session-id SESSION_ID --profile metadata --limit 20
 agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open
 ```
 
@@ -70,8 +71,12 @@ From another terminal, verify the no-body path:
 curl -fsS 'http://127.0.0.1:8765/api/sessions?limit=1'
 ```
 
-Discovery roots follow `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `KIMI_CODE_HOME`; check those values
-when the expected provider sessions do not appear.
+Discovery roots follow `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `KIMI_CODE_HOME`, and
+`XDG_DATA_HOME/opencode`. When that OpenCode database exists, inspector reads it with
+`sqlite3 -readonly -json`; check the root, `sqlite3` executable, and OpenCode schema compatibility
+when sessions do not appear. This integration is verified against OpenCode 1.18.25; schema drift is
+reported through `source_errors` on aggregate lists and remains a hard error for
+`--provider opencode`.
 
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
 origin and mount the complete surface below a path, restart it with

@@ -3,7 +3,7 @@ import { extractResourceAccesses } from "./agent-session-resources.js";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/;
 
 export const AGENT_SESSION_SCHEMA_VERSION = 1;
-export const AGENT_SESSION_PROVIDERS = Object.freeze(["claude", "codex", "kimi"]);
+export const AGENT_SESSION_PROVIDERS = Object.freeze(["claude", "codex", "kimi", "opencode"]);
 export const AGENT_SESSION_CONTENT_PROFILES = Object.freeze(["inspect", "metadata"]);
 export const AGENT_SESSION_INSPECT_LIMITS = Object.freeze({
   string_chars: 8192,
@@ -30,6 +30,7 @@ const AGENT_ID_TO_PROVIDER = Object.freeze({
   codex: "codex",
   kimi: "kimi",
   "kimi-code": "kimi",
+  opencode: "opencode",
 });
 
 const PROVENANCE_STAGES = new Set(["requested", "launched", "observed", "inferred", "unknown"]);
@@ -195,6 +196,7 @@ export function projectLiveRecord(providerValue, record, options = {}) {
   };
   if (provider === "claude") return projectClaudeRecord(record, base);
   if (provider === "codex") return projectCodexRecord(record, base);
+  if (provider === "opencode") return [];
   return projectKimiRecord(record, base);
 }
 
@@ -214,7 +216,14 @@ export function sessionRefFromLiveEvent(providerValue, record) {
   const nativeSessionId = inferNativeSessionId(provider, [record]);
   if (!nativeSessionId) return null;
   return {
-    agent_id: provider === "claude" ? "claude-code" : provider === "kimi" ? "kimi-code" : "codex",
+    agent_id:
+      provider === "claude"
+        ? "claude-code"
+        : provider === "kimi"
+          ? "kimi-code"
+          : provider === "opencode"
+            ? "opencode"
+            : "codex",
     native_session_id: nativeSessionId,
   };
 }
@@ -600,6 +609,10 @@ function inferNativeSessionId(provider, records) {
       ) {
         return record.thread_id;
       }
+    } else if (provider === "opencode") {
+      if (typeof record?.sessionID === "string" && SESSION_ID_PATTERN.test(record.sessionID)) {
+        return record.sessionID;
+      }
     } else if (
       record?.role === "meta" &&
       record.type === "session.resume_hint" &&
@@ -619,6 +632,7 @@ function makeEvent(base, kind, data) {
 function nativeEventType(provider, record) {
   if (provider === "claude") return [record.type, record.subtype].filter(Boolean).join("/");
   if (provider === "codex") return [record.type, record.item?.type].filter(Boolean).join("/");
+  if (provider === "opencode") return [record.type, record.part?.type].filter(Boolean).join("/");
   return [record.role, record.type].filter(Boolean).join("/");
 }
 
@@ -808,7 +822,13 @@ function boundInspectValue(value, fieldPath, depth, fields) {
 }
 
 function providerLabel(provider) {
-  return provider === "claude" ? "Claude" : provider === "codex" ? "Codex" : "Kimi";
+  return provider === "claude"
+    ? "Claude"
+    : provider === "codex"
+      ? "Codex"
+      : provider === "opencode"
+        ? "OpenCode"
+        : "Kimi";
 }
 
 function truncate(value, maxLength) {

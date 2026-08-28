@@ -30,7 +30,7 @@ The canonical session identity is `provider + native_session_id`. Agent Hub `run
 
 The v1 event schema is `schemas/agent-session-event-v1.schema.json`. Every event has:
 
-- `provider`: `claude`, `codex`, or `kimi`;
+- `provider`: `claude`, `codex`, `kimi`, or `opencode`;
 - `native_session_id`: provider id, or `null` until a provider reports one;
 - `sequence`, `kind`, `occurred_at`, and provider-neutral `data`;
 - provenance with a stage and source;
@@ -90,7 +90,7 @@ agenthub://session/v1/<provider>/<native-session-id>
 agenthub://session/v1/<provider>/<native-session-id>/event/e1_<digest>
 ```
 
-`provider` is canonical `claude|codex|kimi`; the session id is percent-encoded; `digest` is a
+`provider` is canonical `claude|codex|kimi|opencode`; the session id is percent-encoded; `digest` is a
 43-character unpadded base64url SHA-256. The URI has no machine, file path, query, fragment, or
 registry key. Machine placement remains resolver configuration, while session identity remains
 `provider + native_session_id`.
@@ -131,8 +131,12 @@ conflicting bodies are ambiguous and fail loud instead of selecting by mtime or 
 ## Adapter facets and read API
 
 Live JSONL normalization centralizes session-ref extraction and progress summaries already used by
-Agent Hub. The separate transcript facet understands provider-native Claude Code, Codex, and Kimi
-Code evidence without making Agent Hub the session owner.
+Agent Hub. The separate transcript facet understands provider-native Claude Code, Codex, Kimi Code,
+and OpenCode evidence without making Agent Hub the session owner. OpenCode discovery and inspect
+query its provider-native database through `sqlite3 -readonly -json`; only root sessions
+(`parent_id IS NULL`) enter the directory, and reasoning parts are never projected. Internal schema
+drift fails the explicit OpenCode request and appears in aggregate list `source_errors` without
+hiding healthy providers.
 
 The daemon-free `agent-session` CLI is the stable read surface:
 
@@ -146,8 +150,9 @@ agent-session serve [--host 127.0.0.1] [--port 8765]
 ```
 
 `list` derives identity from provider-native stores. Its nullable, bounded `title` is copied only
-from provider-written title metadata (Codex's session index, Claude's `ai-title`, or a Kimi title
-explicitly marked custom); it never derives a fallback from prompt text or launches a model call.
+from provider-written title metadata (Codex's session index, Claude's `ai-title`, a Kimi title
+explicitly marked custom, or OpenCode's root session row); it never derives a fallback from prompt
+text or launches a model call.
 Kimi's automatic title mirrors the prompt and is deliberately excluded. A native title can still
 summarize a sensitive topic, so the list remains part of the private inspector surface.
 `inspect` uses normalized event sequence cursors, defaults to `metadata`, and requires an explicit
