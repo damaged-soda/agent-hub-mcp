@@ -117,31 +117,45 @@ describe("agent session server", () => {
     const openCodeRoot = path.join(tempRoot, "opencode");
     await fsp.mkdir(openCodeRoot, { recursive: true });
     await fsp.writeFile(path.join(openCodeRoot, "opencode.db"), "fixture-db");
-    const exported = await fsp.readFile(
+    const exported = JSON.parse(await fsp.readFile(
       path.join(fixtureRoot, "opencode-export.json"),
       "utf8",
-    );
-    const openCodeCommand = async (args) => {
-      if (args.includes("db")) {
-        return {
-          code: 0,
-          stdout: JSON.stringify([{
-            id: OPENCODE_ID,
-            title: "检查 OpenCode 会话",
-            directory: "/workspace/example",
-            time_created: 1787738400000,
-            time_updated: 1787738405000,
-          }]),
-          stderr: "",
-        };
-      }
-      return { code: 0, stdout: exported, stderr: "" };
+    ));
+    const sessionRow = {
+      id: OPENCODE_ID, project_id: "project-fixture", slug: "fixture-session",
+      directory: "/workspace/example", path: "", title: "检查 OpenCode 会话",
+      version: "1.18.25", summary_additions: 0, summary_deletions: 0,
+      summary_files: 0, summary_diffs: "[]", cost: 0, tokens_input: 16,
+      tokens_output: 5, tokens_reasoning: 2, tokens_cache_read: 0,
+      tokens_cache_write: 0, permission: "[]", agent: "build",
+      model: JSON.stringify(exported.info.model), time_created: 1787738400000,
+      time_updated: 1787738405000,
+    };
+    const messageRows = exported.messages.map((item) => {
+      const { id, sessionID, ...data } = item.info;
+      return { id, session_id: sessionID, time_created: item.info.time.created,
+        time_updated: item.info.time.completed ?? item.info.time.created,
+        data: JSON.stringify(data) };
+    });
+    const partRows = exported.messages.flatMap((item) => item.parts.map((part) => {
+      const { id, messageID, sessionID, ...data } = part;
+      return { id, message_id: messageID, session_id: sessionID,
+        time_created: part.time?.start ?? item.info.time.created,
+        time_updated: part.time?.end ?? part.time?.start ?? item.info.time.created,
+        data: JSON.stringify(data) };
+    }));
+    const sqliteCommand = async (args) => {
+      const query = args.at(-1);
+      const rows = query.includes("where id =") ? [sessionRow]
+        : query.includes("from message where") ? messageRows
+          : query.includes("from part where") ? partRows : [sessionRow];
+      return { code: 0, stdout: JSON.stringify(rows), stderr: "" };
     };
     const openCodeServer = await startSessionServer({
       host: "127.0.0.1",
       port: 0,
       roots: { ...roots, opencode: openCodeRoot },
-      openCodeCommand,
+      sqliteCommand,
     });
     const openCodeBase = `http://127.0.0.1:${openCodeServer.address().port}`;
     try {
@@ -162,6 +176,38 @@ describe("agent session server", () => {
       expect(JSON.stringify(document)).not.toContain("hidden OpenCode reasoning");
     } finally {
       await new Promise((resolve) => openCodeServer.close(resolve));
+    }
+  });
+
+  it("returns a partial aggregate list with source_errors when OpenCode fails", async () => {
+    const openCodeRoot = path.join(tempRoot, "opencode-failed");
+    await fsp.mkdir(openCodeRoot, { recursive: true });
+    await fsp.writeFile(path.join(openCodeRoot, "opencode.db"), "fixture-db");
+    const partialServer = await startSessionServer({
+      host: "127.0.0.1",
+      port: 0,
+      roots: { ...roots, opencode: openCodeRoot },
+      sqliteCommand: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: "no such column: time_updated",
+      }),
+    });
+    const partialBase = `http://127.0.0.1:${partialServer.address().port}`;
+    try {
+      const response = await fetch(`${partialBase}/api/sessions?limit=10`);
+      expect(response.status).toBe(200);
+      const document = await response.json();
+      expect(document.data).toEqual([
+        expect.objectContaining({ provider: "codex", native_session_id: CODEX_ID }),
+      ]);
+      expect(document.source_errors).toEqual([
+        expect.objectContaining({ provider: "opencode", code: "source_unavailable" }),
+      ]);
+      expect((await fetch(`${partialBase}/api/sessions?provider=opencode&limit=10`)).status)
+        .toBe(500);
+    } finally {
+      await new Promise((resolve) => partialServer.close(resolve));
     }
   });
 

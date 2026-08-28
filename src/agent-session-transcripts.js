@@ -69,30 +69,35 @@ export function openCodeExportRecords(input) {
     throw new Error("OpenCode export is missing messages");
   }
 
+  let malformedRecords = Number.isInteger(document.malformed_records)
+    ? document.malformed_records
+    : 0;
   const records = [
-    {
+    openCodeProjectionRecord({
       type: "opencode.session",
       session_id: sessionId,
       timestamp: session.time?.created ?? null,
-      info: structuredClone(session),
-    },
+    }, session),
   ];
   for (const item of document.messages) {
     const info = objectValue(item?.info);
     if (info.sessionID !== sessionId || !stringValue(info.id) || !stringValue(info.role)) {
-      throw new Error("OpenCode export contains an invalid message identity");
+      malformedRecords += 1;
+      continue;
     }
     const created = info.time?.created ?? session.time?.created ?? null;
-    records.push({
+    records.push(openCodeProjectionRecord({
       type: "opencode.message.start",
       session_id: sessionId,
       timestamp: created,
-      info: structuredClone(info),
-    });
+      message_id: info.id,
+      role: info.role,
+    }, info));
     for (const partValue of Array.isArray(item.parts) ? item.parts : []) {
       const part = objectValue(partValue);
       if (part.sessionID !== sessionId || part.messageID !== info.id || !stringValue(part.type)) {
-        throw new Error("OpenCode export contains an invalid part identity");
+        malformedRecords += 1;
+        continue;
       }
       if (part.type === "reasoning") continue;
       if (part.type === "text" && typeof part.text === "string") {
@@ -144,15 +149,26 @@ export function openCodeExportRecords(input) {
       }
     }
     if (info.role === "assistant" && (info.time?.completed || info.error || info.finish)) {
-      records.push({
+      records.push(openCodeProjectionRecord({
         type: "opencode.message.finish",
         session_id: sessionId,
         timestamp: info.time?.completed ?? info.time?.created ?? created,
-        info: structuredClone(info),
-      });
+        message_id: info.id,
+        status: info.error ? "failed" : "completed",
+      }, info));
     }
   }
+  Object.defineProperty(records, "malformed_records", { value: malformedRecords });
   return records;
+}
+
+function openCodeProjectionRecord(identity, projection) {
+  const record = identity;
+  Object.defineProperty(record, "projection", {
+    value: structuredClone(projection),
+    enumerable: false,
+  });
+  return record;
 }
 
 function projectClaudeTranscriptRecord(record, provider, nativeSessionId, state) {
@@ -353,7 +369,7 @@ function projectCodexTranscriptRecord(record, provider, nativeSessionId, state) 
 
 function projectOpenCodeTranscriptRecord(record, provider, nativeSessionId, state) {
   if (record.type === "opencode.session") {
-    const info = objectValue(record.info);
+    const info = objectValue(record.projection);
     const model = objectValue(info.model);
     const events = [];
     pushContext(
@@ -375,7 +391,7 @@ function projectOpenCodeTranscriptRecord(record, provider, nativeSessionId, stat
     return events;
   }
   if (record.type === "opencode.message.start") {
-    const info = objectValue(record.info);
+    const info = objectValue(record.projection);
     const model = objectValue(info.model);
     const pathValue = objectValue(info.path);
     const events = [];
@@ -448,7 +464,7 @@ function projectOpenCodeTranscriptRecord(record, provider, nativeSessionId, stat
     ];
   }
   if (record.type === "opencode.message.finish") {
-    const info = objectValue(record.info);
+    const info = objectValue(record.projection);
     const tokens = objectValue(info.tokens);
     const cache = objectValue(tokens.cache);
     const usage = safeUsage({

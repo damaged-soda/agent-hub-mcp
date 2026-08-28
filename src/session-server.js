@@ -90,12 +90,13 @@ async function handleRequest(request, response, options) {
       limit: optionalQuery(url, "limit") ?? 50,
       roots: options.roots,
       env: options.env,
-      openCodeCommand: options.openCodeCommand,
+      sqliteCommand: options.sqliteCommand,
     });
     sendJson(response, 200, {
       api_version: API_VERSION,
       kind: "agent-session-list",
       data,
+      ...(data.source_errors?.length > 0 ? { source_errors: data.source_errors } : {}),
     }, request.method);
     return;
   }
@@ -112,7 +113,7 @@ async function handleRequest(request, response, options) {
       {
         roots: options.roots,
         env: options.env,
-        openCodeCommand: options.openCodeCommand,
+        sqliteCommand: options.sqliteCommand,
       },
     );
     sendJson(response, 200, document, request.method);

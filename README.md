@@ -66,8 +66,9 @@ visible prompts, assistant text, tool arguments, tool results, and per-step high
 Skill accesses, but never projects thinking blocks. Long inspect fields are bounded and carry
 truncation metadata. These commands only read provider-native files; they do not run cleanup, repair
 state, probe models, launch agents, or create another session database.
-OpenCode discovery uses the CLI's read-only `db SELECT --format json` command, while inspect uses
-`export SESSION_ID`; both run with `--pure`, exclude reasoning, and never issue a model request.
+OpenCode discovery and inspect read its provider-native SQLite database through
+`sqlite3 -readonly -json`; they exclude reasoning and never launch OpenCode or issue a model request.
+The `sqlite3` command is required only when an OpenCode database exists.
 
 Native sessions and transcript events include stable `agenthub://session/v1/...` references that
 exclude file paths, machine location, and display sequence. `resolve` validates either form; session

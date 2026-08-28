@@ -42,6 +42,9 @@ visible prompts, assistant text, tool arguments, tool results, and per-tool `res
 thinking blocks are never projected. Long inspect fields are bounded with explicit truncation
 metadata. Discovery and reads are side-effect free: they do not mutate provider stores, repair
 state, launch agents, or create another session database.
+OpenCode uses `sqlite3 -readonly -json` against its existing native database. Aggregate list calls
+preserve healthy providers and return `source_errors` when one source fails; an explicit provider
+filter remains fail-loud.
 
 Each discovered session has a stable `session_ref`, and each provider-native event has a stable
 `event_ref`. Both omit machine and file location. Session resolution returns

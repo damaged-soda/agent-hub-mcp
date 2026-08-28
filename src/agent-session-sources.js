@@ -27,14 +27,14 @@ const MAX_LIST_LIMIT = 500;
 const MAX_EVENT_LIMIT = 1000;
 const MAX_TITLE_LENGTH = 256;
 const CLAUDE_TITLE_TAIL_BYTES = 64 * 1024;
-const OPENCODE_COMMAND_TIMEOUT_MS = 15000;
-const OPENCODE_EXPORT_MAX_BYTES = 64 * 1024 * 1024;
-const OPENCODE_SESSION_QUERY = [
+const OPENCODE_SQLITE_TIMEOUT_MS = 15000;
+const OPENCODE_QUERY_MAX_BYTES = 64 * 1024 * 1024;
+const OPENCODE_SESSION_QUERY = (limit) => [
   "select id, title, directory, time_created, time_updated",
   "from session",
   "where parent_id is null",
   "order by time_updated desc",
-  "limit 5000",
+  `limit ${limit}`,
 ].join(" ");
 
 export function nativeSessionRoots(env = process.env) {
@@ -53,15 +53,30 @@ export async function discoverNativeSessions(options = {}) {
   const roots = options.roots ?? nativeSessionRoots(options.env);
   const providers = provider ? [provider] : ["claude", "codex", "kimi", "opencode"];
   const descriptors = [];
+  const sourceErrors = [];
   for (const item of providers) {
-    if (item === "claude") descriptors.push(...(await discoverClaude(roots.claude)));
-    if (item === "codex") descriptors.push(...(await discoverCodex(roots.codex)));
-    if (item === "kimi") descriptors.push(...(await discoverKimi(roots.kimi)));
-    if (item === "opencode") descriptors.push(...(await discoverOpenCode(roots.opencode, options)));
+    try {
+      if (item === "claude") descriptors.push(...(await discoverClaude(roots.claude)));
+      if (item === "codex") descriptors.push(...(await discoverCodex(roots.codex)));
+      if (item === "kimi") descriptors.push(...(await discoverKimi(roots.kimi)));
+      if (item === "opencode") descriptors.push(...(await discoverOpenCode(roots.opencode, {
+        ...options,
+        limit,
+      })));
+    } catch (error) {
+      if (provider) throw error;
+      sourceErrors.push({
+        provider: item,
+        code: "source_unavailable",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
   descriptors.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
   const selected = descriptors.slice(0, limit);
-  return Promise.all(selected.map(enrichDescriptor));
+  const data = await Promise.all(selected.map(enrichDescriptor));
+  Object.defineProperty(data, "source_errors", { value: sourceErrors });
+  return data;
 }
 
 export async function inspectNativeSession(input, options = {}) {
@@ -206,18 +221,24 @@ async function walkNativeSessionEvents(descriptor, identity, visitor, options = 
   let sequence = 0;
   let malformedLines = 0;
   if (descriptor.provider === "opencode") {
-    const document = await readOpenCodeExport(descriptor.native_session_id, options);
-    for (const record of openCodeExportRecords(document)) {
+    const document = await readOpenCodeExport(
+      descriptor.source_path,
+      descriptor.native_session_id,
+      options,
+    );
+    const records = openCodeExportRecords(document);
+    malformedLines = records.malformed_records ?? 0;
+    for (const record of records) {
       const events = referenceProjector.attach(record, projector.project(record));
       for (const event of events) {
         const sequenced = { ...event, sequence };
         sequence += 1;
         if (visitor(sequenced) === false) {
-          return { malformed_lines: 0, next_sequence: sequence, stopped: true };
+          return { malformed_lines: malformedLines, next_sequence: sequence, stopped: true };
         }
       }
     }
-    return { malformed_lines: 0, next_sequence: sequence, stopped: false };
+    return { malformed_lines: malformedLines, next_sequence: sequence, stopped: false };
   }
   const stream = fs.createReadStream(descriptor.source_path, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -333,12 +354,13 @@ async function discoverOpenCode(root, options = {}) {
   if (!root) return [];
   const sourcePath = path.join(root, "opencode.db");
   if (!(await fileExists(sourcePath))) return [];
-  const rows = await runOpenCodeJson(
-    ["--pure", "db", OPENCODE_SESSION_QUERY, "--format", "json"],
+  const queryLimit = Math.min(5000, Math.max(50, Number(options.limit) || 50));
+  const rows = await runSqliteJson(
+    sourcePath,
+    OPENCODE_SESSION_QUERY(queryLimit),
     options,
   );
   if (!Array.isArray(rows)) throw new Error("OpenCode session query did not return an array");
-  const stat = await fsp.stat(sourcePath);
   const descriptors = [];
   for (const row of rows) {
     if (!row || typeof row !== "object" || Array.isArray(row)) continue;
@@ -353,7 +375,7 @@ async function discoverOpenCode(root, options = {}) {
       session_ref: formatAgentSessionReference({ provider: "opencode", native_session_id: row.id }),
       source_kind: "opencode-export",
       source_path: sourcePath,
-      size_bytes: stat.size,
+      size_bytes: null,
       created_at: createdAt,
       updated_at: updatedAt,
       cwd: typeof row.directory === "string" && row.directory ? row.directory : null,
@@ -363,38 +385,148 @@ async function discoverOpenCode(root, options = {}) {
   return dedupeDescriptors(descriptors);
 }
 
-async function readOpenCodeExport(nativeSessionId, options = {}) {
+async function readOpenCodeExport(sourcePath, nativeSessionId, options = {}) {
   if (!OPENCODE_ID_PATTERN.test(nativeSessionId)) {
     throw new Error("Invalid OpenCode native_session_id");
   }
-  const document = await runOpenCodeJson(
-    ["--pure", "export", nativeSessionId],
+  const id = nativeSessionId;
+  const sessionRows = await runSqliteJson(
+    sourcePath,
+    [
+      "select id, project_id, slug, directory, path, title, version,",
+      "summary_additions, summary_deletions, summary_files, summary_diffs,",
+      "cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read,",
+      "tokens_cache_write, permission, agent, model, time_created, time_updated",
+      `from session where id = '${id}' limit 1`,
+    ].join(" "),
     options,
-    OPENCODE_EXPORT_MAX_BYTES,
   );
-  if (document?.info?.id !== nativeSessionId || !Array.isArray(document?.messages)) {
-    throw new Error("OpenCode export did not match the requested session");
+  if (!Array.isArray(sessionRows) || sessionRows.length !== 1) {
+    throw new Error("OpenCode session row did not match the requested session");
   }
-  return document;
+  const messageRows = await runSqliteJson(
+    sourcePath,
+    `select id, session_id, time_created, time_updated, data from message where session_id = '${id}' order by time_created, id`,
+    options,
+    OPENCODE_QUERY_MAX_BYTES,
+  );
+  const partRows = await runSqliteJson(
+    sourcePath,
+    `select id, message_id, session_id, time_created, time_updated, data from part where session_id = '${id}' order by time_created, id`,
+    options,
+    OPENCODE_QUERY_MAX_BYTES,
+  );
+  return openCodeDocumentFromRows(sessionRows[0], messageRows, partRows);
 }
 
-async function runOpenCodeJson(args, options = {}, maxOutputBytes = 8 * 1024 * 1024) {
-  const execute = options.openCodeCommand ?? ((commandArgs, commandOptions) =>
-    runCommand("opencode", commandArgs, commandOptions));
-  const result = await execute(args, {
+async function runSqliteJson(
+  sourcePath,
+  query,
+  options = {},
+  maxOutputBytes = 8 * 1024 * 1024,
+) {
+  const execute = options.sqliteCommand ?? ((commandArgs, commandOptions) =>
+    runCommand("sqlite3", commandArgs, commandOptions));
+  const result = await execute(["-readonly", "-json", sourcePath, query], {
     cwd: options.cwd ?? process.cwd(),
     env: options.env ?? process.env,
     maxOutputBytes,
-    timeoutMs: OPENCODE_COMMAND_TIMEOUT_MS,
+    timeoutMs: OPENCODE_SQLITE_TIMEOUT_MS,
   });
   if (result?.error || result?.code !== 0) {
     const detail = result?.error?.message || result?.stderr?.trim() || `exit ${result?.code}`;
-    throw new Error(`OpenCode session read failed: ${detail}`);
+    throw new Error(`OpenCode SQLite read failed: ${detail}`);
   }
   try {
     return JSON.parse(String(result.stdout ?? ""));
   } catch {
-    throw new Error("OpenCode session read returned invalid JSON");
+    throw new Error("OpenCode SQLite read returned invalid JSON");
+  }
+}
+
+function openCodeDocumentFromRows(sessionRow, messageRows, partRows) {
+  if (!Array.isArray(messageRows) || !Array.isArray(partRows)) {
+    throw new Error("OpenCode SQLite transcript query did not return arrays");
+  }
+  const malformed = { count: 0 };
+  const messages = new Map();
+  for (const row of messageRows) {
+    const data = parseOpenCodeJsonColumn(row?.data, malformed);
+    if (!data) continue;
+    if (row.session_id !== sessionRow.id || typeof row.id !== "string") {
+      malformed.count += 1;
+      continue;
+    }
+    const info = {
+      ...data,
+      id: row.id,
+      sessionID: row.session_id,
+      time: data.time ?? { created: row.time_created, updated: row.time_updated },
+    };
+    messages.set(row.id, { info, parts: [] });
+  }
+  for (const row of partRows) {
+    const data = parseOpenCodeJsonColumn(row?.data, malformed);
+    const message = messages.get(row?.message_id);
+    if (!data) continue;
+    if (!message || row.session_id !== sessionRow.id || typeof row.id !== "string") {
+      malformed.count += 1;
+      continue;
+    }
+    message.parts.push({
+      ...data,
+      id: row.id,
+      messageID: row.message_id,
+      sessionID: row.session_id,
+    });
+  }
+  const model = parseOpenCodeJsonColumn(sessionRow.model, malformed);
+  const permission = parseOpenCodeJsonColumn(sessionRow.permission, malformed);
+  const summaryDiffs = parseOpenCodeJsonColumn(sessionRow.summary_diffs, malformed);
+  const document = {
+    info: {
+      id: sessionRow.id,
+      slug: sessionRow.slug,
+      projectID: sessionRow.project_id,
+      directory: sessionRow.directory,
+      path: sessionRow.path ?? "",
+      title: sessionRow.title,
+      agent: sessionRow.agent,
+      model,
+      version: sessionRow.version,
+      summary: {
+        additions: sessionRow.summary_additions,
+        deletions: sessionRow.summary_deletions,
+        files: sessionRow.summary_files,
+        diffs: summaryDiffs,
+      },
+      cost: sessionRow.cost,
+      tokens: {
+        input: sessionRow.tokens_input,
+        output: sessionRow.tokens_output,
+        reasoning: sessionRow.tokens_reasoning,
+        cache: { read: sessionRow.tokens_cache_read, write: sessionRow.tokens_cache_write },
+      },
+      permission,
+      time: { created: sessionRow.time_created, updated: sessionRow.time_updated },
+    },
+    messages: Array.from(messages.values()),
+  };
+  Object.defineProperty(document, "malformed_records", { value: malformed.count });
+  return document;
+}
+
+function parseOpenCodeJsonColumn(value, malformed) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") {
+    malformed.count += 1;
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    malformed.count += 1;
+    return null;
   }
 }
 

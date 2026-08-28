@@ -132,9 +132,11 @@ conflicting bodies are ambiguous and fail loud instead of selecting by mtime or 
 
 Live JSONL normalization centralizes session-ref extraction and progress summaries already used by
 Agent Hub. The separate transcript facet understands provider-native Claude Code, Codex, Kimi Code,
-and OpenCode evidence without making Agent Hub the session owner. OpenCode discovery uses a fixed
-read-only `db SELECT` across root sessions and `export SESSION_ID` for one transcript; both
-management commands run with `--pure`, and reasoning parts are never projected.
+and OpenCode evidence without making Agent Hub the session owner. OpenCode discovery and inspect
+query its provider-native database through `sqlite3 -readonly -json`; only root sessions
+(`parent_id IS NULL`) enter the directory, and reasoning parts are never projected. Internal schema
+drift fails the explicit OpenCode request and appears in aggregate list `source_errors` without
+hiding healthy providers.
 
 The daemon-free `agent-session` CLI is the stable read surface:
 

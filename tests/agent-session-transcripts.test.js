@@ -89,6 +89,22 @@ describe("native transcript projections", () => {
     expect(JSON.stringify(events)).not.toContain("hidden OpenCode reasoning");
   });
 
+  it("keeps OpenCode session and message refs stable across mutable usage totals", () => {
+    const original = JSON.parse(fixture("opencode-export.json"));
+    const updated = structuredClone(original);
+    updated.info.time.updated += 1000;
+    updated.info.cost += 1;
+    updated.messages[1].info.tokens.input += 100;
+    updated.messages[1].info.time.completed += 1000;
+    const first = projectNativeTranscript("opencode", original);
+    const second = projectNativeTranscript("opencode", updated);
+    const select = (events, kind, role) => events.find((event) =>
+      event.kind === kind && (!role || event.data.role === role));
+    expect(select(second, "context").event_ref).toBe(select(first, "context").event_ref);
+    expect(select(second, "message", "user").event_ref)
+      .toBe(select(first, "message", "user").event_ref);
+  });
+
   it("removes all transcript body fields from metadata projections", () => {
     for (const [provider, name, nativeSessionId] of [
       ["claude", "claude-transcript.jsonl", undefined],

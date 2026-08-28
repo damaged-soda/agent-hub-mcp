@@ -22,6 +22,60 @@ let tempRoot;
 let roots;
 let sourcePaths;
 
+function openCodeSessionRow(info) {
+  return {
+    id: info.id,
+    project_id: "project-fixture",
+    slug: "fixture-session",
+    directory: info.directory,
+    path: "",
+    title: info.title,
+    version: "1.18.25",
+    summary_additions: 0,
+    summary_deletions: 0,
+    summary_files: 0,
+    summary_diffs: "[]",
+    cost: 0,
+    tokens_input: 16,
+    tokens_output: 5,
+    tokens_reasoning: 2,
+    tokens_cache_read: 0,
+    tokens_cache_write: 0,
+    permission: "[]",
+    agent: info.agent,
+    model: JSON.stringify(info.model),
+    time_created: info.time.created,
+    time_updated: info.time.updated,
+  };
+}
+
+function openCodeMessageRows(messages) {
+  return messages.map((item) => {
+    const { id, sessionID, ...data } = item.info;
+    return {
+      id,
+      session_id: sessionID,
+      time_created: item.info.time?.created ?? 0,
+      time_updated: item.info.time?.completed ?? item.info.time?.created ?? 0,
+      data: JSON.stringify(data),
+    };
+  });
+}
+
+function openCodePartRows(messages) {
+  return messages.flatMap((item) => item.parts.map((part) => {
+    const { id, messageID, sessionID, ...data } = part;
+    return {
+      id,
+      message_id: messageID,
+      session_id: sessionID,
+      time_created: part.time?.start ?? item.info.time?.created ?? 0,
+      time_updated: part.time?.end ?? part.time?.start ?? item.info.time?.created ?? 0,
+      data: JSON.stringify(data),
+    };
+  }));
+}
+
 beforeEach(async () => {
   tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-session-sources-"));
   roots = {
@@ -213,33 +267,28 @@ describe("native session sources", () => {
     const exported = JSON.parse(
       await fsp.readFile(path.join(fixtureRoot, "opencode-export.json"), "utf8"),
     );
+    const sessionRow = openCodeSessionRow(exported.info);
+    const messageRows = openCodeMessageRows(exported.messages);
+    const partRows = openCodePartRows(exported.messages);
     const calls = [];
-    const openCodeCommand = async (args) => {
+    const sqliteCommand = async (args) => {
       calls.push(args);
-      if (args.includes("db")) {
-        return {
-          code: 0,
-          stdout: JSON.stringify([{
-            id: OPENCODE_ID,
-            title: "检查 OpenCode 会话",
-            directory: "/workspace/example",
-            time_created: 1787738400000,
-            time_updated: 1787738405000,
-          }]),
-          stderr: "",
-        };
-      }
-      if (args.includes("export")) {
-        return { code: 0, stdout: JSON.stringify(exported), stderr: "" };
-      }
-      return { code: 1, stdout: "", stderr: "unexpected command" };
+      const query = args.at(-1);
+      const rows = query.includes("where id =")
+        ? [sessionRow]
+        : query.includes("from message where")
+          ? messageRows
+          : query.includes("from part where")
+            ? partRows
+            : [sessionRow];
+      return { code: 0, stdout: JSON.stringify(rows), stderr: "" };
     };
 
     const sessions = await discoverNativeSessions({
       roots,
       provider: "opencode",
       limit: 10,
-      openCodeCommand,
+      sqliteCommand,
     });
     expect(sessions).toEqual([
       expect.objectContaining({
@@ -255,7 +304,7 @@ describe("native session sources", () => {
 
     const metadata = await inspectNativeSession(
       { provider: "opencode", native_session_id: OPENCODE_ID, limit: 100 },
-      { roots, openCodeCommand },
+      { roots, sqliteCommand },
     );
     expect(metadata.profile).toBe("metadata");
     expect(JSON.stringify(metadata)).not.toContain("Private OpenCode prompt");
@@ -267,17 +316,39 @@ describe("native session sources", () => {
         profile: "inspect",
         limit: 100,
       },
-      { roots, openCodeCommand },
+      { roots, sqliteCommand },
     );
     expect(JSON.stringify(inspect)).toContain("Private OpenCode prompt");
     expect(JSON.stringify(inspect)).not.toContain("hidden OpenCode reasoning");
+    const firstPage = await inspectNativeSession(
+      {
+        provider: "opencode",
+        native_session_id: OPENCODE_ID,
+        profile: "inspect",
+        limit: 2,
+      },
+      { roots, sqliteCommand },
+    );
+    expect(firstPage.data).toHaveLength(2);
+    expect(firstPage.has_more).toBe(true);
+    const secondPage = await inspectNativeSession(
+      {
+        provider: "opencode",
+        native_session_id: OPENCODE_ID,
+        profile: "inspect",
+        after: firstPage.next_sequence,
+        limit: 100,
+      },
+      { roots, sqliteCommand },
+    );
+    expect(secondPage.data[0].sequence).toBe(firstPage.next_sequence);
     const call = inspect.data.find((event) => event.kind === "tool-call");
     expect(call.event_ref).toMatch(
       new RegExp(`^agenthub://session/v1/opencode/${OPENCODE_ID}/event/e1_`),
     );
     const resolved = await resolveNativeSessionEventReference(call.event_ref, {
       roots,
-      openCodeCommand,
+      sqliteCommand,
     });
     expect(resolved.data.target.data.arguments).toEqual({
       command: "git status --short",
@@ -289,7 +360,75 @@ describe("native session sources", () => {
         data: expect.objectContaining({ tool_call_id: "call_opencode_1" }),
       }),
     ]);
-    expect(calls.every((args) => args[0] === "--pure")).toBe(true);
+    expect(calls.every((args) => args.slice(0, 3).join(" ").startsWith("-readonly -json ")))
+      .toBe(true);
+  });
+
+  it("keeps healthy providers visible when implicit OpenCode discovery fails", async () => {
+    await fsp.mkdir(roots.opencode, { recursive: true });
+    await fsp.writeFile(path.join(roots.opencode, "opencode.db"), "fixture-db");
+    const sqliteCommand = async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "no such column: time_updated",
+    });
+    const sessions = await discoverNativeSessions({ roots, limit: 10, sqliteCommand });
+    expect(sessions.map((item) => item.provider).sort()).toEqual(["claude", "codex", "kimi"]);
+    expect(sessions.source_errors).toEqual([
+      expect.objectContaining({
+        provider: "opencode",
+        code: "source_unavailable",
+        message: expect.stringContaining("no such column"),
+      }),
+    ]);
+    await expect(discoverNativeSessions({
+      roots,
+      provider: "opencode",
+      limit: 10,
+      sqliteCommand,
+    })).rejects.toThrow(/no such column/);
+  });
+
+  it("counts malformed OpenCode rows while preserving valid transcript events", async () => {
+    await fsp.mkdir(roots.opencode, { recursive: true });
+    await fsp.writeFile(path.join(roots.opencode, "opencode.db"), "fixture-db");
+    const exported = JSON.parse(
+      await fsp.readFile(path.join(fixtureRoot, "opencode-export.json"), "utf8"),
+    );
+    const sessionRow = openCodeSessionRow(exported.info);
+    const messageRows = [
+      ...openCodeMessageRows(exported.messages),
+      { id: "msg_bad", session_id: OPENCODE_ID, time_created: 1, time_updated: 1, data: "{" },
+    ];
+    const partRows = [
+      ...openCodePartRows(exported.messages),
+      {
+        id: "prt_orphan",
+        message_id: "msg_missing",
+        session_id: OPENCODE_ID,
+        time_created: 1,
+        time_updated: 1,
+        data: JSON.stringify({ type: "text", text: "orphan" }),
+      },
+    ];
+    const sqliteCommand = async (args) => {
+      const query = args.at(-1);
+      const rows = query.includes("where id =")
+        ? [sessionRow]
+        : query.includes("from message where")
+          ? messageRows
+          : query.includes("from part where")
+            ? partRows
+            : [sessionRow];
+      return { code: 0, stdout: JSON.stringify(rows), stderr: "" };
+    };
+    const inspect = await inspectNativeSession(
+      { provider: "opencode", native_session_id: OPENCODE_ID, profile: "inspect", limit: 100 },
+      { roots, sqliteCommand },
+    );
+    expect(inspect.malformed_lines).toBe(2);
+    expect(JSON.stringify(inspect)).toContain("OpenCode result");
+    expect(JSON.stringify(inspect)).not.toContain("orphan");
   });
 
   it("uses metadata by default and requires inspect profile for transcript bodies", async () => {
@@ -499,37 +638,42 @@ describe("native session sources", () => {
     });
   });
 
-  it("reads OpenCode list and inspect through the public CLI commands", async () => {
+  it("reads large OpenCode list and inspect payloads through sqlite3 without pipe truncation", async () => {
     const binDir = path.join(tempRoot, "bin");
     const dataRoot = path.join(tempRoot, "opencode-data");
     const databaseDir = path.join(dataRoot, "opencode");
     await fsp.mkdir(binDir, { recursive: true });
     await fsp.mkdir(databaseDir, { recursive: true });
     await fsp.writeFile(path.join(databaseDir, "opencode.db"), "fixture-db");
-    const exportText = await fsp.readFile(
-      path.join(fixtureRoot, "opencode-export.json"),
-      "utf8",
-    );
+    const exported = JSON.parse(await fsp.readFile(
+      path.join(fixtureRoot, "opencode-export.json"), "utf8"));
+    const sessionRow = openCodeSessionRow(exported.info);
+    const listRows = Array.from({ length: 400 }, (_, index) => ({
+      ...sessionRow,
+      id: index === 0 ? OPENCODE_ID : `ses_fixture${String(index).padStart(6, "0")}`,
+      title: `${"OpenCode fixture session ".repeat(8)}${index}`,
+      time_created: sessionRow.time_created - index,
+      time_updated: sessionRow.time_updated - index,
+    }));
+    const messageRows = openCodeMessageRows(exported.messages);
+    const partRows = openCodePartRows(exported.messages).map((row) => {
+      const data = JSON.parse(row.data);
+      if (data.type === "tool") data.state.output = "x".repeat(200000);
+      return { ...row, data: JSON.stringify(data) };
+    });
     await fsp.writeFile(
-      path.join(binDir, "opencode"),
+      path.join(binDir, "sqlite3"),
       `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args.includes("db")) {
-  process.stdout.write(JSON.stringify([{
-    id: "${OPENCODE_ID}",
-    title: "检查 OpenCode 会话",
-    directory: "/workspace/example",
-    time_created: 1787738400000,
-    time_updated: 1787738405000
-  }]));
-  process.exit(0);
-}
-if (args.includes("export")) {
-  process.stdout.write(${JSON.stringify(exportText)});
-  process.exit(0);
-}
-process.stderr.write("unexpected opencode command");
-process.exit(1);
+const query = args.at(-1);
+const rows = query.includes("where id =")
+  ? ${JSON.stringify([sessionRow])}
+  : query.includes("from message where")
+    ? ${JSON.stringify(messageRows)}
+    : query.includes("from part where")
+      ? ${JSON.stringify(partRows)}
+      : ${JSON.stringify(listRows)};
+process.stdout.write(JSON.stringify(rows));
 `,
       { mode: 0o755 },
     );
@@ -551,9 +695,13 @@ process.exit(1);
       { encoding: "utf8", env },
     );
     expect(listed.status, listed.stderr).toBe(0);
-    expect(JSON.parse(listed.stdout).data).toEqual([
-      expect.objectContaining({ provider: "opencode", native_session_id: OPENCODE_ID }),
-    ]);
+    const listedDocument = JSON.parse(listed.stdout);
+    expect(listedDocument.data).toHaveLength(10);
+    expect(listedDocument.data[0]).toMatchObject({
+      provider: "opencode",
+      native_session_id: OPENCODE_ID,
+      size_bytes: null,
+    });
 
     const inspected = spawnSync(
       process.execPath,
@@ -575,5 +723,6 @@ process.exit(1);
     const document = JSON.parse(inspected.stdout);
     expect(JSON.stringify(document)).toContain("Private OpenCode prompt");
     expect(JSON.stringify(document)).not.toContain("hidden OpenCode reasoning");
+    expect(document.data.some((event) => event.truncation?.truncated === true)).toBe(true);
   });
 });

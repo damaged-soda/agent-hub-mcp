@@ -29,7 +29,12 @@ async function main(argv = process.argv.slice(2)) {
       provider: flags.provider,
       limit: flags.limit,
     });
-    printJson({ api_version: 1, kind: "agent-session-list", data });
+    printJson({
+      api_version: 1,
+      kind: "agent-session-list",
+      data,
+      ...(data.source_errors?.length > 0 ? { source_errors: data.source_errors } : {}),
+    });
     return;
   }
   if (command === "inspect") {

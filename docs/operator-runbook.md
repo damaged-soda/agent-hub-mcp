@@ -72,9 +72,11 @@ curl -fsS 'http://127.0.0.1:8765/api/sessions?limit=1'
 ```
 
 Discovery roots follow `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `KIMI_CODE_HOME`, and
-`XDG_DATA_HOME/opencode`. OpenCode also requires its CLI because discovery uses a fixed read-only
-`opencode --pure db SELECT --format json` command and inspect uses
-`opencode --pure export SESSION_ID`; check the root and executable when sessions do not appear.
+`XDG_DATA_HOME/opencode`. When that OpenCode database exists, inspector reads it with
+`sqlite3 -readonly -json`; check the root, `sqlite3` executable, and OpenCode schema compatibility
+when sessions do not appear. This integration is verified against OpenCode 1.18.25; schema drift is
+reported through `source_errors` on aggregate lists and remains a hard error for
+`--provider opencode`.
 
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
 origin and mount the complete surface below a path, restart it with
