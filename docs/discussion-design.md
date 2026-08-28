@@ -913,7 +913,8 @@ Discussion；query/wait/cancel 为非终态记录按需启动恢复 worker。全
   `process_instance_id`；短时 discussion lock 使用同一进程实例身份，PID 被复用时不得把
   新进程误判为旧 owner 仍存活。
 - 短时 lock 只回收无 owner 的超时残留或已确认死亡/被 PID 复用的 owner，不按年龄强拆
-  活体；释放前复核随机 nonce，旧持有者不得删除后来 owner 的锁目录。
+  活体；owner 文件在新建锁目录后直接写入，无 owner 残留使用独立短宽限回收。释放前复核
+  随机 nonce，旧持有者不得删除后来 owner 的锁目录。
 - 每 5 秒续约；20 秒无心跳即可由另一个 daemon 在 discussion lock 内原子接管。
 - 每次提交事件、更新投影或派发 turn 前都验证 `owner_id + generation`；旧 controller
   恢复后也不能继续写入。

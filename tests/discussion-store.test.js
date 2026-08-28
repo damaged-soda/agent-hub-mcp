@@ -158,6 +158,18 @@ describe("discussion store", () => {
 
     await expect(fsp.access(lockDir)).resolves.toBeUndefined();
   });
+
+  it("reclaims an ownerless lock after the owner write grace", async () => {
+    await createDiscussionRecord(baseState("discussion-eight"), { kind: "new" });
+    const lockDir = path.join(discussionDirFor("discussion-eight"), ".discussion.lock");
+    await fsp.mkdir(lockDir, { mode: 0o700 });
+    const staleAt = new Date(Date.now() - 1100);
+    await fsp.utimes(lockDir, staleAt, staleAt);
+
+    const lease = await acquireDiscussionLease("discussion-eight", "replacement-owner");
+    expect(lease.owner_id).toBe("replacement-owner");
+    await releaseDiscussionLease("discussion-eight", lease);
+  });
 });
 
 function baseState(id) {

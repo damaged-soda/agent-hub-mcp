@@ -29,7 +29,12 @@ describe("agenthub CLI", () => {
   });
 
   afterEach(async () => {
-    await fsp.rm(root, { recursive: true, force: true });
+    await fsp.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
   });
 
   it("dispatches and waits across separate CLI processes", async () => {
