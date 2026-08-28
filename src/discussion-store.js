@@ -19,6 +19,7 @@ export const DISCUSSION_FINAL_STATUSES = new Set([
 const DEFAULT_DISCUSSION_TTL_SECONDS = 604800;
 const LEASE_HEARTBEAT_MS = 5000;
 const LEASE_STALE_MS = 20000;
+const PROCESS_INSTANCE_ID = crypto.randomUUID();
 
 export function discussionTtlSeconds() {
   const raw =
@@ -248,6 +249,7 @@ export async function acquireDiscussionLease(id, ownerId) {
       schema_version: 1,
       owner_id: ownerId,
       pid: process.pid,
+      process_instance_id: PROCESS_INSTANCE_ID,
       generation: (current?.generation ?? 0) + 1,
       heartbeat_at: new Date(now).toISOString(),
     };
@@ -378,26 +380,27 @@ export async function withDiscussionLock(id, fn) {
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const lockDir = path.join(dir, ".discussion.lock");
   const deadline = Date.now() + 5000;
+  let lockNonce;
   while (true) {
     try {
       await fsp.mkdir(lockDir, { mode: 0o700 });
+      lockNonce = crypto.randomUUID();
       await atomicWriteJson(path.join(lockDir, "owner.json"), {
         pid: process.pid,
-        nonce: crypto.randomUUID(),
+        process_instance_id: PROCESS_INSTANCE_ID,
+        nonce: lockNonce,
         created_at: nowIso(),
       });
       break;
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       const owner = await readJsonIfExists(path.join(lockDir, "owner.json")).catch(() => null);
-      const createdAt = Date.parse(owner?.created_at ?? "");
       const lockStat = owner ? null : await fsp.stat(lockDir).catch(() => null);
       const abandonedBeforeOwnerWrite =
         !owner && lockStat && Date.now() - lockStat.mtimeMs > LEASE_STALE_MS;
       if (
         abandonedBeforeOwnerWrite ||
-        (owner && !leaseOwnerProcessIsLive(owner)) ||
-        (Number.isFinite(createdAt) && Date.now() - createdAt > LEASE_STALE_MS)
+        (owner && !leaseOwnerProcessIsLive(owner))
       ) {
         await fsp.rm(lockDir, { recursive: true, force: true });
         continue;
@@ -411,7 +414,10 @@ export async function withDiscussionLock(id, fn) {
   try {
     return await fn();
   } finally {
-    await fsp.rm(lockDir, { recursive: true, force: true });
+    const owner = await readJsonIfExists(path.join(lockDir, "owner.json")).catch(() => null);
+    if (owner?.nonce === lockNonce) {
+      await fsp.rm(lockDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -428,6 +434,12 @@ function assertLeaseMatches(current, expected) {
 
 function leaseOwnerProcessIsLive(lease) {
   if (!Number.isSafeInteger(lease?.pid) || lease.pid <= 0) return true;
+  if (
+    lease.pid === process.pid &&
+    lease.process_instance_id !== PROCESS_INSTANCE_ID
+  ) {
+    return false;
+  }
   try {
     process.kill(lease.pid, 0);
     return true;
