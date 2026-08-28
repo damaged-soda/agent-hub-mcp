@@ -102,6 +102,28 @@ describe("native session sources", () => {
     });
   });
 
+  it("keeps scanning Claude metadata after timestamp-only preamble records", async () => {
+    const createdAt = "2026-08-26T09:59:00.000Z";
+    await fsp.writeFile(
+      sourcePaths.claudePath,
+      [
+        { type: "queue-operation", sessionId: CLAUDE_ID, timestamp: createdAt },
+        {
+          type: "attachment",
+          sessionId: CLAUDE_ID,
+          timestamp: "2026-08-26T10:00:00.000Z",
+          cwd: "/workspace/preamble",
+        },
+      ].map((record) => JSON.stringify(record)).join("\n") + "\n",
+    );
+
+    const sessions = await discoverNativeSessions({ roots, provider: "claude", limit: 10 });
+    expect(sessions[0]).toMatchObject({
+      cwd: "/workspace/preamble",
+      created_at: createdAt,
+    });
+  });
+
   it("rejects Kimi index entries that point outside the configured root", async () => {
     const outsideId = "session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const outsideDir = path.join(tempRoot, "outside", outsideId);
