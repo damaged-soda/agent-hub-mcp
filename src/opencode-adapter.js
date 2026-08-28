@@ -132,9 +132,9 @@ export function buildOpenCodeCommand({ request, effectiveCliSessionRef, env = pr
   const agent = assertMetadataString(opencode.agent, "metadata.opencode.agent");
   if (agent) argv.push("--agent", agent);
 
-  // Non-interactive OpenCode needs --auto to resolve approval requests. Its
-  // explicit deny rules remain enforced, so this matches Agent Hub's auto
-  // permission rather than the guardrail-bypassing full mode.
+  // Non-interactive OpenCode needs --auto to resolve approval requests. The
+  // CLI treats it like yolo for asked permissions and has no workspace
+  // filesystem boundary; only explicit deny rules remain enforced.
   const permission = resolveUnifiedPermission(meta);
   if (permission !== "auto") {
     throw new Error(
@@ -151,9 +151,9 @@ export function buildOpenCodeCommand({ request, effectiveCliSessionRef, env = pr
     throw new Error("metadata.opencode.add_dirs is not supported: opencode run has no add-dir boundary");
   }
 
-  // OpenCode exposes only a positional prompt. `--` keeps prompt text that
-  // begins with a dash from being parsed as another CLI option.
-  argv.push("--", request.prompt);
+  // The shared runner already writes the exact prompt to stdin. OpenCode
+  // merges positional input with piped stdin, so adding an argv copy would
+  // duplicate and quote-mangle the model-visible prompt.
   return {
     adapter_id: OPENCODE_AGENT_ID,
     command: argv[0],

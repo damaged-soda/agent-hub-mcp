@@ -160,6 +160,7 @@ flowchart TD
     A1 --> S1["Claude CLI sessions"]
     A2 --> S2["Codex CLI sessions"]
     A3 --> S3["Kimi CLI sessions"]
+    A4 --> S4["OpenCode CLI sessions"]
     Store --> Decision["Decision record and transcript"]
 ```
 

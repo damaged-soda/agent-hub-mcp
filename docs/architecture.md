@@ -41,8 +41,9 @@ adapter metadata。Adapter 只把这些字段映射成目标 CLI 的 argv、stdi
 - Agent Hub 不在 prompt 前后拼接任何文本。
 - Agent Hub 不通过 prompt 要求目标 agent 写 result file。
 - Agent Hub 将 prompt 原文写入 `input.txt`，runner 再把 `input.txt` 内容通过 stdin
-  传给 CLI。例外：kimi `-p` 与 OpenCode `run` 只接受 argv prompt（不读 stdin），
-  adapter 从 `request.json` 的 `prompt` 字段拼 argv，`input.txt` 仍照常保存。
+  传给 CLI。例外：kimi `-p` 只接受 argv prompt（不读 stdin），kimi adapter 从
+  `request.json` 的 `prompt` 字段拼 argv，`input.txt` 仍照常保存。OpenCode 必须只读
+  stdin；它会合并 argv prompt 与 stdin，同时传两份会造成重复和引号变形。
 
 CLI 参数处理规则：
 
@@ -435,8 +436,9 @@ AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE
 Runner 分别捕获 CLI stdout 和 stderr。
 
 stdout 是 result 的来源。stderr 是诊断日志来源。对 JSONL 事件流输出（Claude Code 与
-kimi 的 `stream-json`、Codex 的 `--json`），runner 还会把同一事件流写入
-`events.jsonl`，供 running snapshot 生成 `progress_events`。
+kimi 的 `stream-json`、Codex 的 `--json`、OpenCode 的 `--format json`），runner 还会把
+同一事件流写入 `events.jsonl`。running snapshot 当前只投影 Claude/Kimi/Codex 的
+`progress_events`；OpenCode 原始事件保留为 artifact，live projection 另行演进。
 
 ### result.txt / result.json
 
@@ -630,12 +632,13 @@ OpenCode adapter 使用 `opencode run` 非交互模式。
 基础命令：
 
 ```text
-opencode run --format json --auto -- <prompt>
+opencode run --format json --auto
 ```
 
 执行规则：
 
-- prompt 是 `--` 后的 argv 位置参数；`--` 防止以连字符开头的 prompt 被解析成 flag。
+- prompt 只通过 stdin 传入，内容来自 `input.txt`；不得同时添加 argv prompt，否则
+  OpenCode 会把两份输入拼接，造成重复、引号变形和 argv 大小上限。
 - 新会话不预设 session id；OpenCode 从首条 JSON event 起上报 `sessionID`（形如 `ses_*`）。
 - continuation 使用 `--session <native_session_id>`，session id 先做形态校验。
 - `metadata.opencode.model`（或统一的 `metadata.model`）映射到 `--model`，未提供时回退
@@ -643,7 +646,8 @@ opencode run --format json --auto -- <prompt>
 - `metadata.opencode.effort` 映射到 `--variant`，未提供时回退
   `AGENT_HUB_OPENCODE_EFFORT`；值由 provider 校验。
 - `metadata.opencode.agent` 映射到 `--agent`。
-- 只接受统一 `permission: "auto"` 并映射到 `--auto`；OpenCode 显式 deny 仍生效。
+- 只接受统一 `permission: "auto"` 并映射到 `--auto`。OpenCode 对 asked permission 将
+  `--auto` 与 yolo 等价处理，不提供 workspace 文件系统边界；只有显式 deny 仍生效。
   `read-only` 无法跨用户自定义 agent 保证，`full` 没有独立稳定映射，二者均拒绝。
 - OpenCode 不提供 add-dir 边界，非空 `add_dirs` 直接拒绝。
 

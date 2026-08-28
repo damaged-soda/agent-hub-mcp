@@ -843,7 +843,7 @@ describe("MCP flow", () => {
     expect(firstCommand.argv).toContain("--variant");
     expect(firstCommand.argv).toContain("max");
     expect(firstCommand.argv).toContain("--auto");
-    expect(firstCommand.argv.slice(-2)).toEqual(["--", "review this"]);
+    expect(firstCommand.argv).not.toContain("review this");
     expect(firstCommand.output_format).toBe("jsonl");
     expect(completed.artifacts.map((artifact) => artifact.path)).toContain("events.jsonl");
 
@@ -1659,10 +1659,15 @@ if (args[0] !== "run") process.exit(2);
 const sessionIndex = args.indexOf("--session");
 const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : "${FAKE_OPENCODE_SESSION_ID}";
 const promptSeparator = args.indexOf("--");
-const prompt = promptSeparator >= 0 ? args[promptSeparator + 1] : "";
+const argvPrompt = promptSeparator >= 0
+  ? args.slice(promptSeparator + 1)
+      .map((arg) => arg.includes(" ") ? '"' + arg.replace(/"/g, '\\\\"') + '"' : arg)
+      .join(" ")
+  : "";
 let input = "";
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
+  const prompt = argvPrompt && input ? argvPrompt + "\\n" + input : argvPrompt || input;
   const writeEvent = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
   writeEvent({ type: "step_start", sessionID: sessionId, part: { type: "step-start" } });
   if (prompt === "sleep") {

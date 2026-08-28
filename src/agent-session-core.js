@@ -129,7 +129,9 @@ export function detectLiveProvider(record) {
   if (typeof record.role === "string") return "kimi";
   if (
     typeof record.type === "string" &&
-    (record.type.includes(".") || record.item || record.type === "error")
+    (record.type.includes(".") ||
+      record.item ||
+      (record.type === "error" && typeof record.message === "string"))
   ) {
     return "codex";
   }

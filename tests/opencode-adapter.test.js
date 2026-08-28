@@ -133,9 +133,8 @@ describe("opencode adapter", () => {
       "--agent",
       "build",
       "--auto",
-      "--",
-      "--review this",
     ]);
+    expect(command.argv).not.toContain("--review this");
     expect(command.output_format).toBe("jsonl");
   });
 

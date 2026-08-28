@@ -395,7 +395,9 @@ Kimi prompt mode takes no permission flags (`--plan`/`--auto`/`--yolo` conflict 
 | `effort` | `--variant` | Optional provider-native reasoning variant; falls back to `AGENT_HUB_OPENCODE_EFFORT`. |
 | `agent` | `--agent` | Optional OpenCode agent name. |
 
-OpenCode runs as `opencode run --format json --auto -- <prompt>`. Only unified `permission: "auto"` is supported: `--auto` approves requests that are not explicitly denied by OpenCode configuration, while `full` has no distinct stable mapping and `read-only` cannot be guaranteed across user-defined agents. Non-empty `add_dirs` is rejected because OpenCode exposes no additional-directory boundary.
+OpenCode runs as `opencode run --format json --auto` and reads the exact prompt from stdin. Only unified `permission: "auto"` is supported: OpenCode treats `--auto` like its yolo flag for asked permissions, has no workspace filesystem boundary, and retains only explicit deny rules. `full` has no distinct stable mapping and `read-only` cannot be guaranteed across user-defined agents. Non-empty `add_dirs` is rejected because OpenCode exposes no additional-directory boundary. Unsupported `permission` or `add_dirs` values are accepted as runs and then fail during command construction with `runner_exception`, matching the validation stage used by other adapters.
+
+OpenCode JSONL is retained in `events.jsonl`, but provider-native transcript inspection and live `progress_events` projection are outside this adapter's initial scope; running snapshots still expose stderr/log artifacts and terminal results.
 
 ## Session Continuation
 
