@@ -37,12 +37,18 @@ describe("agent environment", () => {
       AGENT_HUB_CODEX_EFFORT: "xhigh",
       AGENT_HUB_KIMI_EFFORT: "medium",
       AGENT_HUB_KIMI_MODEL: "k2",
+      AGENT_HUB_OPENCODE_EFFORT: "max",
+      AGENT_HUB_OPENCODE_MODEL: "zai-coding-plan/glm-5.3-flash",
+      OPENCODE_CONFIG_DIR: "/tmp/opencode-config",
     });
 
     expect(env.AGENT_HUB_CLAUDE_EFFORT).toBe("high");
     expect(env.AGENT_HUB_CODEX_EFFORT).toBe("xhigh");
     expect(env.AGENT_HUB_KIMI_EFFORT).toBe("medium");
     expect(env.AGENT_HUB_KIMI_MODEL).toBe("k2");
+    expect(env.AGENT_HUB_OPENCODE_EFFORT).toBe("max");
+    expect(env.AGENT_HUB_OPENCODE_MODEL).toBe("zai-coding-plan/glm-5.3-flash");
+    expect(env.OPENCODE_CONFIG_DIR).toBe("/tmp/opencode-config");
   });
 
   it("omits namespace keys that were explicitly cleared from command metadata", () => {

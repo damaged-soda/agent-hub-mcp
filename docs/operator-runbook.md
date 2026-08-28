@@ -6,8 +6,8 @@ This runbook covers the daemon-free CLI/Skill path and the optional MCP server.
 
 - Node.js 20 or newer.
 - Dependencies installed with `npm install`.
-- Claude Code CLI available as `claude`, Codex CLI available as `codex`, and/or Kimi Code CLI available as `kimi`.
-- CLI authentication configured through environment variables or each CLI's own config (`claude` login; `codex login` or `OPENAI_API_KEY`, honoring `CODEX_HOME`; `kimi` login, honoring `KIMI_CODE_HOME`).
+- Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
+- CLI authentication configured through environment variables or each CLI's own config (`claude` login; `codex login` or `OPENAI_API_KEY`, honoring `CODEX_HOME`; `kimi` login, honoring `KIMI_CODE_HOME`; `opencode auth login`).
 
 Validate the adapters:
 
@@ -15,10 +15,11 @@ Validate the adapters:
 claude --version
 codex --version
 kimi --version
+opencode --version
 agenthub agents --cwd "$PWD"
 ```
 
-`agenthub agents` returns `claude-code`, `codex`, and `kimi-code` under `agents` only when the corresponding local CLI is available; missing CLIs appear under `unavailable_agents`.
+`agenthub agents` returns `claude-code`, `codex`, `kimi-code`, and `opencode` under `agents` only when the corresponding local CLI is available; missing CLIs appear under `unavailable_agents`.
 It also returns the selectable model catalog for each adapter. Use
 `--json '{"cwd":"/absolute/path/to/project"}'` to probe from a specific working directory
 （it does not select a namespace）. A model catalog failure is reported through
@@ -98,8 +99,10 @@ endpoint, and API remain below the same canonical prefix.
 | `AGENT_HUB_CODEX_EFFORT` | unset | Default `model_reasoning_effort` for Codex runs when the request omits `metadata.codex.effort`. |
 | `AGENT_HUB_KIMI_MODEL` | unset | Default `-m` for Kimi runs when the request omits `metadata["kimi-code"].model`. |
 | `AGENT_HUB_KIMI_EFFORT` | unset | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when the request omits `metadata["kimi-code"].effort`. |
+| `AGENT_HUB_OPENCODE_MODEL` | unset | Default `--model` for OpenCode runs when the request omits `metadata.opencode.model`. |
+| `AGENT_HUB_OPENCODE_EFFORT` | unset | Default `--variant` for OpenCode runs when the request omits `metadata.opencode.effort`. |
 
-The runner forwards a small default environment allowlist for Claude, Codex, and Kimi auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`), the session-axis state forwarded whole for charter's glue to rebind at the run cwd (`NS`, `NS_UNDO`, `GH_CONFIG_DIR`, `BASH_ENV`; `GIT_CONFIG_GLOBAL` legacy; the runner adds `NS_REBIND=1`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
+The runner forwards a small default environment allowlist for Claude, Codex, Kimi, and OpenCode auth/routing (`ANTHROPIC_*`, `OPENAI_*`, `CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`), the session-axis state forwarded whole for charter's glue to rebind at the run cwd (`NS`, `NS_UNDO`, `GH_CONFIG_DIR`, `BASH_ENV`; `GIT_CONFIG_GLOBAL` legacy; the runner adds `NS_REBIND=1`), cloud auth, terminal behavior, `PATH`, user directories, and XDG paths. CLI calls inherit the caller's process and Keychain context before applying this allowlist. Add project-specific keys with `AGENT_HUB_FORWARD_ENV`, for example:
 
 ```sh
 AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE agenthub dispatch …
@@ -161,7 +164,7 @@ AGENT_HUB_RUN_DIR=/tmp/agent-hub-runs agenthub dispatch --json '{
 }'
 ```
 
-For Codex, use `"agent_id": "codex"` with `metadata.codex`, for example `{"codex": {"effort": "medium"}}`. For Kimi Code, use `"agent_id": "kimi-code"` with `metadata["kimi-code"]`. A new Codex or Kimi dispatch returns `cli_session_ref: null`; the session id shows up on later snapshots.
+For Codex, use `"agent_id": "codex"` with `metadata.codex`, for example `{"codex": {"effort": "medium"}}`. For Kimi Code, use `"agent_id": "kimi-code"` with `metadata["kimi-code"]`. For OpenCode, use `"agent_id": "opencode"` with `metadata.opencode`, for example `{"opencode":{"model":"zai-coding-plan/glm-5.3-flash","effort":"max"}}`. A new Codex, Kimi, or OpenCode dispatch returns `cli_session_ref: null`; the session id shows up on a later snapshot.
 
 Use the returned run ID with `agenthub wait RUN_ID`, or `agenthub query RUN_ID` when you only need the latest snapshot. Inspect `status`, `content`, `progress_events`, and the run's `command.json` if the result is unexpected.
 
@@ -186,6 +189,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `claude-code` appears under `unavailable_agents` | `claude --version` failed or did not report Claude Code. | Fix PATH or Claude Code installation. |
 | `codex` appears under `unavailable_agents` | `codex --version` failed. | Fix PATH or Codex CLI installation. |
 | `kimi-code` appears under `unavailable_agents` | `kimi --version` failed. | Fix PATH or Kimi Code CLI installation. |
+| `opencode` appears under `unavailable_agents` | Version probing failed or `opencode run` lacks one of the required non-interactive flags. | Install/update OpenCode and run `opencode auth login`. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |

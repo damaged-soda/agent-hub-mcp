@@ -8,7 +8,7 @@
 
 ## 1. 背景
 
-Agent Hub 已经把 Claude Code、Codex 和 Kimi Code 统一为本地非交互 CLI
+Agent Hub 已经把 Claude Code、Codex、Kimi Code 和 OpenCode 统一为本地非交互 CLI
 run，并明确区分：
 
 - `run_id`：Agent Hub 管理的一次执行。
@@ -122,7 +122,7 @@ DecisionRecord。重试作为 attempt 单独计数，不能扩展逻辑轮次。
 
 | 层级 | 含义 | 示例 |
 |---|---|---|
-| Adapter | 如何启动和续接某个 CLI | `claude-code`、`codex`、`kimi-code` |
+| Adapter | 如何启动和续接某个 CLI | `claude-code`、`codex`、`kimi-code`、`opencode` |
 | Participant configuration | 本场讨论中的角色和运行配置 | 安全审查、成本分析、实现评审 |
 | Participant session | 某位参与者在本场讨论中的 CLI 上下文 | `cli_session_ref` |
 
@@ -156,6 +156,7 @@ flowchart TD
     Runs --> A1["Claude adapter"]
     Runs --> A2["Codex adapter"]
     Runs --> A3["Kimi adapter"]
+    Runs --> A4["OpenCode adapter"]
     A1 --> S1["Claude CLI sessions"]
     A2 --> S2["Codex CLI sessions"]
     A3 --> S3["Kimi CLI sessions"]
@@ -834,8 +835,9 @@ lease 保证，而不是只靠单个 Discussion controller 自律。
 Discussion 默认采用 best-effort read-only：
 
 - effective permission 由 adapter capability 的 `preferred_discussion_permission` 决定，
-  且必须属于其 `supported_permissions`。当前配置中 Claude/Codex 为 read-only，Kimi
-  为 auto；Coordinator 不按 adapter 名称写死判断，也不会先给 Kimi 传 read-only。
+  且必须属于其 `supported_permissions`。当前配置中 Claude/Codex 为 read-only，
+  Kimi/OpenCode 为 auto；Coordinator 不按 adapter 名称写死判断，也不会先给只支持
+  auto 的 adapter 传 read-only。
 - Discussion 只接受 `read-only` 或 `auto` 作为 preferred permission；即使普通 run
   capability 支持 full，Discussion 也不能选择或回退到 full。
 - host/participant metadata 不允许包含 `permission`、`claude.permission_mode`、
@@ -961,7 +963,7 @@ worker 或 daemon 接管后读取其终态并续会；停机时间不会暂停�
   认领或状态未知时必须 rebuild。
 - parent session 被 child 认领后形成不可分叉的 lineage。即使 child 后续取消或失败，
   sibling 也不能重新消费该历史，以免观察到部分内容。
-- Codex/Kimi 等延迟产生 native session ID 的 adapter 在 ref 可用时注册 session；未得到
+- Codex/Kimi/OpenCode 等延迟产生 native session ID 的 adapter 在 ref 可用时注册 session；未得到
   session ref 的失败 run 不创建虚假 registry 项。
 
 session registry 与 idempotency index 作为 run 子系统的私有索引存放在 run 根目录的
@@ -1170,11 +1172,11 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 
 ### 17.2 真实 CLI selftest
 
-真实 Claude/Codex/Kimi 测试不进入默认 `npm test`，新增显式
+真实 Claude/Codex/Kimi/OpenCode 测试不进入默认 `npm test`，新增显式
 `npm run selftest:discussion`，并作为发布前人工门槛：
 
 - 新 session 和 continuation。
-- Claude/Codex read-only 与 Kimi auto 的 capability 配置。
+- Claude/Codex read-only 与 Kimi/OpenCode auto 的 capability 配置。
 - ParticipantMemo、ChallengeResponse、RevisionMemo、ModerationPlan、DecisionRecord
   及 code fence 规范化。
 - Kimi argv prompt 大小边界。

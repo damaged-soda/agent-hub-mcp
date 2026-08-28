@@ -18,6 +18,7 @@ import { waitAgentRun } from "../src/runs.js";
 
 const FAKE_CODEX_THREAD_ID = "0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000";
 const FAKE_KIMI_SESSION_ID = "session_0199aaaa-bbbb-4ccc-8ddd-eeeeffff0000";
+const FAKE_OPENCODE_SESSION_ID = "ses_0199aaaabbbb4ccc8dddeeeeffff0000";
 
 describe("MCP flow", () => {
   let tempDir;
@@ -38,6 +39,7 @@ describe("MCP flow", () => {
     await writeFakeClaude(path.join(binDir, "claude"));
     await writeFakeCodex(path.join(binDir, "codex"));
     await writeFakeKimi(path.join(binDir, "kimi"));
+    await writeFakeOpenCode(path.join(binDir, "opencode"));
     env = {
       ...process.env,
       PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
@@ -56,6 +58,7 @@ describe("MCP flow", () => {
       "claude-code",
       "codex",
       "kimi-code",
+      "opencode",
     ]);
     const listedById = Object.fromEntries(
       listed.structuredContent.agents.map((agent) => [agent.agent_id, agent]),
@@ -81,6 +84,12 @@ describe("MCP flow", () => {
       ]),
     );
     expect(JSON.stringify(listedById["kimi-code"])).not.toContain("secret-provider-key");
+    expect(listedById.opencode.models).toEqual([
+      {
+        id: "zai-coding-plan/glm-5.3-flash",
+        display_name: "zai-coding-plan/glm-5.3-flash",
+      },
+    ]);
 
     const result = await callAgentHubTool(
       "run_agent",
@@ -146,6 +155,7 @@ describe("MCP flow", () => {
         "claude-code",
         "codex",
         "kimi-code",
+        "opencode",
       ]);
     });
   });
@@ -783,6 +793,113 @@ describe("MCP flow", () => {
     expect(command.argv).toContain(FAKE_KIMI_SESSION_ID);
   });
 
+  it("runs an opencode agent end to end and resumes its session", async () => {
+    const accepted = await callAgentHubTool(
+      "dispatch_to_agent",
+      {
+        agent_id: "opencode",
+        prompt: "review this",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: {
+          opencode: {
+            model: "zai-coding-plan/glm-5.3-flash",
+            effort: "max",
+          },
+        },
+      },
+      { env },
+    );
+    expect(accepted.structuredContent.cli_session_ref).toBeNull();
+
+    const completed = await withRunDir(runDir, () =>
+      waitAgentRun({
+        run_ref: accepted.structuredContent.run_ref,
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      }),
+    );
+    expect(completed.status).toBe("completed");
+    expect(completed.content[0].text).toBe("fake opencode result: review this");
+    expect(completed.cli_session_ref).toEqual({
+      agent_id: "opencode",
+      native_session_id: FAKE_OPENCODE_SESSION_ID,
+    });
+
+    const firstCommand = JSON.parse(
+      await fsp.readFile(
+        path.join(runDir, accepted.structuredContent.run_ref.run_id, "command.json"),
+        "utf8",
+      ),
+    );
+    expect(firstCommand.argv.slice(0, 5)).toEqual([
+      "opencode",
+      "run",
+      "--format",
+      "json",
+      "--model",
+    ]);
+    expect(firstCommand.argv).toContain("zai-coding-plan/glm-5.3-flash");
+    expect(firstCommand.argv).toContain("--variant");
+    expect(firstCommand.argv).toContain("max");
+    expect(firstCommand.argv).toContain("--auto");
+    expect(firstCommand.argv.slice(-2)).toEqual(["--", "review this"]);
+    expect(firstCommand.output_format).toBe("jsonl");
+    expect(completed.artifacts.map((artifact) => artifact.path)).toContain("events.jsonl");
+
+    const resumed = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "opencode",
+        prompt: "continue",
+        cwd: workspaceDir,
+        cli_session_ref: completed.cli_session_ref,
+        metadata: { opencode: {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+    expect(resumed.structuredContent.status).toBe("completed");
+    expect(resumed.structuredContent.cli_session_ref.native_session_id).toBe(
+      FAKE_OPENCODE_SESSION_ID,
+    );
+    const resumedCommand = JSON.parse(
+      await fsp.readFile(
+        path.join(runDir, resumed.structuredContent.run_ref.run_id, "command.json"),
+        "utf8",
+      ),
+    );
+    expect(resumedCommand.argv).toEqual(
+      expect.arrayContaining(["--session", FAKE_OPENCODE_SESSION_ID]),
+    );
+  });
+
+  it("maps opencode JSON error events onto agent_error", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "opencode",
+        prompt: "error",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: { opencode: {} },
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      { env },
+    );
+    expect(result.structuredContent.status).toBe("failed");
+    expect(result.structuredContent.error).toMatchObject({
+      code: "agent_error",
+      message: "fake opencode failure",
+    });
+    expect(result.structuredContent.cli_session_ref).toEqual({
+      agent_id: "opencode",
+      native_session_id: FAKE_OPENCODE_SESSION_ID,
+    });
+  });
+
   it("preserves Claude structured authentication failures across runner exit", async () => {
     const result = await callAgentHubTool(
       "run_agent",
@@ -848,6 +965,7 @@ process.exit(1);
     expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
       "claude-code",
       "codex",
+      "opencode",
     ]);
     const unavailable = listed.structuredContent.unavailable_agents.find(
       (agent) => agent.agent_id === "kimi-code",
@@ -875,6 +993,37 @@ process.exit(1);
     );
     expect(unavailable).toBeDefined();
     expect(unavailable.unavailable_reason).toContain("below the minimum supported version");
+  });
+
+  it("marks opencode unavailable when its run command lacks the required contract", async () => {
+    await fsp.writeFile(
+      path.join(binDir, "opencode"),
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  process.stdout.write("1.18.25\\n");
+  process.exit(0);
+}
+if (args[0] === "run" && args.includes("--help")) {
+  process.stdout.write("--format --session --model --variant\\n");
+  process.exit(0);
+}
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+
+    const listed = await callAgentHubTool("list_agents", {}, { env });
+    expect(listed.structuredContent.agents.map((agent) => agent.agent_id)).toEqual([
+      "claude-code",
+      "codex",
+      "kimi-code",
+    ]);
+    const unavailable = listed.structuredContent.unavailable_agents.find(
+      (agent) => agent.agent_id === "opencode",
+    );
+    expect(unavailable).toBeDefined();
+    expect(unavailable.unavailable_reason).toContain("--auto");
   });
 
   it("keeps an agent available when only model discovery fails", async () => {
@@ -1482,6 +1631,61 @@ process.stdin.on("end", () => {
   }
   writeEvent({ role: "assistant", content: "fake kimi result: " + prompt });
   writeResumeHint();
+});
+`,
+    { mode: 0o755 },
+  );
+  await fsp.chmod(target, 0o755);
+}
+
+async function writeFakeOpenCode(target) {
+  await fsp.writeFile(
+    target,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  process.stdout.write("1.18.25\\n");
+  process.exit(0);
+}
+if (args[0] === "run" && args.includes("--help")) {
+  process.stdout.write("--format --session --model --variant --auto\\n");
+  process.exit(0);
+}
+if (args[0] === "models") {
+  process.stdout.write("zai-coding-plan/glm-5.3-flash\\n");
+  process.exit(0);
+}
+if (args[0] !== "run") process.exit(2);
+const sessionIndex = args.indexOf("--session");
+const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : "${FAKE_OPENCODE_SESSION_ID}";
+const promptSeparator = args.indexOf("--");
+const prompt = promptSeparator >= 0 ? args[promptSeparator + 1] : "";
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const writeEvent = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+  writeEvent({ type: "step_start", sessionID: sessionId, part: { type: "step-start" } });
+  if (prompt === "sleep") {
+    setTimeout(() => {
+      writeEvent({ type: "text", sessionID: sessionId, part: { type: "text", text: "late opencode result" } });
+    }, 30000);
+    return;
+  }
+  if (prompt === "error") {
+    writeEvent({
+      type: "error",
+      sessionID: sessionId,
+      error: { name: "ProviderError", data: { message: "fake opencode failure" } }
+    });
+    process.exitCode = 1;
+    return;
+  }
+  writeEvent({
+    type: "text",
+    sessionID: sessionId,
+    part: { type: "text", text: "fake opencode result: " + prompt }
+  });
+  writeEvent({ type: "step_finish", sessionID: sessionId, part: { type: "step-finish" } });
 });
 `,
     { mode: 0o755 },
