@@ -19,6 +19,7 @@ export const DISCUSSION_FINAL_STATUSES = new Set([
 const DEFAULT_DISCUSSION_TTL_SECONDS = 604800;
 const LEASE_HEARTBEAT_MS = 5000;
 const LEASE_STALE_MS = 20000;
+const PROCESS_INSTANCE_ID = crypto.randomUUID();
 
 export function discussionTtlSeconds() {
   const raw =
@@ -248,6 +249,7 @@ export async function acquireDiscussionLease(id, ownerId) {
       schema_version: 1,
       owner_id: ownerId,
       pid: process.pid,
+      process_instance_id: PROCESS_INSTANCE_ID,
       generation: (current?.generation ?? 0) + 1,
       heartbeat_at: new Date(now).toISOString(),
     };
@@ -383,6 +385,7 @@ export async function withDiscussionLock(id, fn) {
       await fsp.mkdir(lockDir, { mode: 0o700 });
       await atomicWriteJson(path.join(lockDir, "owner.json"), {
         pid: process.pid,
+        process_instance_id: PROCESS_INSTANCE_ID,
         nonce: crypto.randomUUID(),
         created_at: nowIso(),
       });
@@ -428,6 +431,12 @@ function assertLeaseMatches(current, expected) {
 
 function leaseOwnerProcessIsLive(lease) {
   if (!Number.isSafeInteger(lease?.pid) || lease.pid <= 0) return true;
+  if (
+    lease.pid === process.pid &&
+    lease.process_instance_id !== PROCESS_INSTANCE_ID
+  ) {
+    return false;
+  }
   try {
     process.kill(lease.pid, 0);
     return true;

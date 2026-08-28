@@ -94,6 +94,39 @@ describe("discussion store", () => {
     expect(lease.owner_id).toBe("owner-two");
     await releaseDiscussionLease("discussion-four", lease);
   });
+
+  it("reclaims locks and leases when the owner pid was reused", async () => {
+    await createDiscussionRecord(baseState("discussion-five"), { kind: "new" });
+    const dir = discussionDirFor("discussion-five");
+    const lockDir = path.join(dir, ".discussion.lock");
+    await fsp.mkdir(lockDir, { mode: 0o700 });
+    await fsp.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({
+      pid: process.pid,
+      process_instance_id: "previous-process-instance",
+      nonce: "previous-lock",
+      created_at: new Date().toISOString(),
+    }));
+
+    const recovered = await recoverDiscussionRecord("discussion-five");
+    expect(recovered.status).toBe("queued");
+
+    await fsp.writeFile(path.join(dir, "lease.json"), JSON.stringify({
+      schema_version: 1,
+      owner_id: "previous-owner",
+      pid: process.pid,
+      process_instance_id: "previous-process-instance",
+      generation: 1,
+      heartbeat_at: new Date().toISOString(),
+    }));
+    const lease = await acquireDiscussionLease("discussion-five", "replacement-owner");
+    expect(lease).toMatchObject({
+      owner_id: "replacement-owner",
+      generation: 2,
+      pid: process.pid,
+    });
+    expect(lease.process_instance_id).not.toBe("previous-process-instance");
+    await releaseDiscussionLease("discussion-five", lease);
+  });
 });
 
 function baseState(id) {

@@ -909,7 +909,9 @@ Discussion；query/wait/cancel 为非终态记录按需启动恢复 worker。全
 恢复同一讨论：
 
 - 每个 coordinator 启动生成随机 `process_instance_id`；PID 只用于诊断，不能单独证明身份。
-- lease 包含 `owner_id`、单调递增 `generation` 和 `heartbeat_at`。
+- lease 包含 `owner_id`、单调递增 `generation`、`heartbeat_at`、诊断 PID 与随机
+  `process_instance_id`；短时 discussion lock 使用同一进程实例身份，PID 被复用时不得把
+  新进程误判为旧 owner 仍存活。
 - 每 5 秒续约；20 秒无心跳即可由另一个 daemon 在 discussion lock 内原子接管。
 - 每次提交事件、更新投影或派发 turn 前都验证 `owner_id + generation`；旧 controller
   恢复后也不能继续写入。
