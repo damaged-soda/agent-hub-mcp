@@ -12,6 +12,7 @@ import {
   readDiscussionState,
   recoverDiscussionRecord,
   releaseDiscussionLease,
+  withDiscussionLock,
 } from "../src/discussion-store.js";
 
 describe("discussion store", () => {
@@ -102,7 +103,6 @@ describe("discussion store", () => {
     await fsp.mkdir(lockDir, { mode: 0o700 });
     await fsp.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({
       pid: process.pid,
-      process_instance_id: "previous-process-instance",
       nonce: "previous-lock",
       created_at: new Date().toISOString(),
     }));
@@ -114,7 +114,6 @@ describe("discussion store", () => {
       schema_version: 1,
       owner_id: "previous-owner",
       pid: process.pid,
-      process_instance_id: "previous-process-instance",
       generation: 1,
       heartbeat_at: new Date().toISOString(),
     }));
@@ -126,6 +125,38 @@ describe("discussion store", () => {
     });
     expect(lease.process_instance_id).not.toBe("previous-process-instance");
     await releaseDiscussionLease("discussion-five", lease);
+  });
+
+  it("does not reclaim a fresh lease held by another live process", async () => {
+    await createDiscussionRecord(baseState("discussion-six"), { kind: "new" });
+    const leasePath = path.join(discussionDirFor("discussion-six"), "lease.json");
+    await fsp.writeFile(leasePath, JSON.stringify({
+      schema_version: 1,
+      owner_id: "external-owner",
+      pid: process.ppid,
+      process_instance_id: "external-process-instance",
+      generation: 1,
+      heartbeat_at: new Date().toISOString(),
+    }));
+
+    await expect(
+      acquireDiscussionLease("discussion-six", "replacement-owner"),
+    ).rejects.toMatchObject({ code: "discussion_lease_held" });
+  });
+
+  it("does not remove a lock that was replaced before release", async () => {
+    await createDiscussionRecord(baseState("discussion-seven"), { kind: "new" });
+    const lockDir = path.join(discussionDirFor("discussion-seven"), ".discussion.lock");
+    await withDiscussionLock("discussion-seven", async () => {
+      const ownerPath = path.join(lockDir, "owner.json");
+      const owner = JSON.parse(await fsp.readFile(ownerPath, "utf8"));
+      await fsp.writeFile(ownerPath, JSON.stringify({
+        ...owner,
+        nonce: "replacement-lock",
+      }));
+    });
+
+    await expect(fsp.access(lockDir)).resolves.toBeUndefined();
   });
 });
 
