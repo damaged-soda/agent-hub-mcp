@@ -34,6 +34,7 @@ It also returns the selectable model catalog for each adapter. Use
 | `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local session API for Cockpit. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
+| `agenthub review status/set/dispatch …` | Inspect, change, and use the requester-specific PR review route. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
 | `npm start` | Start the optional MCP stdio compatibility server. |
 | `node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp` | Start the optional loopback HTTP compatibility daemon. |
@@ -78,6 +79,39 @@ when sessions do not appear. This integration is verified against OpenCode 1.18.
 reported through `source_errors` on aggregate lists and remains a hard error for
 `--provider opencode`.
 
+## PR Review Routing
+
+Each initiating CLI has one effective reviewer/model pair. Inspect all routes and the live model
+catalog from a representative workspace:
+
+```sh
+agenthub review status --cwd "$PWD"
+```
+
+Change a route through the validated CLI; Cockpit's Agent page calls this same command rather than
+writing the file directly:
+
+```sh
+agenthub review set --requester codex --reviewer kimi-code \
+  --model kimi-code/k3 --cwd "$PWD"
+```
+
+The supported requester IDs are `codex`, `claude-code`, `kimi-code`, and `opencode`. Reviewer and
+model must appear together in the current `agenthub agents` result, and reviewer must differ from
+requester. Selecting the built-in default pair removes that requester's stored override. Corrupt
+configuration, missing reviewers, and removed models remain explicit errors.
+
+Agents dispatch through the route and keep the returned run ID:
+
+```sh
+agenthub review dispatch --requester codex --cwd "$PWD" \
+  --prompt "Review the current PR and report findings with severity."
+agenthub wait RUN_ID
+```
+
+Review dispatch supplies the configured model as unified metadata and otherwise preserves the
+ordinary detached-run contract. It does not prepend or rewrite the review prompt.
+
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
 origin and mount the complete surface below a path, restart it with
 `--public-origin https://exact-private-origin --base-path /agent-session`. Public-origin paths,
@@ -98,6 +132,7 @@ endpoint, and API remain below the same canonical prefix.
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | unset | Comma-separated exact browser origins allowed to call the loopback daemon. Native MCP clients normally send no `Origin`; browser origins are rejected by default. |
 | `AGENT_HUB_CWD_ALLOWLIST` | unset | Path-delimited allowlist for request `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | unset | Comma-separated extra environment variable names to forward to the agent CLI. |
+| `AGENT_HUB_REVIEW_CONFIG` | `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json` | Moves the versioned requester → reviewer/model override file. |
 | `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
 | `AGENT_HUB_CODEX_MODEL` | unset | Default `--model` for Codex runs when the request omits `metadata.codex.model`. |
 | `AGENT_HUB_CLAUDE_EFFORT` | unset | Default `--effort` for Claude runs when the request omits `metadata.claude.effort`. |

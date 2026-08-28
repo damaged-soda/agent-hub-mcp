@@ -24,6 +24,7 @@ describe("agenthub CLI", () => {
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
       AGENT_HUB_RUN_DIR: path.join(root, "runs"),
       AGENT_HUB_DISCUSSION_DIR: path.join(root, "discussions"),
+      AGENT_HUB_REVIEW_CONFIG: path.join(root, "config", "review-routing.json"),
       AGENT_HUB_CWD_ALLOWLIST: workspace,
     };
   });
@@ -137,6 +138,47 @@ describe("agenthub CLI", () => {
     expect(invalidJson.error.code).toBe("invalid_cli_usage");
     expect(invalidJson.error.message).toMatch(/^--json is invalid:/);
   });
+
+  it("persists a review route and dispatches with its configured model", async () => {
+    const initial = await runCli(["review", "status", "--cwd", workspace], env);
+    expect(initial.kind).toBe("agent-review-config");
+    expect(initial.routes.find((route) => route.requester === "codex")).toMatchObject({
+      reviewer: "claude-code",
+      model: "default",
+      source: "default",
+    });
+
+    const updated = await runCli([
+      "review", "set",
+      "--requester", "codex",
+      "--reviewer", "claude-code",
+      "--model", "haiku",
+      "--cwd", workspace,
+    ], env);
+    expect(updated.routes.find((route) => route.requester === "codex")).toMatchObject({
+      reviewer: "claude-code",
+      model: "haiku",
+      source: "override",
+    });
+
+    const accepted = await runCli([
+      "review", "dispatch",
+      "--requester", "codex",
+      "--cwd", workspace,
+      "--prompt", "review via route",
+    ], env);
+    const completed = await runCli(
+      ["wait", accepted.run_ref.run_id, "--timeout-ms", "10000"],
+      env,
+    );
+    expect(completed.status).toBe("completed");
+    expect(completed.content[0].text).toBe("fake result: review via route");
+    const command = JSON.parse(await fsp.readFile(
+      path.join(env.AGENT_HUB_RUN_DIR, accepted.run_ref.run_id, "command.json"),
+      "utf8",
+    ));
+    expect(command.argv).toContain("haiku");
+  }, 15000);
 
   it("runs a durable discussion from a detached CLI worker", async () => {
     const staleCommandDir = path.join(
