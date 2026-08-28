@@ -163,12 +163,25 @@ describe("discussion store", () => {
     await createDiscussionRecord(baseState("discussion-eight"), { kind: "new" });
     const lockDir = path.join(discussionDirFor("discussion-eight"), ".discussion.lock");
     await fsp.mkdir(lockDir, { mode: 0o700 });
-    const staleAt = new Date(Date.now() - 1100);
+    const staleAt = new Date(Date.now() - 2100);
     await fsp.utimes(lockDir, staleAt, staleAt);
 
     const lease = await acquireDiscussionLease("discussion-eight", "replacement-owner");
     expect(lease.owner_id).toBe("replacement-owner");
     await releaseDiscussionLease("discussion-eight", lease);
+  });
+
+  it("does not reclaim an ownerless lock inside the owner write grace", async () => {
+    await createDiscussionRecord(baseState("discussion-nine"), { kind: "new" });
+    const lockDir = path.join(discussionDirFor("discussion-nine"), ".discussion.lock");
+    await fsp.mkdir(lockDir, { mode: 0o700 });
+    const halfway = new Date(Date.now() - 1000);
+    await fsp.utimes(lockDir, halfway, halfway);
+
+    const startedAt = Date.now();
+    const lease = await acquireDiscussionLease("discussion-nine", "replacement-owner");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(750);
+    await releaseDiscussionLease("discussion-nine", lease);
   });
 });
 

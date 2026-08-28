@@ -19,7 +19,7 @@ export const DISCUSSION_FINAL_STATUSES = new Set([
 const DEFAULT_DISCUSSION_TTL_SECONDS = 604800;
 const LEASE_HEARTBEAT_MS = 5000;
 const LEASE_STALE_MS = 20000;
-const LOCK_OWNER_WRITE_GRACE_MS = 1000;
+const LOCK_OWNER_WRITE_GRACE_MS = 2000;
 const PROCESS_INSTANCE_ID = crypto.randomUUID();
 
 export function discussionTtlSeconds() {
@@ -398,8 +398,18 @@ export async function withDiscussionLock(id, fn) {
       );
       break;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      const owner = await readJsonIfExists(path.join(lockDir, "owner.json")).catch(() => null);
+      if (error?.code !== "EEXIST" && error?.code !== "ENOENT") throw error;
+      let owner;
+      try {
+        owner = await readJsonIfExists(path.join(lockDir, "owner.json"));
+      } catch (ownerError) {
+        if (!(ownerError instanceof SyntaxError)) throw ownerError;
+        if (Date.now() >= deadline) {
+          throw codedError("discussion_lock_timeout", `Timed out locking discussion ${id}`);
+        }
+        await sleep(10);
+        continue;
+      }
       const lockStat = owner ? null : await fsp.stat(lockDir).catch(() => null);
       const abandonedBeforeOwnerWrite =
         !owner && lockStat && Date.now() - lockStat.mtimeMs > LOCK_OWNER_WRITE_GRACE_MS;
