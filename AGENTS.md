@@ -38,6 +38,7 @@ Key files:
 | `src/discussion-worker.js` | Detached per-Discussion coordinator process. |
 | `src/discussion-protocol.js` | Discussion input/output schemas, limits, and provenance validation. |
 | `src/discussion-store.js` | Discussion events, projections, leases, artifacts, and TTL cleanup. |
+| `src/discussion-observability.js` | Derived list summaries, completion quality, phase statistics, and bounded failure diagnostics. |
 | `src/discussion-materials.js` | Frozen material bundles, file validation, hashing, and handoff data. |
 | `src/discussion-prompts.js` | Versioned turn and format-repair prompts. |
 | `src/discussion-render.js` | Deterministic DecisionRecord Markdown rendering. |

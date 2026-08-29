@@ -8,6 +8,7 @@ import {
   createDiscussionRecord,
   discussionDirFor,
   discussionLeaseIsLive,
+  listDiscussionStates,
   readDiscussionEvents,
   readDiscussionState,
   recoverDiscussionRecord,
@@ -182,6 +183,28 @@ describe("discussion store", () => {
     const lease = await acquireDiscussionLease("discussion-nine", "replacement-owner");
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(750);
     await releaseDiscussionLease("discussion-nine", lease);
+  });
+
+  it("lists healthy records and reports unreadable state without hiding it", async () => {
+    await createDiscussionRecord(baseState("discussion-listable"), { kind: "new" });
+    const corruptDir = path.join(root, "discussion-corrupt");
+    await fsp.mkdir(corruptDir, { mode: 0o700 });
+    await fsp.writeFile(path.join(corruptDir, "state.json"), "{", { mode: 0o600 });
+
+    const listed = await listDiscussionStates();
+
+    expect(listed.states.map((state) => state.discussion_id)).toEqual([
+      "discussion-listable",
+    ]);
+    expect(listed.source_errors).toEqual([
+      {
+        discussion_ref: { discussion_id: "discussion-corrupt" },
+        error: {
+          code: "state_unreadable",
+          message: expect.stringMatching(/JSON/),
+        },
+      },
+    ]);
   });
 });
 

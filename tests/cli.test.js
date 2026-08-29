@@ -139,6 +139,36 @@ describe("agenthub CLI", () => {
     expect(invalidJson.error.message).toMatch(/^--json is invalid:/);
   });
 
+  it("writes structured worker diagnostics for a rejected Discussion preflight", async () => {
+    const rejected = await runCliFailure(
+      [
+        "discussion",
+        "dispatch",
+        "--json",
+        JSON.stringify({
+          kind: "new",
+          objective: "invalid request",
+          question: "missing roster",
+          cwd: workspace,
+          materials: [],
+        }),
+      ],
+      env,
+    );
+    expect(rejected.error.message).toMatch(/Invalid input/);
+
+    const logPath = path.join(env.AGENT_HUB_DISCUSSION_DIR, ".workers.log");
+    const records = await waitForWorkerLog(logPath, "worker.failed");
+    expect(records.every((record) => record.schema_version === 1 && record.timestamp)).toBe(true);
+    expect(records.at(-1)).toMatchObject({
+      event: "worker.failed",
+      mode: "dispatch",
+      discussion_id: null,
+      error: { code: "discussion_worker_error" },
+    });
+    expect(JSON.stringify(records)).not.toContain("stack");
+  });
+
   it("persists a review route and dispatches with its configured model", async () => {
     const initial = await runCli(["review", "status", "--cwd", workspace], env);
     expect(initial.kind).toBe("agent-review-config");
@@ -241,7 +271,48 @@ describe("agenthub CLI", () => {
 
     expect(completed.status).toBe("completed");
     expect(completed.protocol_integrity).toBe("complete");
+    expect(completed.completion_quality).toBe("complete");
     expect(completed.run_refs).toHaveLength(8);
+
+    const listed = await runCli(
+      [
+        "discussion",
+        "list",
+        "--status",
+        "completed",
+        "--since",
+        "7d",
+        "--cwd",
+        workspace,
+        "--limit",
+        "1",
+      ],
+      env,
+    );
+    expect(listed).toMatchObject({
+      kind: "agent-discussion-list",
+      total_matching: 1,
+      has_more: false,
+      discussions: [
+        {
+          discussion_ref: accepted.discussion_ref,
+          status: "completed",
+          completion_quality: "complete",
+        },
+      ],
+    });
+
+    const workerRecords = (await fsp.readFile(
+      path.join(env.AGENT_HUB_DISCUSSION_DIR, ".workers.log"),
+      "utf8",
+    ))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(workerRecords.some((record) =>
+      record.event === "discussion.accepted" &&
+      record.discussion_id === accepted.discussion_ref.discussion_id
+    )).toBe(true);
   }, 40000);
 
   it("resumes a discussion after its detached coordinator is killed", async () => {
@@ -324,6 +395,24 @@ async function waitForJson(target, timeoutMs = 5000) {
     }
   }
   throw new Error(`Timed out waiting for JSON file: ${target}`);
+}
+
+async function waitForWorkerLog(target, event, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const records = (await fsp.readFile(target, "utf8"))
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      if (records.some((record) => record.event === event)) return records;
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for worker log event ${event}: ${target}`);
 }
 
 async function waitForProcessExit(pid, timeoutMs = 5000) {

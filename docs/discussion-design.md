@@ -1,10 +1,10 @@
 # Agent Discussion 功能设计
 
-状态：MVP 已实现（已吸收 Kimi K3 / Claude Fable 5 复审，并通过单元、恢复与 HTTP 端到端测试）
+状态：MVP 已实现（含 CLI 检索、失败因果与阶段诊断）
 
 目标版本：MVP
 
-最后更新：2026-07-18
+最后更新：2026-08-29
 
 ## 1. 背景
 
@@ -176,9 +176,11 @@ flowchart TD
 
 ## 6. CLI 与 MCP 接口
 
-`agenthub discussion` 提供四个主命令，并与 streamable HTTP 的四个工具共享输入输出：
+`agenthub discussion` 提供五个主命令，其中四个运行命令与 streamable HTTP 工具共享
+输入输出，list 是本机 CLI 只读检索面：
 
 - `dispatch_discussion`
+- `list`（CLI only）
 - `query_discussion`
 - `wait_discussion`
 - `cancel_discussion`
@@ -328,7 +330,20 @@ Follow-up 规则：
 - 每位成员独立记录 `resumed` 或 `rebuilt`，允许同一 follow-up 内混合两种方式。
 - 原 Discussion 永远保持不可变；child 记录 `parent_discussion_ref`。
 
-### 6.4 query_discussion
+### 6.4 list（CLI only）
+
+`agenthub discussion list` 扫描仍在 TTL 内的 `state.json`，不恢复或启动非终态
+Discussion。支持：
+
+- `--status completed,failed`：一个或多个生命周期状态。
+- `--since 7d`：ISO 8601 时间或 `m | h | d | w` 相对时长。
+- `--cwd /absolute/path`：精确匹配记录中的 canonical cwd；已删除路径仍可按字面匹配。
+- `--limit 50`：默认 50，最大 200，按创建时间倒序。
+
+每项只返回摘要、派生质量、进度和 bounded failure summary，不返回 materials、prompt、
+完整事件或 agent 输出。损坏或缺失的 state 进入 `source_errors`，不得静默消失。
+
+### 6.5 query_discussion
 
 输入支持事件游标：
 
@@ -360,6 +375,9 @@ Follow-up 规则：
     "formal_turns_completed": 4,
     "attempts_completed": 4
   },
+  "completion_quality": null,
+  "phase_statistics": [],
+  "failure_summary": null,
   "participant_statuses": [],
   "recent_events": [],
   "active_run_refs": [],
@@ -378,7 +396,13 @@ Follow-up 规则：
 - Discussion artifacts
 - 关联的 participant/host `run_ref` 列表
 
-### 6.5 wait_discussion
+`completion_quality` 是兼容性派生视图，不替代 7.1–7.3 的正交字段：完整成功为
+`complete`，`completed + degraded` 为 `partial`，`failed | unknown` 为 `failed`，尚未形成
+质量或被取消时为 null。`phase_statistics` 从 state 与事件流派生每阶段 required / accepted /
+failed / pending、attempt 结果、明确 deadline 数量和实际起止时间。`failure_summary` 保留
+终态错误及最后一个具体 turn/attempt cause，消息有长度上限，不复制底层日志。
+
+### 6.6 wait_discussion
 
 `wait_discussion` 复用现有等待语义，并接受与 query 相同的 `after_sequence`：
 
@@ -387,7 +411,7 @@ Follow-up 规则：
 - 调用方保留同一个 `discussion_ref` 和事件游标继续等待。
 - 等待超时或 MCP client 断开都不会取消讨论。
 
-### 6.6 cancel_discussion
+### 6.7 cancel_discussion
 
 取消语义：
 
@@ -947,7 +971,7 @@ worker 或 daemon 接管后读取其终态并续会；停机时间不会暂停�
 - 底层 run API 持久化幂等键索引。即使 coordinator 在两次提交之间崩溃，恢复也只能取回
   同一个 run，不会留下不可认领的孤儿 run。
 - 检查取消标志、登记 dispatch intent 和 active attempt 必须在同一 discussion lock
-  内完成；dispatch 返回后重查取消状态并补取消，规则见 6.6。
+  内完成；dispatch 返回后重查取消状态并补取消，规则见 6.7。
 - 收到 SIGTERM/SIGINT 后先停止接收新 Discussion/follow-up，再调用 manager shutdown；
   等待短临界区和“派发返回后记录 run_ref”完成，不取消 detached runs。正常释放 lease
   后关闭 HTTP；30 秒 grace 后仍未完成则退出，由 lease 超时和幂等派发恢复。
@@ -1010,6 +1034,11 @@ Discussion controller 使用轻量快照入口；TTL 清理在 daemon 启动时�
     └── decision.md
 ```
 
+`discussions/.workers.log` 是 detached coordinator 的私有 JSONL 诊断流，不属于任何单场
+事件权威。每条记录包含 timestamp、worker event、mode、PID，以及 accepted 后可用的
+discussion ID；preflight 尚未产生 ID 时仅记录短期 command ID。不得写 prompt、material、
+agent 输出、环境值或 stack。
+
 Discussion 与 run 是平级资源。Discussion 只引用 `run_ref`，不复制底层 stdout、stderr
 或 events。
 
@@ -1036,6 +1065,7 @@ Discussion 与 run 是平级资源。Discussion 只引用 `run_ref`，不复制�
 - cancellation flag
 - lease generation
 - error
+- additive `failure_summary`（终态时可持久化，旧记录查询时现场派生）
 
 ### 14.3 events.jsonl
 
@@ -1112,9 +1142,16 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 - 是否发生恢复或降级
 - 每位成员的 effective permission、network capability、session health 和 resumed/rebuilt
 - 逻辑 turn 数、attempt 数、可用 usage 和 usage 覆盖率
+- `completion_quality` 兼容性派生视图
+- 每阶段 turn/attempt 覆盖、明确 deadline 计数与事件时间
+- bounded `failure_summary`：终态错误、最后具体 cause、失败 turn/attempt
 
 不在 Discussion 快照中复制全部 CLI log；调用方可以使用关联的 `run_ref` 查询底层
 细节。
+
+deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline`，不能降格为
+无法区分用户取消、provider 取消和阶段超时的通用 `cancelled`。attempt 还记录派发时的
+剩余阶段预算，便于后续预算 profile 调优；这些字段只描述事实，不改变 MVP deadline。
 
 ## 16. 兼容性约束
 
@@ -1170,6 +1207,10 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 - state 从 events 重建，event-first 顺序可验证。
 - participant 文本无法伪造控制事件。
 - decision JSON 到 Markdown 的确定性渲染。
+- list 的 status/since/cwd/limit 过滤、倒序和 partial source errors。
+- `completion_quality`、phase statistics、failure summary 与旧记录现场派生。
+- phase deadline cancellation 保留为 `turn_deadline`，终态错误保留具体 cause。
+- worker JSONL 每条可解析、accepted 后带 discussion ID，且不含 prompt/material/output/stack。
 
 ### 17.2 真实 CLI selftest
 

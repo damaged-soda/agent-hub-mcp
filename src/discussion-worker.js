@@ -1,14 +1,24 @@
 #!/usr/bin/env node
 import fsp from "node:fs/promises";
+import path from "node:path";
 import { atomicWriteJson } from "./fs-store.js";
 import { DiscussionManager } from "./discussion-manager.js";
 
 let manager;
 let shuttingDown = false;
+let workerMode = null;
+let discussionId = null;
+let commandId = null;
 
 async function main() {
   const [mode, first, second] = process.argv.slice(2);
-  manager = new DiscussionManager();
+  workerMode = mode ?? null;
+  discussionId = mode === "resume" ? first ?? null : null;
+  commandId = mode === "dispatch" && first ? path.basename(path.dirname(first)) : null;
+  logWorkerEvent("worker.started");
+  manager = new DiscussionManager({
+    log_diagnostic: (diagnostic) => logWorkerEvent(diagnostic.event, diagnostic.error),
+  });
   installShutdownHandlers();
   await manager.start({ recover_existing: false });
 
@@ -17,6 +27,7 @@ async function main() {
       throw new Error("Usage: discussion-worker dispatch <request-path> <response-path>");
     }
     await dispatch(first, second);
+    logWorkerEvent("worker.completed");
     return;
   }
   if (mode === "resume") {
@@ -24,6 +35,7 @@ async function main() {
     await manager.resume(first);
     await manager.waitForController(first);
     await manager.shutdown();
+    logWorkerEvent("worker.completed");
     return;
   }
   throw new Error("Discussion worker mode must be dispatch or resume");
@@ -34,6 +46,8 @@ async function dispatch(requestPath, responsePath) {
   try {
     const input = JSON.parse(await fsp.readFile(requestPath, "utf8"));
     accepted = await manager.dispatch(input);
+    discussionId = accepted.discussion_ref.discussion_id;
+    logWorkerEvent("discussion.accepted");
     await atomicWriteJson(responsePath, { ok: true, value: accepted });
   } catch (error) {
     await atomicWriteJson(responsePath, {
@@ -50,6 +64,7 @@ function installShutdownHandlers() {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    logWorkerEvent("worker.shutdown_requested");
     void manager.shutdown().finally(() => process.exit(0));
   };
   process.once("SIGINT", shutdown);
@@ -64,9 +79,31 @@ function serializeError(error) {
   };
 }
 
+function logWorkerEvent(event, error = null) {
+  const record = {
+    schema_version: 1,
+    timestamp: new Date().toISOString(),
+    event,
+    mode: workerMode,
+    discussion_id: discussionId,
+    command_id: commandId,
+    pid: process.pid,
+  };
+  if (error) {
+    record.error = {
+      code: error?.code ?? "discussion_worker_error",
+      message: compactLogMessage(error instanceof Error ? error.message : String(error)),
+    };
+  }
+  process.stderr.write(`${JSON.stringify(record)}\n`);
+}
+
+function compactLogMessage(value) {
+  const normalized = String(value).replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized.length > 4096 ? `${normalized.slice(0, 4095)}…` : normalized;
+}
+
 main().catch((error) => {
-  process.stderr.write(
-    `agenthub discussion worker error: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
-  );
+  logWorkerEvent("worker.failed", error);
   process.exit(1);
 });

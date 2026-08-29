@@ -44,6 +44,10 @@ export async function queryDiscussionFromCli(input) {
   return withPassiveManager((manager) => manager.query(input));
 }
 
+export async function listDiscussionsFromCli(input = {}) {
+  return withPassiveManager((manager) => manager.list(input));
+}
+
 export async function waitDiscussionFromCli(input, options = {}) {
   await ensureDiscussionWorker(input?.discussion_ref?.discussion_id);
   return withPassiveManager(

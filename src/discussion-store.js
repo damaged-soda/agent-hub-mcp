@@ -299,15 +299,40 @@ export async function assertDiscussionLease(id, lease) {
 }
 
 export async function listNonTerminalDiscussions() {
+  const { states } = await listDiscussionStates();
+  return states
+    .filter((state) => !DISCUSSION_FINAL_STATUSES.has(state.status))
+    .map((state) => state.discussion_id);
+}
+
+export async function listDiscussionStates() {
   const root = await ensureDiscussionRoot();
   const entries = await fsp.readdir(root, { withFileTypes: true });
-  const ids = [];
+  const states = [];
+  const sourceErrors = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(entry.name)) continue;
-    const state = await readJsonIfExists(path.join(root, entry.name, "state.json")).catch(() => null);
-    if (state && !DISCUSSION_FINAL_STATUSES.has(state.status)) ids.push(entry.name);
+    try {
+      const state = await readJsonIfExists(path.join(root, entry.name, "state.json"));
+      if (!state) {
+        sourceErrors.push({
+          discussion_ref: { discussion_id: entry.name },
+          error: { code: "state_missing", message: "Discussion state.json is missing" },
+        });
+        continue;
+      }
+      states.push(state);
+    } catch (error) {
+      sourceErrors.push({
+        discussion_ref: { discussion_id: entry.name },
+        error: {
+          code: "state_unreadable",
+          message: String(error?.message ?? error),
+        },
+      });
+    }
   }
-  return ids;
+  return { states, source_errors: sourceErrors };
 }
 
 export async function cleanupExpiredDiscussions() {
@@ -329,8 +354,8 @@ export async function cleanupExpiredDiscussions() {
   }
 }
 
-export async function discussionEventsPage(id, options = {}) {
-  const { events } = await readDiscussionEvents(id);
+export async function discussionEventsPage(id, options = {}, knownEvents = null) {
+  const events = knownEvents ?? (await readDiscussionEvents(id)).events;
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const after = options.after_sequence;
   const selected = Number.isInteger(after)

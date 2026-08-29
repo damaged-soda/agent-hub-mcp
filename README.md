@@ -146,12 +146,19 @@ Create a Discussion request JSON file and dispatch it from the CLI:
 ```sh
 agenthub discussion dispatch --json-file /absolute/path/discussion.json
 agenthub discussion wait DISCUSSION_ID
+agenthub discussion list --status completed,failed --since 7d --cwd "$PWD"
 ```
 
 Discussion dispatch starts a detached coordinator that survives the dispatching CLI process.
 Query and wait commands restart recovery on demand if an earlier coordinator disappeared. A normal
 discussion runs the fixed five-phase protocol: independent memo, moderation, challenge, revision,
 and synthesis.
+
+`discussion list` scans retained local records without starting or resuming them. It can filter by
+status, age, and exact working directory. Query and wait snapshots expose
+`completion_quality` (`complete`, `partial`, or `failed` when applicable), per-phase coverage and
+timing, plus a bounded `failure_summary` that preserves the concrete failed turn/attempt behind a
+terminal error.
 
 ## Optional MCP Server
 
