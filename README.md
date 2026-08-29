@@ -130,6 +130,13 @@ Code use Codex `gpt-5.6-sol`. `review dispatch` revalidates the configured route
 instead of silently falling back when either the reviewer or model is unavailable. Its response is
 the ordinary detached run response, so waiting and inspection remain unchanged.
 
+`review status` keeps its normalized Agent/model catalog in a private cross-process cache under
+`${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. A catalog is fresh for five minutes;
+for the next 24 hours status returns it immediately and starts one detached refresh. The first
+request and catalogs older than 24 hours still discover synchronously. Refresh failure preserves
+the last catalog and is surfaced in `catalog_cache`; `review set` and `review dispatch` always use
+live discovery, so the display cache never weakens route validation.
+
 Every CLI invocation inherits the caller's login, environment, and macOS Keychain context. The dispatch command exits after creating a detached runner; later `query`, `wait`, and `cancel` commands reopen the same private on-disk state, so no Agent Hub daemon has to remain alive.
 
 `cwd` must be an existing absolute directory. Unified `model` and `permission` metadata map through every adapter; `add_dirs` maps only where the target CLI exposes an additional-directory boundary (OpenCode rejects non-empty values). The default `permission: "auto"` maps to `--permission-mode auto` for Claude Code, `--sandbox workspace-write` with network access for Codex, kimi `-p`'s built-in auto approval, and OpenCode `--auto`. OpenCode treats `--auto` like its yolo mode for asked permissions and provides no workspace filesystem boundary; only explicit deny rules remain enforced. Kimi and OpenCode reject `read-only`/`full` rather than silently remapping them. Adapter namespaces (`metadata.claude`, `metadata.codex`, `metadata["kimi-code"]`, `metadata.opencode`) override unified fields; effort stays adapter-native (`metadata.<adapter>.effort`, or the `AGENT_HUB_*_EFFORT` environment defaults).
@@ -248,6 +255,7 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra environment variable names forwarded to the agent CLI. |
 | `AGENT_HUB_REVIEW_CONFIG` | Override the review-routing JSON path; defaults to `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. |
+| `AGENT_HUB_CATALOG_CACHE_DIR` | Override the private cross-process Agent catalog cache root; defaults to `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |
 | `AGENT_HUB_CODEX_MODEL` | Default `--model` for Codex runs when `metadata.codex.model` is not provided. |
 | `AGENT_HUB_CLAUDE_EFFORT` | Default `--effort` for Claude runs when `metadata.claude.effort` is not provided. |

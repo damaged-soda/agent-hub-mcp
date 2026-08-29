@@ -165,11 +165,14 @@ Adapter 出现在列表中的条件：
 
 PR review 是 CLI-only 的窄控制面，不扩张普通 dispatch 或 MCP schema：
 
-- `review status` 把内建默认值、用户覆盖和当前 `list_agents` 模型目录投影成一份状态；
-- `review set` 只接受四个已知 requester、不同于 requester 的在线 reviewer，以及 reviewer
-  当前目录内的精确 model ID；写回采用进程锁和原子 rename；
-- `review dispatch` 在每次派发前重新读取并校验有效路由，再把 model 作为统一 metadata 调
-  `dispatch_to_agent`，响应仍是普通 run ref。
+- `review status` 把内建默认值、用户覆盖和 Agent 模型目录投影成一份状态。目录按
+  `cwd` 与非 secret 配置身份写入跨进程私有缓存：5 分钟内直接读取；5 分钟至 24 小时
+  立即返回旧值并启动 detached 单飞刷新；无缓存或超过 24 小时时才同步发现。刷新失败
+  保留上一份目录并退避 60 秒，状态通过顶层 `catalog_cache` 显式报告；
+- `review set` 只接受三个已知 requester、不同于 requester 的在线 reviewer，以及 reviewer
+  当前 live 目录内的精确 model ID；写回采用进程锁和原子 rename，并用现场目录回填缓存；
+- `review dispatch` 在每次派发前重新读取并用 live 目录校验有效路由，再把 model 作为统一
+  metadata 调 `dispatch_to_agent`，响应仍是普通 run ref；现场目录同时回填缓存。
 
 内建默认值保持原有交叉审习惯：Codex → Claude Code `default`；Claude Code、Kimi Code →
 Codex `gpt-5.6-sol`。OpenCode 可作为 reviewer，但在机器级指令发现链接入前不作为
@@ -178,6 +181,12 @@ requester。文件只存与默认值不同的覆盖，位于
 `AGENT_HUB_REVIEW_CONFIG` 覆盖）；它是用户偏好状态，不是 run artifact。配置损坏、reviewer
 下线或 model 从目录消失均 fail loud，不自动回退，也不允许 self-review。Cockpit 只能经
 `review status/set` 消费这份单写者状态。
+
+目录缓存默认位于 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog/`，可由
+`AGENT_HUB_CATALOG_CACHE_DIR` 覆盖。cache key 是 `cwd` 与已知非 secret 配置身份的 SHA-256；
+文件只保存已经对外返回的规范化 catalog、观测时间和有界刷新错误，不保存 key 原文、环境值、
+credential 或 provider 原始响应。目录为 `0700`、文件为 `0600`，更新使用原子 rename。
+缓存只改变 status 的等待语义；set/dispatch 的 live 校验继续承担正确性边界。
 
 ### dispatch_to_agent
 

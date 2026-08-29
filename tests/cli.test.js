@@ -25,6 +25,7 @@ describe("agenthub CLI", () => {
       AGENT_HUB_RUN_DIR: path.join(root, "runs"),
       AGENT_HUB_DISCUSSION_DIR: path.join(root, "discussions"),
       AGENT_HUB_REVIEW_CONFIG: path.join(root, "config", "review-routing.json"),
+      AGENT_HUB_CATALOG_CACHE_DIR: path.join(root, "catalog-cache"),
       AGENT_HUB_CWD_ALLOWLIST: workspace,
     };
   });
