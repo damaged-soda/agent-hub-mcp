@@ -2,8 +2,13 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { allAdapters } from "./adapters.js";
+import {
+  loadAgentCatalogForStatus,
+  storeAgentCatalog,
+} from "./agent-catalog-cache.js";
 import { atomicWriteJson, nowIso, readJsonIfExists, withStateLock } from "./fs-store.js";
 import { dispatchToAgent, listAgents } from "./runs.js";
+import { validateRequestPaths } from "./security.js";
 
 const REVIEW_CONFIG_VERSION = 1;
 const REVIEW_CONFIG_KIND = "agent-review-config";
@@ -26,9 +31,12 @@ export function getReviewConfigPath(env = process.env) {
 
 export async function reviewStatus(input = {}, internal = {}) {
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
-  const catalog = await (internal.listAgents ?? listAgents)({ cwd: input.cwd });
-  const config = await readReviewConfig(configPath);
-  return buildStatus(config, catalog);
+  const cwd = await resolveReviewCwd(input.cwd);
+  const [catalogResult, config] = await Promise.all([
+    statusCatalog(cwd, internal),
+    readReviewConfig(configPath),
+  ]);
+  return buildStatus(config, catalogResult.catalog, catalogResult.cache);
 }
 
 export async function setReviewRoute(input, internal = {}) {
@@ -41,9 +49,11 @@ export async function setReviewRoute(input, internal = {}) {
   }
 
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
-  const catalog = await (internal.listAgents ?? listAgents)({ cwd: input.cwd });
+  const cwd = await resolveReviewCwd(input.cwd);
+  const catalog = await liveCatalog(cwd, internal);
   assertAvailableRoute(reviewer, model, catalog);
 
+  let updated;
   await fsp.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   await fsp.chmod(path.dirname(configPath), 0o700).catch(() => undefined);
   await withStateLock(path.dirname(configPath), async () => {
@@ -59,9 +69,11 @@ export async function setReviewRoute(input, internal = {}) {
       updated_at: nowIso(),
       routes,
     });
+    updated = { routes };
   });
 
-  return reviewStatus(input, { ...internal, configPath, listAgents: async () => catalog });
+  await cacheLiveCatalog(cwd, catalog, internal);
+  return buildStatus(updated, catalog);
 }
 
 export async function dispatchReview(input, internal = {}) {
@@ -69,10 +81,14 @@ export async function dispatchReview(input, internal = {}) {
   assertRequester(requester);
   const prompt = requiredString(input?.prompt, "prompt");
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
-  const catalog = await (internal.listAgents ?? listAgents)({ cwd: input.cwd });
-  const config = await readReviewConfig(configPath);
+  const cwd = await resolveReviewCwd(input.cwd);
+  const [catalog, config] = await Promise.all([
+    liveCatalog(cwd, internal),
+    readReviewConfig(configPath),
+  ]);
   const route = effectiveRoute(requester, config);
   assertAvailableRoute(route.reviewer, route.model, catalog);
+  await cacheLiveCatalog(cwd, catalog, internal);
   return (internal.dispatch ?? dispatchToAgent)({
     agent_id: route.reviewer,
     cwd: input.cwd,
@@ -110,7 +126,7 @@ async function readReviewConfig(configPath) {
   return { routes };
 }
 
-function buildStatus(config, catalog) {
+function buildStatus(config, catalog, cache = null) {
   const available = new Map((catalog.agents ?? []).map((agent) => [agent.agent_id, agent]));
   const routes = Object.keys(DEFAULT_REVIEW_ROUTES).map((requester) => {
     const route = effectiveRoute(requester, config);
@@ -127,13 +143,45 @@ function buildStatus(config, catalog) {
       error,
     };
   });
-  return {
+  const status = {
     api_version: REVIEW_CONFIG_VERSION,
     kind: REVIEW_CONFIG_KIND,
     routes,
     agents: catalog.agents ?? [],
     unavailable_agents: catalog.unavailable_agents ?? [],
   };
+  if (cache) status.catalog_cache = cache;
+  return status;
+}
+
+async function resolveReviewCwd(value) {
+  if (value === undefined) return process.cwd();
+  return (await validateRequestPaths(value)).cwd;
+}
+
+function liveCatalog(cwd, internal) {
+  if (internal.listAgents) return internal.listAgents({ cwd });
+  return listAgents({ cwd }, { env: internal.env ?? process.env });
+}
+
+async function statusCatalog(cwd, internal) {
+  if (internal.catalogCache === false) {
+    return { catalog: await liveCatalog(cwd, internal), cache: null };
+  }
+  return loadAgentCatalogForStatus({
+    ...(internal.catalogCache ?? {}),
+    cwd,
+    env: internal.env ?? process.env,
+    load_catalog: () => liveCatalog(cwd, internal),
+  });
+}
+
+async function cacheLiveCatalog(cwd, catalog, internal) {
+  if (internal.catalogCache === false) return;
+  await storeAgentCatalog(cwd, catalog, {
+    ...(internal.catalogCache ?? {}),
+    env: internal.env ?? process.env,
+  }).catch(() => undefined);
 }
 
 function effectiveRoute(requester, config) {

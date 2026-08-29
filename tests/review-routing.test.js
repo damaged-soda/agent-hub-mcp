@@ -119,6 +119,38 @@ describe("review routing", () => {
     }, internal())).rejects.toMatchObject({ code: "review_route_invalid" });
   });
 
+  it("caches status across processes while set and dispatch keep live validation", async () => {
+    const listAgents = vi.fn(async () => catalog);
+    const cacheRoot = path.join(root, "catalog-cache");
+    const cachedInternal = {
+      configPath,
+      listAgents,
+      env: { HOME: root, PATH: "/test/bin" },
+      catalogCache: {
+        cache_root: cacheRoot,
+        now: () => Date.parse("2026-08-29T00:00:00.000Z"),
+      },
+    };
+
+    const first = await reviewStatus({ cwd: root }, cachedInternal);
+    const second = await reviewStatus({ cwd: root }, cachedInternal);
+    expect(first.catalog_cache.status).toBe("refreshed");
+    expect(second.catalog_cache.status).toBe("fresh");
+    expect(listAgents).toHaveBeenCalledTimes(1);
+
+    await setReviewRoute({
+      requester: "codex", reviewer: "kimi-code", model: "kimi-code/k3", cwd: root,
+    }, cachedInternal);
+    expect(listAgents).toHaveBeenCalledTimes(2);
+
+    const dispatch = vi.fn(async () => ({ status: "accepted" }));
+    await dispatchReview({ requester: "codex", cwd: root, prompt: "Review" }, {
+      ...cachedInternal,
+      dispatch,
+    });
+    expect(listAgents).toHaveBeenCalledTimes(3);
+  });
+
   it("resolves the config path from the explicit override or XDG config home", () => {
     expect(getReviewConfigPath({ AGENT_HUB_REVIEW_CONFIG: "./route.json" }))
       .toBe(path.resolve("route.json"));
@@ -130,6 +162,7 @@ describe("review routing", () => {
     return {
       configPath,
       listAgents: async () => catalog,
+      catalogCache: false,
       ...extra,
     };
   }

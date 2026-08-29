@@ -85,6 +85,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Exact comma-separated browser origins allowed to call the loopback HTTP daemon. |
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to the agent CLI. |
+| `AGENT_HUB_CATALOG_CACHE_DIR` | Override the private cross-process catalog cache used by `review status`. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default model for Claude runs. |
 | `AGENT_HUB_CODEX_MODEL` | Default model for Codex runs. |
 | `AGENT_HUB_CLAUDE_EFFORT` | Default effort for Claude runs. |

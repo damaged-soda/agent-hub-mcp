@@ -82,12 +82,18 @@ reported through `source_errors` on aggregate lists and remains a hard error for
 
 ## PR Review Routing
 
-Each initiating CLI has one effective reviewer/model pair. Inspect all routes and the live model
+Each initiating CLI has one effective reviewer/model pair. Inspect all routes and the effective model
 catalog from a representative workspace:
 
 ```sh
 agenthub review status --cwd "$PWD"
 ```
+
+The first status call discovers every local CLI. Later processes read the private catalog cache:
+entries are fresh for five minutes, then served stale for up to 24 hours while one detached worker
+refreshes them. Inspect the top-level `catalog_cache` field to distinguish `fresh`, `stale`,
+`refreshed`, and `uncached`; a failed refresh keeps the last catalog and waits 60 seconds before
+retrying. `review set` and `review dispatch` bypass the display cache and validate live.
 
 Change a route through the validated CLI; Cockpit's Agent page calls this same command rather than
 writing the file directly:
@@ -135,6 +141,7 @@ endpoint, and API remain below the same canonical prefix.
 | `AGENT_HUB_CWD_ALLOWLIST` | unset | Path-delimited allowlist for request `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | unset | Comma-separated extra environment variable names to forward to the agent CLI. |
 | `AGENT_HUB_REVIEW_CONFIG` | `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json` | Moves the versioned requester → reviewer/model override file. |
+| `AGENT_HUB_CATALOG_CACHE_DIR` | `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog` | Moves the private cross-process catalog cache used by `review status`. |
 | `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
 | `AGENT_HUB_CODEX_MODEL` | unset | Default `--model` for Codex runs when the request omits `metadata.codex.model`. |
 | `AGENT_HUB_CLAUDE_EFFORT` | unset | Default `--effort` for Claude runs when the request omits `metadata.claude.effort`. |
@@ -184,6 +191,11 @@ discussions/<discussion-id>/
   decision.json
   decision.md
 ```
+
+The review catalog cache is separate from run artifacts. Each cache identity gets a `0700`
+directory containing an atomically replaced `0600` `catalog.json` and, only during refresh, a
+short-lived `.refresh.lock`. Removing this regenerable cache is safe when no status refresh worker
+is active; the next status call will synchronously rediscover local CLIs.
 
 Detached coordinators append private JSONL diagnostics to `discussions/.workers.log`. Every record
 has a timestamp, worker event, mode, PID, and a Discussion ID once one exists; rejected preflight
@@ -254,6 +266,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `codex` appears under `unavailable_agents` | `codex --version` failed. | Fix PATH or Codex CLI installation. |
 | `kimi-code` appears under `unavailable_agents` | `kimi --version` failed. | Fix PATH or Kimi Code CLI installation. |
 | `opencode` appears under `unavailable_agents` | Version probing failed or `opencode run` lacks one of the required non-interactive flags. | Install/update OpenCode and run `opencode auth login`. |
+| `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`, or an OpenCode JSON `error` event: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |
