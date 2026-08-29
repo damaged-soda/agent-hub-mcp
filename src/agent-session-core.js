@@ -643,7 +643,7 @@ function eventTimestamp(record) {
   return null;
 }
 
-function safeUsage(value) {
+export function safeUsage(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const usage = {};
   for (const [key, amount] of Object.entries(value)) {
