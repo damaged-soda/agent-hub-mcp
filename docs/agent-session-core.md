@@ -165,6 +165,10 @@ duplicate it. A call with no terminal row remains unreported rather than exposin
 Nested `output_tokens_details.thinking_tokens` is exposed as `reasoning_tokens`; it is a subset of
 `output_tokens`, not an additive category. Sidechain assistant usage remains part of the same native
 session, while an unreported `total_tokens` remains absent.
+Kimi transcript `usage.record` rows retain the provider-native per-turn `inputOther`,
+`inputCacheRead`, `inputCacheCreation`, and `output` fields. The inspector does not infer totals or
+rename them; consumers remain responsible for provider-aware normalization and for deduplicating a
+matching `usage.record` / `step.end` pair within one `llm.request` boundary.
 `resolve` accepts exactly one canonical session or event reference. Only the event form returns the
 bounded body-bearing diagnostic package described above. Neither reference contains transcript body
 or grants network access.

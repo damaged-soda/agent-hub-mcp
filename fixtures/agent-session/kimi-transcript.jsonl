@@ -7,4 +7,5 @@
 {"type":"context.append_loop_event","event":{"type":"tool.call","toolCallId":"tool-1","name":"Bash","args":{"command":"git status --short"}},"time":1787738400500}
 {"type":"context.append_loop_event","event":{"type":"tool.result","toolCallId":"tool-1","result":{"content":"clean\n","isError":false}},"time":1787738400600}
 {"type":"context.append_message","message":{"role":"assistant","content":[{"type":"text","text":"Looks good."}],"toolCalls":[]},"time":1787738400700}
-{"type":"usage.record","model":"k3","usage":{"input_tokens":10,"output_tokens":3},"time":1787738400800}
+{"type":"usage.record","model":"k3","usage":{"inputOther":10,"output":3,"inputCacheRead":90,"inputCacheCreation":2},"usageScope":"turn","time":1787738400800}
+{"type":"context.append_loop_event","event":{"type":"step.end","usage":{"inputOther":10,"output":3,"inputCacheRead":90,"inputCacheCreation":2},"llmClientConsumeMs":12},"time":1787738400810}

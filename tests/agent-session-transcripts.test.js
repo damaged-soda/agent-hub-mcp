@@ -104,7 +104,28 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "tool-call").data.arguments).toEqual({
       command: "git status --short",
     });
-    expect(events.find((event) => event.kind === "model-call").data.model).toBe("k3");
+    expect(events.find((event) =>
+      event.provenance.native_type === "kimi/usage.record").data).toMatchObject({
+      model: "k3",
+      usage: {
+        inputOther: 10,
+        inputCacheRead: 90,
+        inputCacheCreation: 2,
+        output: 3,
+      },
+    });
+    expect(events.find((event) =>
+      event.provenance.native_type === "kimi/context.append_loop_event" &&
+      event.kind === "model-call").data).toMatchObject({
+      status: "completed",
+      usage: {
+        inputOther: 10,
+        inputCacheRead: 90,
+        inputCacheCreation: 2,
+        output: 3,
+      },
+      duration_ms: 12,
+    });
   });
 
   it("projects OpenCode exports while excluding reasoning", () => {
@@ -177,6 +198,11 @@ describe("native transcript projections", () => {
       expect(events.some((event) => event.data.content_bytes > 0)).toBe(true);
       if (["codex", "kimi"].includes(provider)) {
         expect(events.some((event) => event.data.system_instruction_bytes > 0)).toBe(true);
+      }
+      if (provider === "kimi") {
+        expect(events.some((event) =>
+          event.kind === "model-call" && event.data.usage?.inputOther === 10 &&
+          event.data.usage?.output === 3)).toBe(true);
       }
     }
   });

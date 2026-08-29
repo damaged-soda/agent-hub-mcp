@@ -4,6 +4,7 @@ import {
   createSessionEvent,
   parseJsonLines,
   projectSessionEvents,
+  safeUsage,
 } from "./agent-session-core.js";
 import { createNativeEventReferenceProjector } from "./agent-session-references.js";
 import { extractResourceAccesses } from "./agent-session-resources.js";
@@ -828,15 +829,6 @@ function transcriptTimestamp(record) {
     }
   }
   return null;
-}
-
-function safeUsage(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const usage = {};
-  for (const [key, amount] of Object.entries(value)) {
-    if (/token|duration|cost|cache|call/i.test(key) && Number.isFinite(amount)) usage[key] = amount;
-  }
-  return Object.keys(usage).length > 0 ? usage : null;
 }
 
 function classifyTool(name) {

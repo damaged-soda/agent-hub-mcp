@@ -643,11 +643,14 @@ function eventTimestamp(record) {
   return null;
 }
 
-function safeUsage(value) {
+export function safeUsage(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const usage = {};
   for (const [key, amount] of Object.entries(value)) {
-    if (/token|duration|cost|cache|call/i.test(key) && Number.isFinite(amount)) usage[key] = amount;
+    if ((key === "inputOther" || key === "output" ||
+        /token|duration|cost|cache|call/i.test(key)) && Number.isFinite(amount)) {
+      usage[key] = amount;
+    }
   }
   return Object.keys(usage).length > 0 ? usage : null;
 }
