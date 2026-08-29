@@ -59,6 +59,15 @@ import {
   phaseStatistics,
   progressFromState,
 } from "./discussion-observability.js";
+import {
+  DEFAULT_DISCUSSION_BUDGET_PROFILE,
+  discussionAbsoluteDeadlines,
+  discussionBudgetStatus,
+  discussionPhaseDeadline,
+  hasRepairBudget,
+  inheritedDiscussionBudgetProfile,
+  resolveDiscussionBudget,
+} from "./discussion-budget.js";
 
 const PUBLIC_EVENT_TYPES = new Set([
   "participant.memo.accepted",
@@ -68,7 +77,7 @@ const PUBLIC_EVENT_TYPES = new Set([
   "external_evidence.recorded",
   "external_evidence.status_changed",
 ]);
-const DEFAULT_PHASES = Object.freeze({
+const LEGACY_PHASES = Object.freeze({
   independent: 10 * 60 * 1000,
   moderating: 3 * 60 * 1000,
   challenge: 6 * 60 * 1000,
@@ -82,7 +91,9 @@ export class DiscussionManager {
   constructor(options = {}) {
     this.ownerId = options.owner_id ?? crypto.randomUUID();
     this.now = options.now ?? (() => Date.now());
-    this.phaseDurations = { ...DEFAULT_PHASES, ...(options.phase_durations_ms ?? {}) };
+    this.phaseDurations = { ...LEGACY_PHASES, ...(options.phase_durations_ms ?? {}) };
+    this.phaseDurationsOverride = options.phase_durations_ms ? this.phaseDurations : null;
+    this.budgetOverride = options.budget_override ?? null;
     this.pollIntervalMs = options.poll_interval_ms ?? POLL_AFTER_MS;
     this.waitWindowMs = options.wait_window_ms ?? DEFAULT_WAIT_MS;
     this.autoResume = options.auto_resume ?? true;
@@ -197,6 +208,7 @@ export class DiscussionManager {
       host: parentRequest.host,
       participants: parentRequest.participants,
       quorum: parent.quorum,
+      budget_profile: inheritedDiscussionBudgetProfile(parent),
       parent_discussion_ref: input.parent_discussion_ref,
     };
     const id = crypto.randomUUID();
@@ -308,6 +320,7 @@ export class DiscussionManager {
       protocol_integrity: state.protocol_integrity,
       conclusion_strength: state.conclusion_strength,
       completion_quality: completionQuality(state),
+      budget_status: discussionBudgetStatus(state, this.now()),
       progress: progressFromState(state),
       phase_statistics: phaseStatistics(state, events),
       failure_summary: failure,
@@ -491,7 +504,9 @@ export class DiscussionManager {
     if (state.phase === phase && state.phase_deadline_at) return state;
     const started = this.now();
     const absolute = Date.parse(state.phase_absolute_deadlines[phase]);
-    const deadline = Math.min(started + this.phaseDurations[phase], absolute);
+    const deadline = state.budget
+      ? discussionPhaseDeadline(started, phase, absolute, state.budget)
+      : Math.min(started + this.phaseDurations[phase], absolute);
     return this.commit(id, "phase.started", { phase, deadline_at: iso(deadline) }, (current) => ({
       ...current,
       phase,
@@ -515,6 +530,9 @@ export class DiscussionManager {
       member = getMember(state, memberId);
       const attemptKey = `${kind}:${memberId}:${attempt}`;
       let attemptState = state.turn_attempts?.[attemptKey];
+      if (attemptState?.status === "skipped") {
+        throw codedError(attemptState.error.code, attemptState.error.message);
+      }
       let sessionRef = null;
       let expectedGeneration;
       let claimId;
@@ -599,6 +617,16 @@ export class DiscussionManager {
 
       let runRef = attemptState.run_ref;
       let accepted;
+      if (!runRef && repairError && !hasRepairBudget(state, this.now())) {
+        const remaining = Math.max(0, phaseDeadline - this.now());
+        const minimum = state.budget?.repair_min_ms ?? 0;
+        const error = {
+          code: "repair_budget_exhausted",
+          message: `${kind} repair needs ${minimum}ms but only ${remaining}ms remain`,
+        };
+        await this.skipAttempt(id, attemptKey, memberId, kind, attempt, error, remaining);
+        throw codedError(error.code, error.message);
+      }
       if (!runRef) {
         if (this.shuttingDown) {
           throw codedError("daemon_shutting_down", "Daemon is shutting down");
@@ -848,6 +876,30 @@ export class DiscussionManager {
     }));
   }
 
+  async skipAttempt(id, attemptKey, memberId, kind, attempt, error, remainingMs) {
+    const timestamp = iso(this.now());
+    await this.commit(
+      id,
+      "turn.skipped",
+      { member_id: memberId, kind, attempt, error },
+      (current) => ({
+        ...current,
+        turn_attempts: {
+          ...(current.turn_attempts ?? {}),
+          [attemptKey]: {
+            ...(current.turn_attempts?.[attemptKey] ?? {}),
+            status: "skipped",
+            error,
+            phase_deadline_at: current.phase_deadline_at,
+            remaining_ms_when_skipped: remainingMs,
+            requested_at: current.turn_attempts?.[attemptKey]?.requested_at ?? timestamp,
+            completed_at: timestamp,
+          },
+        },
+      }),
+    );
+  }
+
   async markTurnFailed(id, memberId, kind, error) {
     const state = await readDiscussionState(id);
     if (turnFinished(state, memberId, kind)) return;
@@ -1063,7 +1115,14 @@ export class DiscussionManager {
 
   async finishPreflight(id, manifest, handoff, resumed = null) {
     const acceptedAt = this.now();
-    const deadlines = absoluteDeadlines(acceptedAt, this.phaseDurations);
+    const state = await readDiscussionState(id);
+    const budget = this.budgetOverride
+      ? structuredClone(this.budgetOverride)
+      : resolveDiscussionBudget(
+          state.budget_profile ?? DEFAULT_DISCUSSION_BUDGET_PROFILE,
+          this.phaseDurationsOverride,
+        );
+    const deadlines = discussionAbsoluteDeadlines(acceptedAt, budget);
     await appendDiscussionEvent(
       id,
       "materials.frozen",
@@ -1077,6 +1136,7 @@ export class DiscussionManager {
           accepted_at: iso(acceptedAt),
           deadline_at: deadlines.synthesizing,
           phase_absolute_deadlines: deadlines,
+          budget,
         };
         if (resumed) next.members = resumed;
         return next;
@@ -1140,6 +1200,7 @@ function initialDiscussionState(id, input, prepared, now) {
     question: input.question,
     cwd: prepared.cwd,
     quorum: input.quorum,
+    budget_profile: input.budget_profile ?? DEFAULT_DISCUSSION_BUDGET_PROFILE,
     members: {
       host: prepared.host.state,
       participants: Object.fromEntries(
@@ -1181,16 +1242,6 @@ function memberState(member, configuration) {
     formal_turns_completed: 0,
     turns: {},
   };
-}
-
-function absoluteDeadlines(startedAt, durations) {
-  let cursor = startedAt;
-  const result = {};
-  for (const phase of ["independent", "moderating", "challenge", "revision", "synthesizing"]) {
-    cursor += durations[phase];
-    result[phase] = iso(cursor);
-  }
-  return result;
 }
 
 function turnInputFor(kind, memberId, state, handoff) {

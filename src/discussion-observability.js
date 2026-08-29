@@ -1,4 +1,5 @@
 import path from "node:path";
+import { discussionBudgetStatus } from "./discussion-budget.js";
 
 const PHASES = Object.freeze([
   "independent",
@@ -81,6 +82,7 @@ export function phaseStatistics(state, events = []) {
         completed: attempts.filter((attempt) => attempt.status === "completed").length,
         failed: attempts.filter((attempt) => attempt.status === "failed").length,
         late: attempts.filter((attempt) => attempt.status === "late").length,
+        skipped: attempts.filter((attempt) => attempt.status === "skipped").length,
       },
       timed_out: attempts.filter((attempt) => TIMEOUT_CODES.has(attempt.error?.code)).length,
       started_at: timings[phase]?.started_at ?? null,
@@ -92,7 +94,7 @@ export function phaseStatistics(state, events = []) {
 
 export function failureSummary(state, topError = state?.error) {
   const failedAttempts = Object.entries(state?.turn_attempts ?? {})
-    .filter(([, attempt]) => ["failed", "late"].includes(attempt.status))
+    .filter(([, attempt]) => ["failed", "late", "skipped"].includes(attempt.status))
     .map(([attemptKey, attempt], index) => failedAttempt(attemptKey, attempt, index))
     .sort(compareFailures);
   const failedTurns = failedMemberTurns(state);
@@ -175,14 +177,14 @@ export function discussionListResult(states, sourceErrors = [], input = {}, now 
       cwd: filters.cwd,
       limit: filters.limit,
     },
-    discussions: filtered.slice(0, filters.limit).map(discussionSummary),
+    discussions: filtered.slice(0, filters.limit).map((state) => discussionSummary(state, now)),
     total_matching: filtered.length,
     has_more: filtered.length > filters.limit,
     source_errors: sourceErrors,
   };
 }
 
-export function discussionSummary(state) {
+export function discussionSummary(state, now = Date.now()) {
   const summary = failureSummary(state);
   return {
     schema_version: state.schema_version,
@@ -194,6 +196,7 @@ export function discussionSummary(state) {
     completion_quality: completionQuality(state),
     protocol_integrity: state.protocol_integrity ?? null,
     conclusion_strength: state.conclusion_strength ?? null,
+    budget_status: discussionBudgetStatus(state, now),
     objective_summary: compactText(state.objective, OBJECTIVE_SUMMARY_LIMIT),
     cwd: state.cwd ?? null,
     quorum: state.quorum ?? null,
@@ -219,7 +222,7 @@ export function progressFromState(state) {
       participants.reduce((sum, member) => sum + (member.formal_turns_completed ?? 0), 0) +
       (state?.members?.host?.formal_turns_completed ?? 0),
     attempts_completed: Object.values(state?.turn_attempts ?? {}).filter((attempt) =>
-      ["completed", "failed", "late"].includes(attempt.status),
+      ["completed", "failed", "late", "skipped"].includes(attempt.status),
     ).length,
   };
 }
@@ -268,6 +271,7 @@ function failedAttempt(attemptKey, attempt, order) {
     error: compactError(attempt.error),
     run_ref: attempt.run_ref ?? null,
     remaining_ms_at_dispatch: attempt.remaining_ms_at_dispatch ?? null,
+    remaining_ms_when_skipped: attempt.remaining_ms_when_skipped ?? null,
     requested_at: attempt.requested_at ?? null,
     completed_at: attempt.completed_at ?? null,
     _timestamp: timestamp,

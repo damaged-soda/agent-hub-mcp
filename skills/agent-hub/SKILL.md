@@ -118,6 +118,12 @@ agenthub discussion wait DISCUSSION_ID
 
 The detached Discussion worker continues after the dispatch command exits. Repeat `discussion wait` after a timeout. Use `discussion query` for a snapshot and `discussion cancel` only on explicit cancellation.
 
+New Discussion requests may set `budget_profile` to `quick` (30 minutes), `standard` (60 minutes,
+the default), or `research` (90 minutes). Use quick for bounded review with little tool work,
+standard for ordinary repository design/review, and research only when the task explicitly needs
+experiments or cross-repository investigation. Follow-ups inherit the parent profile. Inspect
+`budget_status` before attributing a missed repair or phase deadline to the provider.
+
 Use `agenthub discussion list --status completed,failed --since 7d --cwd "$PWD"` to find retained
 records without resuming them. Treat `completion_quality: partial` as an incomplete protocol even
 when `status` is `completed`. On failure, inspect `failure_summary.last_cause` and

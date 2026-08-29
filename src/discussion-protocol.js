@@ -1,4 +1,8 @@
 import * as z from "zod";
+import {
+  DEFAULT_DISCUSSION_BUDGET_PROFILE,
+  DISCUSSION_BUDGET_PROFILE_NAMES,
+} from "./discussion-budget.js";
 
 export const DISCUSSION_PROTOCOL_VERSION = 1;
 export const MATERIAL_ITEM_MAX_BYTES = 128 * 1024;
@@ -77,6 +81,9 @@ export const NewDiscussionInputSchema = z
     host: HostSchema,
     participants: z.array(ParticipantSchema).min(2),
     quorum: z.number().int().positive(),
+    budget_profile: z
+      .enum(DISCUSSION_BUDGET_PROFILE_NAMES)
+      .default(DEFAULT_DISCUSSION_BUDGET_PROFILE),
   })
   .strict()
   .superRefine((value, context) => {

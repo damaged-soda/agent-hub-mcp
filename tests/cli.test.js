@@ -246,6 +246,7 @@ describe("agenthub CLI", () => {
           },
         ],
         quorum: 2,
+        budget_profile: "quick",
       }),
       { mode: 0o600 },
     );
@@ -272,6 +273,11 @@ describe("agenthub CLI", () => {
     expect(completed.status).toBe("completed");
     expect(completed.protocol_integrity).toBe("complete");
     expect(completed.completion_quality).toBe("complete");
+    expect(completed.budget_status).toMatchObject({
+      profile: "quick",
+      total_ms: 30 * 60 * 1000,
+      repair_min_ms: 2 * 60 * 1000,
+    });
     expect(completed.run_refs).toHaveLength(8);
 
     const listed = await runCli(
@@ -298,6 +304,7 @@ describe("agenthub CLI", () => {
           discussion_ref: accepted.discussion_ref,
           status: "completed",
           completion_quality: "complete",
+          budget_status: { profile: "quick" },
         },
       ],
     });

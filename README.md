@@ -160,6 +160,13 @@ status, age, and exact working directory. Query and wait snapshots expose
 timing, plus a bounded `failure_summary` that preserves the concrete failed turn/attempt behind a
 terminal error.
 
+New Discussions accept `budget_profile: "quick" | "standard" | "research"`; `standard` is the
+default. Their hard wall-clock caps are 30, 60, and 90 minutes respectively. Unused phase time can
+carry forward, but the coordinator reserves each future phase's minimum budget and never crosses
+the profile's global deadline. Follow-ups inherit the parent profile. Query/list snapshots expose
+`budget_status`, including elapsed/remaining time and the minimum window required before a format
+repair can be dispatched.
+
 ## Optional MCP Server
 
 MCP clients may still launch an ephemeral stdio server for the six run tools:

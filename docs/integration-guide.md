@@ -297,7 +297,8 @@ node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --pa
       "metadata": {}
     }
   ],
-  "quorum": 2
+  "quorum": 2,
+  "budget_profile": "standard"
 }
 ```
 
@@ -322,8 +323,10 @@ CLI and HTTP query/wait snapshots include additive diagnostics:
   deadline counts, and event-derived phase timing.
 - `failure_summary`: the terminal error, concrete last failed attempt, and bounded failed
   turn/attempt details. Unknown provenance and phase-deadline causes remain distinct.
+- `budget_status`: frozen profile, source, total/elapsed/remaining budget, current phase remaining
+  time, future-phase reserve, and the minimum repair window.
 
-The daemon executes a fixed five-phase protocol: independent memos, host moderation, participant challenge, participant revision, and host synthesis. The process is not interactive; callers add information only by starting a follow-up after completion. A follow-up inherits the original objective, cwd, host, participants, roles, focus, quorum, and request metadata:
+The daemon executes a fixed five-phase protocol: independent memos, host moderation, participant challenge, participant revision, and host synthesis. The process is not interactive; callers add information only by starting a follow-up after completion. A follow-up inherits the original objective, cwd, host, participants, roles, focus, quorum, request metadata, and budget profile:
 
 ```json
 {
@@ -342,6 +345,13 @@ The daemon executes a fixed five-phase protocol: independent memos, host moderat
 ```
 
 The parent must still be retained and must have completed with a valid DecisionRecord. Follow-ups atomically claim resumable member session lineages where possible; otherwise they rebuild context from the frozen handoff. Sibling follow-ups cannot fork the same CLI session history.
+
+`quick`, `standard`, and `research` have hard caps of 30, 60, and 90 minutes. `standard` is the
+default. Each accepted Discussion freezes the resolved budget in state: phase maximums can use
+time saved by earlier phases, while absolute cutoffs keep minimum time reserved for every later
+phase. A second attempt that only repairs structured output is skipped with
+`repair_budget_exhausted` when it cannot receive the profile's full minimum repair window. Runtime
+failure retries remain governed by their existing retryability rules.
 
 Discussion permissions are capability-driven and cannot be overridden in host/participant metadata. Current capabilities prefer `read-only` for Claude and Codex, and `auto` for Kimi because Kimi prompt mode has no read-only permission. This is best-effort behavior, not a sandbox guarantee. Each material is limited to 128 KiB, the bundle to 256 KiB, and terminal discussions plus linked runs are retained for seven days by default.
 

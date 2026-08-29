@@ -1,6 +1,6 @@
 # Agent Discussion 功能设计
 
-状态：MVP 已实现（含 CLI 检索、失败因果与阶段诊断）
+状态：MVP 已实现（含 CLI 检索、失败因果、阶段诊断与冻结预算 profile）
 
 目标版本：MVP
 
@@ -255,7 +255,8 @@ worker；HTTP transport 创建 process-wide manager。两条路径均不增加�
       }
     }
   ],
-  "quorum": 2
+  "quorum": 2,
+  "budget_profile": "standard"
 }
 ```
 
@@ -266,6 +267,8 @@ worker；HTTP transport 创建 process-wide manager。两条路径均不增加�
 - `cwd` 继续遵守现有绝对路径和 allowlist 规则。
 - `participant_id` 在本场讨论中唯一；至少需要两位正式参与者。
 - `quorum` 必须在 `1..participants.length` 范围内。
+- `budget_profile` 可选 `quick | standard | research`，默认 `standard`；三档硬上限与
+  阶段保留语义见 11.3。
 - 主持人与参与者可以使用相同 adapter，但拥有独立 session。
 - `metadata` 继续使用现有 unified/adapter namespace；model、effort 和 add_dirs 等
   普通字段继续透传，但权限字段按第 12 节处理。
@@ -313,9 +316,11 @@ Follow-up 创建一个新的 Discussion，而不是重新打开或修改原记�
 Follow-up 规则：
 
 - parent 必须尚未过 7 天 TTL，且为 `status=completed` 并拥有合法 DecisionRecord。
-- 继承原 objective、cwd、主持人、参会名单、角色、focus、quorum 和请求 metadata；
+- 继承原 objective、cwd、主持人、参会名单、角色、focus、quorum、请求 metadata 和
+  冻结的 budget profile；旧版 parent 没有 profile 时按最接近原语义的 quick 继承。
   只允许提交新 question 和新增材料。
-- follow-up 分支携带 objective、cwd、host、participants、role、quorum 或权限字段时
+- follow-up 分支携带 objective、cwd、host、participants、role、quorum、budget profile
+  或权限字段时
   直接拒绝，不能静默忽略。目标已经变化时应创建新的独立 Discussion。
 - accepted 前把 parent DecisionRecord、确定性选择的结构化事件、材料 manifest、
   roster 和 session lineage 冻结为 child 自有的 handoff bundle。child 不延长 parent
@@ -376,6 +381,15 @@ Discussion。支持：
     "attempts_completed": 4
   },
   "completion_quality": null,
+  "budget_status": {
+    "profile": "standard",
+    "total_ms": 3600000,
+    "repair_min_ms": 300000,
+    "elapsed_ms": 900000,
+    "remaining_ms": 2700000,
+    "phase_remaining_ms": 600000,
+    "future_phase_reserve_ms": 1200000
+  },
   "phase_statistics": [],
   "failure_summary": null,
   "participant_statuses": [],
@@ -401,6 +415,8 @@ Discussion。支持：
 质量或被取消时为 null。`phase_statistics` 从 state 与事件流派生每阶段 required / accepted /
 failed / pending、attempt 结果、明确 deadline 数量和实际起止时间。`failure_summary` 保留
 终态错误及最后一个具体 turn/attempt cause，消息有长度上限，不复制底层日志。
+`budget_status` 从冻结 budget 与可信时间戳派生 profile、总量、已用/剩余、当前阶段剩余、
+未来阶段保留和 repair 最小窗口；终态使用 `completed_at`，不得让查询时间继续消耗预算。
 
 ### 6.6 wait_discussion
 
@@ -804,6 +820,9 @@ session 和 handoff bundle 重建。第二次仍失败时该 turn 失败，不�
 - CLI、provider 或模型执行的可重试失败使用新 session，并重放该 turn 的完整公开上下文。
 - 首次 run 成功但输出不符合 schema 时，如存在 healthy `cli_session_ref`，第二次是同一
   session 的纯格式修复；没有 session ref 时使用新 session。
+- 纯格式修复只有在当前阶段剩余时间不少于冻结的 repair 最小窗口时才派发；不足时持久化
+  `turn.skipped + repair_budget_exhausted`，不创建一个注定超时的 run。普通 retryable
+  runtime failure 不使用此规则，继续沿用既有重试分类。
 - 配置、模型名、权限、路径、capability、prompt 超限等确定性错误不重试。
 - deadline、用户取消不重试；无法可靠分类的错误默认不重试，避免重复潜在副作用。
 - 底层错误结果应提供标准化 `retryable`；resume session 不存在使用独立错误码，以便
@@ -833,25 +852,40 @@ lease 保证，而不是只靠单个 Discussion controller 自律。
 ### 11.3 硬预算
 
 - 每位参与者最多三次逻辑 turn；主持人最多两个逻辑 turn；每个 turn 最多两次 attempt。
-- accepted 时间记为 `T0`，整场按 wall-clock 最长 30 分钟。每阶段同时受自身最大时长
-  和全局绝对截止点约束，提前完成不会把剩余时间转赠给下一阶段：
+- accepted 时间记为 `T0`。新 Discussion 在 accepted 前把 profile 解析为完整 budget 并
+  冻结进 state/event projection，运行中配置或代码升级不得改变它。三档 profile：
 
-| 阶段 | 自身最大时长 | 绝对截止点 |
-|---|---:|---:|
-| independent | 10 分钟 | `T0 + 10m` |
-| moderating | 3 分钟 | `T0 + 13m` |
-| challenge | 6 分钟 | `T0 + 19m` |
-| revision | 6 分钟 | `T0 + 25m` |
-| synthesizing | 5 分钟 | `T0 + 30m` |
+| Profile | 全局硬上限 | repair 最小窗口 | 适用范围 |
+|---|---:|---:|---|
+| quick | 30 分钟 | 2 分钟 | 边界清楚、很少工具调查的短评审 |
+| standard | 60 分钟 | 5 分钟 | 默认仓库设计与评审 |
+| research | 90 分钟 | 8 分钟 | 明确需要实验或跨仓核实 |
 
-- 实际 `phase_deadline = min(phase_started_at + 自身最大时长, 绝对截止点)`。
+每阶段同时冻结 minimum 和 maximum。minimum 只用于保护后续阶段，maximum 限制当前
+阶段即使有大量结余也不能独占整场：
+
+| Profile | independent min/max | moderating min/max | challenge min/max | revision min/max | synthesizing min/max |
+|---|---:|---:|---:|---:|---:|
+| quick | 10/15m | 3/5m | 6/10m | 6/10m | 5/8m |
+| standard | 15/25m | 5/10m | 10/20m | 10/20m | 10/15m |
+| research | 25/40m | 8/15m | 15/30m | 15/25m | 15/20m |
+
+- `global_deadline = T0 + total`。
+- `phase_absolute_deadline = global_deadline - sum(later_phase_minimums)`；因此当前阶段永远
+  不能吃掉后续阶段最低预算。
+- `phase_deadline = min(phase_started_at + phase_maximum, phase_absolute_deadline)`；前序阶段
+  提前完成时，后续阶段可以在自身 maximum 内使用结余。
+- quick 的绝对截止点仍是 `T0 + 10/13/19/25/30m`，兼容旧版 30 分钟边界；区别只在于
+  前序提前完成后允许受限结转。
 - 阶段截止时取消仍在运行的 runs；首轮按 quorum 决定继续或失败，后续 participant
   阶段按已接受结果继续并降级。主持人阶段截止仍没有合法输出时 Discussion 失败。
 - 重试只能使用当前阶段剩余时间，不能延长 deadline。
 - daemon 停机时间仍计入 wall-clock。恢复时只有底层 run 的可信
   `completed_at <= phase_deadline` 才能被接受；更晚结果标记 `late` 并保留 artifact，
   但不进入正式事件。没有可信 completed_at 时按超时处理。
-- `T0 + 30m` 前不存在合法 DecisionRecord 时必须 failed，不能在 deadline 后补写成功。
+- 全局 deadline 前不存在合法 DecisionRecord 时必须 failed，不能在 deadline 后补写成功。
+- follow-up 继承 parent profile；请求不能覆盖。旧版 parent 映射到 quick。没有 budget
+  字段的运行中旧记录继续使用已持久化绝对 deadline 与旧阶段时长，不现场升级。
 
 ## 12. 权限和安全边界
 
@@ -1060,6 +1094,7 @@ Discussion 与 run 是平级资源。Discussion 只引用 `run_ref`，不复制�
 - cwd
 - host/participant 公共状态、effective configuration 和 session health/lineage
 - quorum
+- `budget_profile`、冻结 budget（total、repair minimum、各阶段 minimum/maximum）
 - started/completed/expires timestamps 和每阶段 deadline
 - active run refs
 - committed event sequence
@@ -1077,6 +1112,7 @@ Discussion 与 run 是平级资源。Discussion 只引用 `run_ref`，不复制�
 - `phase.started`
 - `turn.dispatch_requested`
 - `turn.dispatched`
+- `turn.skipped`
 - `turn.completed`
 - `turn.late`
 - `turn.failed`
@@ -1146,13 +1182,15 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 - `completion_quality` 兼容性派生视图
 - 每阶段 turn/attempt 覆盖、明确 deadline 计数与事件时间
 - bounded `failure_summary`：终态错误、最后具体 cause、失败 turn/attempt
+- `budget_status`：profile、全局/阶段剩余、未来保留与 repair 最小窗口
 
 不在 Discussion 快照中复制全部 CLI log；调用方可以使用关联的 `run_ref` 查询底层
 细节。
 
 deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline`，不能降格为
 无法区分用户取消、provider 取消和阶段超时的通用 `cancelled`。attempt 还记录派发时的
-剩余阶段预算，便于后续预算 profile 调优；这些字段只描述事实，不改变 MVP deadline。
+剩余阶段预算，便于 profile 调优与判断 repair 是否有完整窗口；这些字段只描述事实，
+真正的调度权威是 accepted 时冻结的 budget 与 deadline。
 本改动之前的持久化记录只留下同形 `cancelled`，无法与用户取消可靠区分，因此旧记录的
 `timed_out` 只能保持 0，不能根据当前时间或 stderr 猜造历史。
 
@@ -1190,6 +1228,8 @@ deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline
 - 主持人 ModerationPlan / DecisionRecord 非法。
 - 无分歧时仍生成共同假设验证任务。
 - 五阶段相对/绝对 deadline、late result 和每人三次逻辑 turn 上限；使用可注入时钟。
+- quick/standard/research 的硬上限、未来阶段保留、结余转赠和 maximum。
+- repair 窗口不足时持久化 skipped attempt 且不派发 run。
 - wait 超时不取消。
 - cancel 不生成部分决策记录。
 - daemon 重启时重新挂接 running/completed run。
@@ -1202,7 +1242,7 @@ deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline
 - 尾部残缺事件可修复，中部损坏进入 unknown。
 - Kimi 失败无 session ref 时第二次使用新 session 全量重放。
 - session busy、generation CAS、sibling follow-up rebuild 和 tainted session rebuild。
-- follow-up 继承 roster/role/metadata/session。
+- follow-up 继承 roster/role/metadata/session/budget profile。
 - follow-up 拒绝 roster 重组。
 - failed/cancelled/unknown parent 不能 follow-up；child handoff 不延长 parent TTL。
 - 材料复制、hash、allowlist、输入/prompt 超限和不自动注入 dirty diff。
@@ -1226,7 +1266,7 @@ deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline
   及 code fence 规范化。
 - Kimi argv prompt 大小边界。
 - 失败 session 重建和 follow-up lineage。
-- 两 participant 加主持人的完整 30 分钟内流程。
+- 两 participant 加主持人的 quick/standard/research 预算与完整流程。
 
 ## 18. 离线评测与发布门槛
 
@@ -1270,6 +1310,8 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 |---|---|
 | `src/discussions.js` | MCP-facing dispatch/query/wait/cancel 行为。 |
 | `src/discussion-manager.js` | 进程级 controller registry、状态机、恢复和取消。 |
+| `src/discussion-budget.js` | 冻结 profile、未来阶段保留、阶段 deadline 和 repair 窗口。 |
+| `src/discussion-observability.js` | list 摘要、质量、阶段统计、预算状态和失败诊断。 |
 | `src/discussion-store.js` | Discussion 目录、事件、投影、锁、lease 和 TTL。 |
 | `src/discussion-protocol.js` | 五种结构化消息 schema、大小、解析和 provenance 验证。 |
 | `src/discussion-prompts.js` | 版本化 prompt 生成和不可信事件序列化。 |
@@ -1338,6 +1380,7 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 - capability 配置为 auto 的 adapter 仍可能产生副作用；MVP 只披露，不检测或回滚。
 - 没有全局并发限制，发起者可以创建过多 participant 或 Discussion。
 - 结构化 JSON 依赖模型遵守格式；MVP 只允许一次修复。
+- budget profile 在 accepted 后不可调整；范围判断错误只能取消后新开 Discussion。
 - 本地文件事件存储适合单机 coordinator，不是分布式共识系统。
 - Discussion 支持 CLI worker 和 HTTP daemon；MCP stdio 不获得 Discussion tools。
 - 工作区本身不做完整快照；只有显式材料包是冻结和可复现的。

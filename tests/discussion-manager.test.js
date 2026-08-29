@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DiscussionManager } from "../src/discussion-manager.js";
 import { discussionDirFor, readDiscussionState } from "../src/discussion-store.js";
+import { resolveDiscussionBudget } from "../src/discussion-budget.js";
 
 describe("discussion manager lifecycle", () => {
   let root;
@@ -80,6 +81,12 @@ describe("discussion manager lifecycle", () => {
     expect(terminal.protocol_integrity).toBe("complete");
     expect(terminal.completion_quality).toBe("complete");
     expect(terminal.failure_summary).toBeNull();
+    expect(terminal.budget_status).toMatchObject({
+      profile: "standard",
+      source: "override",
+      total_ms: 10_000,
+      repair_min_ms: 0,
+    });
     expect(terminal.phase_statistics.find((item) => item.phase === "synthesizing")).toMatchObject({
       required: 1,
       accepted: 1,
@@ -104,6 +111,7 @@ describe("discussion manager lifecycle", () => {
     });
     const completed = await manager.wait({ discussion_ref: child.discussion_ref });
     expect(completed.status).toBe("completed");
+    expect(completed.budget_status.profile).toBe("standard");
     expect(completed.participant_statuses.map((member) => member.session_mode)).toEqual([
       "rebuilt",
       "rebuilt",
@@ -200,6 +208,82 @@ describe("discussion manager lifecycle", () => {
       error: { code: "agent_error", message: "authentication failed" },
     });
   });
+
+  it("freezes the default standard budget before starting participant runs", async () => {
+    const fake = createFakeRunApi({ hold: true });
+    const manager = new DiscussionManager({
+      run_api: fake.api,
+      poll_interval_ms: 5,
+      wait_window_ms: 5000,
+    });
+    await manager.start();
+    const accepted = await manager.dispatch(newRequest(workspace));
+    const id = accepted.discussion_ref.discussion_id;
+    await waitUntil(async () => (await readDiscussionState(id)).active_run_refs.length === 2);
+
+    const state = await readDiscussionState(id);
+    expect(state.budget).toMatchObject({
+      profile: "standard",
+      source: "profile",
+      total_ms: 60 * 60 * 1000,
+      repair_min_ms: 5 * 60 * 1000,
+    });
+    expect(Date.parse(state.deadline_at) - Date.parse(state.accepted_at)).toBe(60 * 60 * 1000);
+    expect(
+      Date.parse(state.phase_absolute_deadlines.independent) - Date.parse(state.accepted_at),
+    ).toBe(25 * 60 * 1000);
+
+    await manager.cancel({ discussion_ref: accepted.discussion_ref, reason: "done", actor: "test" });
+    await manager.wait({ discussion_ref: accepted.discussion_ref });
+    await manager.shutdown();
+  });
+
+  it("skips a format repair that cannot receive its minimum budget", async () => {
+    const fake = createFakeRunApi({ hold: false, invalid_first: true });
+    const budget = resolveDiscussionBudget("standard");
+    budget.total_ms = 2000;
+    budget.repair_min_ms = 1700;
+    budget.phase_minimums_ms = {
+      independent: 200,
+      moderating: 100,
+      challenge: 100,
+      revision: 100,
+      synthesizing: 100,
+    };
+    budget.phase_maximums_ms = {
+      independent: 1600,
+      moderating: 500,
+      challenge: 500,
+      revision: 500,
+      synthesizing: 500,
+    };
+    const manager = new DiscussionManager({
+      run_api: fake.api,
+      poll_interval_ms: 5,
+      wait_window_ms: 5000,
+      budget_override: budget,
+    });
+    await manager.start();
+    const accepted = await manager.dispatch(newRequest(workspace));
+    const terminal = await manager.wait({ discussion_ref: accepted.discussion_ref });
+
+    expect(terminal.status).toBe("failed");
+    expect(fake.dispatched).toHaveLength(2);
+    expect(terminal.failure_summary.last_cause).toMatchObject({
+      attempt: 2,
+      status: "skipped",
+      error: { code: "repair_budget_exhausted" },
+      remaining_ms_at_dispatch: expect.any(Number),
+      remaining_ms_when_skipped: expect.any(Number),
+    });
+    expect(
+      terminal.failure_summary.last_cause.remaining_ms_when_skipped,
+    ).toBeLessThanOrEqual(terminal.failure_summary.last_cause.remaining_ms_at_dispatch);
+    expect(
+      terminal.phase_statistics.find((item) => item.phase === "independent").attempts.skipped,
+    ).toBe(1);
+    await manager.shutdown();
+  });
 });
 
 function createManager(runApi) {
@@ -263,12 +347,14 @@ function createFakeRunApi(options) {
           native_session_id: `fake-session-${sequence}`,
         };
         const record = {
+          sequence,
           run_ref: runRef,
           prompt: input.prompt,
           status: fake.hold ? "running" : "completed",
           cli_session_ref: cliSessionRef,
           session_generation: (internal?.expected_session_generation ?? -1) + 1,
           completed_at: fake.hold ? undefined : new Date().toISOString(),
+          result_text: options.invalid_first && sequence === 1 ? "not-json" : null,
         };
         records.set(runRef.run_id, record);
         dispatched.push({ input, internal, run_ref: runRef });
@@ -310,7 +396,10 @@ function snapshot(record) {
     completed_at: record.completed_at,
   };
   if (record.status === "completed") {
-    result.content = [{ type: "text", text: outputContract(record.prompt) }];
+    result.content = [{
+      type: "text",
+      text: record.result_text ?? outputContract(record.prompt),
+    }];
   }
   if (record.status === "cancelled") {
     result.content = [{ type: "text", text: "Run cancelled." }];
