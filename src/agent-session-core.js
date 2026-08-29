@@ -110,13 +110,14 @@ export function createSessionEvent(input) {
   ) {
     throw new Error("native_type must be a non-empty string");
   }
+  const data = withCanonicalUsage(identity.provider, input.data);
   return {
     schema_version: AGENT_SESSION_SCHEMA_VERSION,
     ...identity,
     sequence: Number.isInteger(input.sequence) && input.sequence >= 0 ? input.sequence : 0,
     kind: input.kind,
     occurred_at: input.occurred_at ?? null,
-    data: structuredClone(input.data),
+    data,
     provenance: {
       stage,
       source,
@@ -565,6 +566,7 @@ function projectMetadataEvent(event) {
     projected.data = compact({
       status: optionalString(data.status),
       usage: safeUsage(data.usage),
+      canonical_usage: canonicalTokenUsage(projected.provider, data.usage),
       result_bytes: contentBytes(data.result),
     });
     return projected;
@@ -575,6 +577,7 @@ function projectMetadataEvent(event) {
       model: optionalString(data.model),
       effort: optionalString(data.effort),
       usage: safeUsage(data.usage),
+      canonical_usage: canonicalTokenUsage(projected.provider, data.usage),
       duration_ms: Number.isFinite(data.duration_ms) ? data.duration_ms : undefined,
     });
     return projected;
@@ -626,7 +629,16 @@ function inferNativeSessionId(provider, records) {
 }
 
 function makeEvent(base, kind, data) {
-  return { ...base, kind, data };
+  return { ...base, kind, data: withCanonicalUsage(base.provider, data) };
+}
+
+function withCanonicalUsage(provider, data) {
+  const projected = structuredClone(data);
+  delete projected.canonical_usage;
+  if (projected.usage) {
+    projected.canonical_usage = canonicalTokenUsage(provider, projected.usage);
+  }
+  return projected;
 }
 
 function nativeEventType(provider, record) {
@@ -653,6 +665,86 @@ export function safeUsage(value) {
     }
   }
   return Object.keys(usage).length > 0 ? usage : null;
+}
+
+export function canonicalTokenUsage(providerValue, usageValue) {
+  const provider = canonicalProvider(providerValue);
+  const usage = safeUsage(usageValue);
+  if (!usage) return null;
+
+  const value = (...keys) => {
+    for (const key of keys) {
+      const amount = usage[key];
+      if (Number.isFinite(amount) && amount >= 0) return amount;
+    }
+    return null;
+  };
+  const sum = (...amounts) =>
+    amounts.every((amount) => amount !== null)
+      ? amounts.reduce((total, amount) => total + amount, 0)
+      : null;
+  const difference = (total, subset) =>
+    total !== null && subset !== null && subset <= total ? total - subset : null;
+
+  let inputTotal = null;
+  let inputNew = null;
+  let cacheRead = null;
+  let cacheWrite = null;
+  let outputTotal = null;
+  let outputVisible = null;
+  let reasoning = null;
+  let reasoningRelation = "unavailable";
+
+  if (provider === "codex") {
+    inputTotal = value("input_tokens");
+    cacheRead = value("cached_input_tokens", "cache_read_input_tokens", "cache_read_tokens");
+    cacheWrite = 0;
+    inputNew = difference(inputTotal, cacheRead);
+    outputTotal = value("output_tokens");
+    reasoning = value("reasoning_output_tokens", "reasoning_tokens");
+    outputVisible = difference(outputTotal, reasoning);
+    reasoningRelation = "subset";
+  } else if (provider === "claude") {
+    const uncachedInput = value("input_tokens");
+    cacheRead = value("cache_read_input_tokens", "cache_read_tokens");
+    cacheWrite = value(
+      "cache_creation_input_tokens", "cache_write_input_tokens", "cache_write_tokens",
+    );
+    inputTotal = sum(uncachedInput, cacheRead, cacheWrite);
+    inputNew = sum(uncachedInput, cacheWrite);
+    outputTotal = value("output_tokens");
+    reasoning = value("reasoning_tokens", "reasoning_output_tokens");
+    outputVisible = difference(outputTotal, reasoning);
+    reasoningRelation = "subset";
+  } else if (provider === "kimi") {
+    const inputOther = value("inputOther", "input_other_tokens");
+    cacheRead = value("inputCacheRead", "cache_read_tokens");
+    cacheWrite = value("inputCacheCreation", "cache_write_tokens");
+    inputTotal = sum(inputOther, cacheRead, cacheWrite);
+    inputNew = sum(inputOther, cacheWrite);
+    outputTotal = value("output", "output_tokens");
+  } else if (provider === "opencode") {
+    const uncachedInput = value("input_tokens", "input");
+    cacheRead = value("cache_read_tokens", "cache_read");
+    cacheWrite = value("cache_write_tokens", "cache_write");
+    inputTotal = sum(uncachedInput, cacheRead, cacheWrite);
+    inputNew = sum(uncachedInput, cacheWrite);
+    outputVisible = value("output_tokens", "output");
+    reasoning = value("reasoning_tokens", "reasoning");
+    outputTotal = sum(outputVisible, reasoning);
+    reasoningRelation = "additive";
+  }
+
+  return {
+    input_total_tokens: inputTotal,
+    input_new_tokens: inputNew,
+    input_cache_read_tokens: cacheRead,
+    input_cache_write_tokens: cacheWrite,
+    output_total_tokens: outputTotal,
+    output_visible_tokens: outputVisible,
+    reasoning_tokens: reasoning,
+    reasoning_relation: reasoningRelation,
+  };
 }
 
 function names(value) {

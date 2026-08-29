@@ -719,6 +719,7 @@ function projectKimiTranscriptRecord(record, provider, nativeSessionId, state) {
     ];
   }
   if (record.type === "usage.record") {
+    if (record.usageScope && record.usageScope !== "turn") return [];
     return [
       transcriptEvent(
         provider,

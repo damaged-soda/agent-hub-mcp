@@ -165,10 +165,26 @@ duplicate it. A call with no terminal row remains unreported rather than exposin
 Nested `output_tokens_details.thinking_tokens` is exposed as `reasoning_tokens`; it is a subset of
 `output_tokens`, not an additive category. Sidechain assistant usage remains part of the same native
 session, while an unreported `total_tokens` remains absent.
+Every event with projected provider `usage` (including transcript `model-call` and live
+`turn-end`) also exposes an additive `canonical_usage` field while retaining the existing `usage`
+projection as provider evidence. Caller-supplied canonical values are discarded and recomputed from
+that evidence. The canonical fields are
+`input_total_tokens`, `input_new_tokens`, `input_cache_read_tokens`,
+`input_cache_write_tokens`, `output_total_tokens`, `output_visible_tokens`,
+`reasoning_tokens`, and `reasoning_relation`. Unknown numeric values are explicit `null`, never
+synthetic zero. `reasoning_relation` is `subset` for Codex and Claude, `additive` for OpenCode, and
+`unavailable` for Kimi. Thus Codex and Claude subtract reasoning from inclusive output to derive
+visible output; OpenCode adds its separate output and reasoning counters; Kimi leaves visible output
+and reasoning unknown while retaining its reported output total. Input totals likewise preserve each
+provider's cache semantics: cache creation counts as new input, cache reads do not.
+Codex reports no cache-write category, so its canonical cache-write value is the semantic zero `0`,
+not an unknown counter.
 Kimi transcript `usage.record` rows retain the provider-native per-turn `inputOther`,
-`inputCacheRead`, `inputCacheCreation`, and `output` fields. The inspector does not infer totals or
-rename them; consumers remain responsible for provider-aware normalization and for deduplicating a
-matching `usage.record` / `step.end` pair within one `llm.request` boundary.
+`inputCacheRead`, `inputCacheCreation`, and `output` fields. Only `usageScope: turn` (or legacy rows
+without a scope) contributes a model call. Consumers still deduplicate a matching `usage.record` /
+`step.end` pair within one `llm.request` boundary: open a sequence window at the started
+`kimi/llm.request`, prefer the status `usage` row when present, and close it at the completed step or
+the next request. The current native wire exposes no stable request ID for these rows.
 `resolve` accepts exactly one canonical session or event reference. Only the event form returns the
 bounded body-bearing diagnostic package described above. Neither reference contains transcript body
 or grants network access.
