@@ -14,6 +14,7 @@ import {
 import {
   cancelDiscussionFromCli,
   dispatchDiscussionFromCli,
+  listDiscussionsFromCli,
   queryDiscussionFromCli,
   waitDiscussionFromCli,
 } from "./discussion-cli.js";
@@ -32,6 +33,7 @@ Usage:
   agenthub review set --requester ID --reviewer ID --model ID [--cwd DIR]
   agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
   agenthub discussion dispatch (--json JSON | --json-file FILE)
+  agenthub discussion list [--status STATUS[,STATUS]] [--since 7d] [--cwd DIR] [--limit N]
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
   agenthub discussion wait DISCUSSION_ID [--timeout-ms MS] [--after-sequence N]
   agenthub discussion cancel DISCUSSION_ID [--reason TEXT] [--actor TEXT]
@@ -159,6 +161,21 @@ async function executeDiscussion(args) {
     const parsed = parseArgs(args, new Set(["json", "json-file"]));
     const input = await requiredRawInput(parsed.options, "Discussion dispatch requires --json or --json-file");
     return dispatchDiscussionFromCli(input);
+  }
+  if (["list", "list_discussions"].includes(command)) {
+    const parsed = parseArgs(
+      args,
+      new Set(["status", "since", "cwd", "limit", "json", "json-file"]),
+    );
+    const raw = await rawInput(parsed.options);
+    if (raw) return listDiscussionsFromCli(raw);
+    rejectPositionals(parsed);
+    const input = {};
+    if (parsed.options.status !== undefined) input.status = parsed.options.status;
+    if (parsed.options.since !== undefined) input.since = parsed.options.since;
+    if (parsed.options.cwd !== undefined) input.cwd = resolveExistingOrLexicalPath(parsed.options.cwd);
+    setOptionalNumber(input, "limit", parsed.options.limit, { positive: true });
+    return listDiscussionsFromCli(input);
   }
   if (["query", "query_discussion"].includes(command)) {
     const parsed = parseArgs(
@@ -348,6 +365,15 @@ function optionalNumber(value, flag, options = {}) {
 
 function resolveOptionalPath(value) {
   return value === undefined ? undefined : path.resolve(value);
+}
+
+function resolveExistingOrLexicalPath(value) {
+  const resolved = path.resolve(value);
+  try {
+    return realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 function required(value, message) {

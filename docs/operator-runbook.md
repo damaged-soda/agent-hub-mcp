@@ -36,6 +36,7 @@ It also returns the selectable model catalog for each adapter. Use
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
 | `agenthub review status/set/dispatch …` | Inspect, change, and use the requester-specific PR review route. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
+| `agenthub discussion list --status failed --since 7d` | Find retained Discussions without resuming them. |
 | `npm start` | Start the optional MCP stdio compatibility server. |
 | `node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp` | Start the optional loopback HTTP compatibility daemon. |
 | `npm test` | Run the Vitest suite. |
@@ -184,6 +185,12 @@ discussions/<discussion-id>/
   decision.md
 ```
 
+Detached coordinators append private JSONL diagnostics to `discussions/.workers.log`. Every record
+has a timestamp, worker event, mode, PID, and a Discussion ID once one exists; rejected preflight
+requests use a short-lived command ID instead. Agent Hub's structured records never contain
+prompts, materials, agent output, environment values, or stacks. Unexpected runtime stderr from
+Node or a dependency is outside the JSON contract and should be treated as log corruption.
+
 Only terminal Discussions are TTL-cleaned. Linked run state records carry `retain_until`, so their raw CLI artifacts remain available for the Discussion retention window.
 
 ## Smoke Test
@@ -221,6 +228,17 @@ agenthub discussion dispatch --json-file /absolute/path/discussion.json
 
 Pass the returned ID to `agenthub discussion wait DISCUSSION_ID`. A normal two-participant discussion creates eight runs. Do not treat one `timed_out: true` response as failure; repeat the wait with the same ID.
 
+Find recent terminal records and inspect the bounded cause before opening raw run artifacts:
+
+```sh
+agenthub discussion list --status completed,failed --since 7d --cwd "$PWD"
+agenthub discussion query DISCUSSION_ID
+```
+
+Treat `completion_quality: "partial"` as a usable but incomplete protocol result. For failures,
+start with `failure_summary.last_cause`; `error.code` continues to describe the terminal lifecycle
+failure such as `quorum_not_met` or `decision_failed`.
+
 The dispatch command exits after its detached Discussion worker accepts the request. Query, wait, and cancel commands trigger recovery when the record is nonterminal; the lease prevents two workers from coordinating the same Discussion. After an unclean worker exit, allow the 20-second lease staleness window before expecting a replacement worker to acquire it.
 
 ## Troubleshooting
@@ -244,7 +262,9 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | Inspector returns `host_forbidden` / `origin_forbidden` behind a proxy | The proxy Host/Origin differs from the exact HTTPS `--public-origin`. | Align the single private origin exactly; do not widen to a wildcard or public tunnel. |
 | Inspector assets or API return 404 below a reverse-proxy path | The proxy prefix and `--base-path` differ, or the page URL omitted its canonical trailing slash. | Route the same prefix to the backend, pass the matching absolute base path, and use the redirected trailing-slash URL. |
 | `protocol_integrity: degraded` | Quorum was met, but a participant missed or failed a later formal turn. | Inspect participant statuses and `events.jsonl`; the DecisionRecord may still be valid. |
+| `completion_quality: partial` | The Discussion completed with a valid DecisionRecord after one or more required later turns failed. | Read `phase_statistics` and `failure_summary` before relying on the decision. |
 | Discussion `failed` with `quorum_not_met`, `moderation_failed`, or `decision_failed` | The fixed protocol could not produce the required formal record. | Inspect linked run artifacts and structured validation errors; start a new Discussion after correcting inputs/config. |
+| `failure_summary.last_cause.error.code: turn_deadline` | The coordinator cancelled that run at the phase deadline. Records created before this diagnostic field existed used indistinguishable `cancelled` errors. | Check `remaining_ms_at_dispatch` and the phase timing before treating it as a provider failure; old `cancelled` records cannot be classified retrospectively. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |
 
 ## Cancellation

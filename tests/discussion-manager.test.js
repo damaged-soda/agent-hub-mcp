@@ -78,6 +78,13 @@ describe("discussion manager lifecycle", () => {
 
     expect(terminal.status).toBe("completed");
     expect(terminal.protocol_integrity).toBe("complete");
+    expect(terminal.completion_quality).toBe("complete");
+    expect(terminal.failure_summary).toBeNull();
+    expect(terminal.phase_statistics.find((item) => item.phase === "synthesizing")).toMatchObject({
+      required: 1,
+      accepted: 1,
+      failed: 0,
+    });
     expect(terminal.run_refs).toHaveLength(8);
     await second.shutdown();
   });
@@ -130,6 +137,68 @@ describe("discussion manager lifecycle", () => {
     expect(queried.status).toBe("running");
     expect(queried.recent_events.at(-1).type).toBe("discussion.recovered");
     expect(await fsp.readFile(eventPath, "utf8")).toMatch(/\n$/);
+  });
+
+  it("records phase deadline as the concrete cause of a quorum failure", async () => {
+    const fake = createFakeRunApi({ hold: true });
+    const manager = new DiscussionManager({
+      run_api: fake.api,
+      poll_interval_ms: 5,
+      wait_window_ms: 5000,
+      phase_durations_ms: {
+        independent: 500,
+        moderating: 2000,
+        challenge: 2000,
+        revision: 2000,
+        synthesizing: 2000,
+      },
+    });
+    await manager.start();
+    const accepted = await manager.dispatch(newRequest(workspace));
+    const terminal = await manager.wait({ discussion_ref: accepted.discussion_ref });
+
+    expect(terminal).toMatchObject({
+      status: "failed",
+      completion_quality: "failed",
+      error: {
+        code: "quorum_not_met",
+        cause: { error: { code: "turn_deadline" } },
+      },
+      failure_summary: {
+        phase: "independent",
+        last_cause: { error: { code: "turn_deadline" } },
+      },
+    });
+    expect(
+      terminal.phase_statistics.find((item) => item.phase === "independent"),
+    ).toMatchObject({ required: 2, accepted: 0, failed: 2, timed_out: 2 });
+    expect(fake.cancelled.size).toBe(2);
+    await manager.shutdown();
+  });
+
+  it("preserves a real run failure observed at the phase deadline", async () => {
+    let cancelled = false;
+    const manager = new DiscussionManager({
+      now: () => 1000,
+      run_api: {
+        query: async () => cancelled
+          ? {
+              status: "failed",
+              error: { code: "agent_error", message: "authentication failed" },
+            }
+          : { status: "running" },
+        cancel: async () => {
+          cancelled = true;
+        },
+        dispatch: async () => undefined,
+        retain: async () => undefined,
+      },
+    });
+
+    await expect(manager.waitForRun({ run_id: "run-at-deadline" }, 1000)).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "agent_error", message: "authentication failed" },
+    });
   });
 });
 

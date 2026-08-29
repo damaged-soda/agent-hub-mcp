@@ -118,6 +118,11 @@ agenthub discussion wait DISCUSSION_ID
 
 The detached Discussion worker continues after the dispatch command exits. Repeat `discussion wait` after a timeout. Use `discussion query` for a snapshot and `discussion cancel` only on explicit cancellation.
 
+Use `agenthub discussion list --status completed,failed --since 7d --cwd "$PWD"` to find retained
+records without resuming them. Treat `completion_quality: partial` as an incomplete protocol even
+when `status` is `completed`. On failure, inspect `failure_summary.last_cause` and
+`phase_statistics` before opening the linked run artifacts.
+
 ## Handle failures
 
 - Inspect the JSON `status`, `error`, and artifact list; successful CLI transport does not imply the agent run completed successfully.

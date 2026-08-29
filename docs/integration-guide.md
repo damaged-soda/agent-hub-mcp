@@ -248,9 +248,12 @@ The CLI starts a detached coordinator for each Discussion, so no HTTP daemon is 
 ```sh
 agenthub discussion dispatch --json-file /absolute/path/discussion.json
 agenthub discussion wait DISCUSSION_ID
+agenthub discussion list --status completed,failed --since 7d --cwd "$PWD"
 ```
 
 `discussion query`, `wait`, and `cancel` recover a nonterminal record on demand. A lease prevents concurrent coordinators from advancing the same record.
+`discussion list` is CLI-only and never resumes a record; it scans the retained state projections
+and reports corrupt or missing state files through `source_errors` instead of hiding them.
 
 For MCP compatibility, Discussion tools are also available from the optional HTTP daemon:
 
@@ -309,6 +312,16 @@ The response is immediate:
 ```
 
 Call `query_discussion` for a snapshot or `wait_discussion` for the server's ten-minute wait window. Both accept `after_sequence` and `limit` (maximum 200) for event pagination. A wait response with `timed_out: true` is not a failure and does not cancel the discussion. `cancel_discussion` persists cancellation intent and cancels every known active run before the discussion becomes terminal.
+
+CLI and HTTP query/wait snapshots include additive diagnostics:
+
+- `completion_quality`: `complete` for a completed intact protocol, `partial` for
+  `completed + degraded`, `failed` for failed/unknown terminal records, and `null` while no quality
+  can be assigned.
+- `phase_statistics`: required/accepted/failed/pending turn counts, attempt outcomes, recognized
+  deadline counts, and event-derived phase timing.
+- `failure_summary`: the terminal error, concrete last failed attempt, and bounded failed
+  turn/attempt details. Unknown provenance and phase-deadline causes remain distinct.
 
 The daemon executes a fixed five-phase protocol: independent memos, host moderation, participant challenge, participant revision, and host synthesis. The process is not interactive; callers add information only by starting a follow-up after completion. A follow-up inherits the original objective, cwd, host, participants, roles, focus, quorum, and request metadata:
 

@@ -29,6 +29,7 @@ import {
   discussionEventsPage,
   discussionExpiresAt,
   heartbeatDiscussionLease,
+  listDiscussionStates,
   listNonTerminalDiscussions,
   markDiscussionUnknown,
   readDiscussionArtifact,
@@ -50,6 +51,14 @@ import { renderDecisionMarkdown } from "./discussion-render.js";
 import { claimSessionLineage } from "./session-registry.js";
 import { cleanupExpiredRuns } from "./fs-store.js";
 import { POLL_AFTER_MS } from "./timing.js";
+import {
+  completionQuality,
+  discussionListResult,
+  enrichTerminalError,
+  failureSummary,
+  phaseStatistics,
+  progressFromState,
+} from "./discussion-observability.js";
 
 const PUBLIC_EVENT_TYPES = new Set([
   "participant.memo.accepted",
@@ -77,6 +86,9 @@ export class DiscussionManager {
     this.pollIntervalMs = options.poll_interval_ms ?? POLL_AFTER_MS;
     this.waitWindowMs = options.wait_window_ms ?? DEFAULT_WAIT_MS;
     this.autoResume = options.auto_resume ?? true;
+    this.logDiagnostic = options.log_diagnostic ?? ((diagnostic) => {
+      process.stderr.write(`discussion ${diagnostic.event}: ${diagnostic.error.message}\n`);
+    });
     this.runApi = {
       dispatch: options.run_api?.dispatch ?? dispatchToAgent,
       query: options.run_api?.query ?? queryAgentRunSnapshot,
@@ -106,7 +118,10 @@ export class DiscussionManager {
     }
     this.cleanupTimer = setInterval(() => {
       Promise.all([cleanupExpiredDiscussions(), cleanupExpiredRuns()]).catch((error) => {
-        process.stderr.write(`discussion cleanup failed: ${error.message}\n`);
+        this.logDiagnostic({
+          event: "cleanup_failed",
+          error: publicError(error),
+        });
       });
     }, 10 * 60 * 1000);
     this.cleanupTimer.unref();
@@ -249,16 +264,20 @@ export class DiscussionManager {
     const id = input?.discussion_ref?.discussion_id;
     let state;
     let page;
+    let events;
     try {
       state = await readDiscussionState(id);
-      page = await discussionEventsPage(id, input ?? {});
+      ({ events } = await readDiscussionEvents(id));
+      page = await discussionEventsPage(id, input ?? {}, events);
     } catch (error) {
       if (error?.code === "unknown_discussion") throw error;
       try {
         state = await recoverDiscussionRecord(id);
-        page = await discussionEventsPage(id, input ?? {});
+        ({ events } = await readDiscussionEvents(id));
+        page = await discussionEventsPage(id, input ?? {}, events);
       } catch (recoveryError) {
         state = await markDiscussionUnknown(id, recoveryError);
+        events = [];
         page = {
           events: [],
           next_sequence: state.committed_event_sequence ?? 0,
@@ -274,6 +293,7 @@ export class DiscussionManager {
       this.ensureRunning(id);
     }
     const artifacts = await discussionArtifacts(id);
+    const failure = failureSummary(state);
     const response = {
       schema_version: state.schema_version,
       protocol_version: state.protocol_version,
@@ -287,7 +307,10 @@ export class DiscussionManager {
       quorum: state.quorum,
       protocol_integrity: state.protocol_integrity,
       conclusion_strength: state.conclusion_strength,
+      completion_quality: completionQuality(state),
       progress: progressFromState(state),
+      phase_statistics: phaseStatistics(state, events),
+      failure_summary: failure,
       host_status: publicMember(state.members?.host),
       participant_statuses: Object.values(state.members?.participants ?? {}).map(publicMember),
       effective_configurations: [
@@ -307,7 +330,7 @@ export class DiscussionManager {
       phase_deadline_at: state.phase_deadline_at,
       cancellation_requested: state.cancellation_requested,
       artifacts,
-      error: state.error,
+      error: enrichTerminalError(state.error, failure),
       poll_after_ms: POLL_AFTER_MS,
     };
     if (state.status === "completed") {
@@ -318,6 +341,11 @@ export class DiscussionManager {
       response.run_refs = state.run_refs ?? [];
     }
     return response;
+  }
+
+  async list(input = {}) {
+    const { states, source_errors: sourceErrors } = await listDiscussionStates();
+    return discussionListResult(states, sourceErrors, input, this.now());
   }
 
   async wait(input) {
@@ -559,6 +587,8 @@ export class DiscussionManager {
                 request_hash: requestHash,
                 session_ref: sessionRef,
                 session_generation: expectedGeneration,
+                phase_deadline_at: state.phase_deadline_at,
+                remaining_ms_at_dispatch: Math.max(0, phaseDeadline - this.now()),
                 requested_at: iso(this.now()),
               },
             },
@@ -698,7 +728,16 @@ export class DiscussionManager {
       }
       if (this.now() >= deadline) {
         await this.runApi.cancel({ run_ref: runRef, reason: "discussion phase deadline", actor: "discussion" });
-        return this.runApi.query({ run_ref: runRef });
+        const cancelled = await this.runApi.query({ run_ref: runRef });
+        if (cancelled.status !== "cancelled" || cancelled.error) return cancelled;
+        return {
+          ...cancelled,
+          error: {
+            code: "turn_deadline",
+            message: "Discussion turn exceeded its phase deadline",
+          },
+          retryable: false,
+        };
       }
       await sleep(Math.min(this.pollIntervalMs, Math.max(1, deadline - this.now())));
       snapshot = await this.runApi.query({ run_ref: runRef });
@@ -946,6 +985,8 @@ export class DiscussionManager {
   async failDiscussion(id, error, lease) {
     const state = await readDiscussionState(id).catch(() => null);
     if (!state || DISCUSSION_FINAL_STATUSES.has(state.status)) return state;
+    const failure = failureSummary(state, error);
+    const terminalError = enrichTerminalError(error, failure);
     await Promise.allSettled(
       (state.active_run_refs ?? []).map((runRef) =>
         this.runApi.cancel({
@@ -958,13 +999,14 @@ export class DiscussionManager {
     return appendDiscussionEvent(
       id,
       "discussion.failed",
-      { error: publicError(error) },
+      { error: terminalError, failure_summary: failure },
       (current) => {
         const completedAt = iso(this.now());
         return {
           ...current,
           status: "failed",
-          error: publicError(error),
+          error: terminalError,
+          failure_summary: failure,
           completed_at: completedAt,
           expires_at: discussionExpiresAt(new Date(completedAt)),
           active_run_refs: [],
@@ -1459,20 +1501,6 @@ function collectHandoffRefs(value, refs = []) {
     }
   }
   return refs;
-}
-
-function progressFromState(state) {
-  const participants = Object.values(state.members?.participants ?? {});
-  return {
-    participants_total: participants.length,
-    participants_effective: effectiveParticipantIds(state).length,
-    formal_turns_completed:
-      participants.reduce((sum, member) => sum + (member.formal_turns_completed ?? 0), 0) +
-      (state.members?.host?.formal_turns_completed ?? 0),
-    attempts_completed: Object.values(state.turn_attempts ?? {}).filter((attempt) =>
-      ["completed", "failed", "late"].includes(attempt.status),
-    ).length,
-  };
 }
 
 function safeTurnFile(kind, memberId) {
