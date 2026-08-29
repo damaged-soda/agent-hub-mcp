@@ -127,6 +127,26 @@ describe("canonical token usage", () => {
       reasoning_tokens: null,
     });
   });
+
+  it("recomputes or removes caller-supplied canonical usage", () => {
+    const recomputed = createSessionEvent({
+      provider: "opencode",
+      native_session_id: "session-1",
+      kind: "model-call",
+      data: {
+        usage: {output_tokens: 5, reasoning_tokens: 2},
+        canonical_usage: {output_total_tokens: 999},
+      },
+    });
+    expect(recomputed.data.canonical_usage.output_total_tokens).toBe(7);
+    const removed = createSessionEvent({
+      provider: "codex",
+      native_session_id: "session-1",
+      kind: "model-call",
+      data: {canonical_usage: {output_total_tokens: 999}},
+    });
+    expect(removed.data).not.toHaveProperty("canonical_usage");
+  });
 });
 
 describe("context provenance", () => {
@@ -226,6 +246,12 @@ describe("provider conformance fixtures", () => {
     expect(events.find((event) => event.data.tool_kind === "edit").data.target_paths).toEqual([
       "src/example.js",
     ]);
+    expect(events.at(-1).data.canonical_usage).toMatchObject({
+      input_total_tokens: 10,
+      output_total_tokens: 3,
+      reasoning_tokens: null,
+      reasoning_relation: "subset",
+    });
   });
 
   it("projects Kimi tools before the terminal resume hint reports its session id", () => {
@@ -255,6 +281,10 @@ describe("provider conformance fixtures", () => {
     expect(tool.data.argument_bytes).toBeGreaterThan(0);
     expect(context.data.plugins).toEqual([{ name: "feature-dev", source: "marketplace" }]);
     expect(context.data.mcp_servers).toEqual([{ name: "docs", status: "connected" }]);
+    expect(events.at(-1).data.canonical_usage).toMatchObject({
+      output_total_tokens: 4,
+      reasoning_relation: "subset",
+    });
   });
 
   it("bounds inspect bodies and reports exact truncation provenance", () => {

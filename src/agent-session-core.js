@@ -110,10 +110,7 @@ export function createSessionEvent(input) {
   ) {
     throw new Error("native_type must be a non-empty string");
   }
-  const data = structuredClone(input.data);
-  if (input.kind === "model-call" && data.usage) {
-    data.canonical_usage = canonicalTokenUsage(identity.provider, data.usage);
-  }
+  const data = withCanonicalUsage(identity.provider, input.data);
   return {
     schema_version: AGENT_SESSION_SCHEMA_VERSION,
     ...identity,
@@ -569,6 +566,7 @@ function projectMetadataEvent(event) {
     projected.data = compact({
       status: optionalString(data.status),
       usage: safeUsage(data.usage),
+      canonical_usage: canonicalTokenUsage(projected.provider, data.usage),
       result_bytes: contentBytes(data.result),
     });
     return projected;
@@ -631,11 +629,16 @@ function inferNativeSessionId(provider, records) {
 }
 
 function makeEvent(base, kind, data) {
-  const projectedData = structuredClone(data);
-  if (kind === "model-call" && projectedData.usage) {
-    projectedData.canonical_usage = canonicalTokenUsage(base.provider, projectedData.usage);
+  return { ...base, kind, data: withCanonicalUsage(base.provider, data) };
+}
+
+function withCanonicalUsage(provider, data) {
+  const projected = structuredClone(data);
+  delete projected.canonical_usage;
+  if (projected.usage) {
+    projected.canonical_usage = canonicalTokenUsage(provider, projected.usage);
   }
-  return { ...base, kind, data: projectedData };
+  return projected;
 }
 
 function nativeEventType(provider, record) {

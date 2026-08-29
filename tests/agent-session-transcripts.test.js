@@ -249,6 +249,9 @@ describe("native transcript projections", () => {
           event.kind === "model-call" && event.data.usage?.inputOther === 10 &&
           event.data.usage?.output === 3)).toBe(true);
       }
+      const usageEvents = events.filter((event) => event.data.usage);
+      expect(usageEvents.length).toBeGreaterThan(0);
+      expect(usageEvents.every((event) => event.data.canonical_usage)).toBe(true);
     }
   });
 
