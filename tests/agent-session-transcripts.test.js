@@ -24,7 +24,55 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "tool-call").data.arguments).toEqual({
       command: "git status --short",
     });
+    const modelCalls = events.filter((event) => event.kind === "model-call");
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0].data).toMatchObject({
+      status: "completed",
+      model: "claude-opus-test",
+      effort: "high",
+      usage: {
+        input_tokens: 11,
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 5,
+        output_tokens: 7,
+        reasoning_tokens: 2,
+      },
+    });
+    expect(modelCalls[0].data.usage).not.toHaveProperty("total_tokens");
+    expect(modelCalls[0].occurred_at).toBe("2026-08-26T10:00:01.100Z");
     expect(JSON.stringify(events)).not.toContain("hidden reasoning");
+  });
+
+  it("does not expose a partial Claude usage snapshot as a completed model call", () => {
+    const events = projectNativeTranscript("claude", [{
+      type: "assistant",
+      sessionId: "550e8400-e29b-41d4-a716-446655440000",
+      message: {
+        id: "msg-interrupted",
+        role: "assistant",
+        model: "claude-test",
+        stop_reason: null,
+        usage: { input_tokens: 3, output_tokens: 1 },
+        content: [],
+      },
+    }]);
+    expect(events.filter((event) => event.kind === "model-call")).toHaveLength(0);
+  });
+
+  it("deduplicates Claude usage by request id when message id is absent", () => {
+    const record = {
+      type: "assistant",
+      sessionId: "550e8400-e29b-41d4-a716-446655440000",
+      requestId: "request-without-message-id",
+      message: {
+        role: "assistant",
+        model: "claude-test",
+        usage: { input_tokens: 3, output_tokens: 2 },
+        content: [],
+      },
+    };
+    const events = projectNativeTranscript("claude", [record, structuredClone(record)]);
+    expect(events.filter((event) => event.kind === "model-call")).toHaveLength(1);
   });
 
   it("projects Codex base/developer prompts, context and tools", () => {
