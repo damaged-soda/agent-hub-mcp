@@ -252,11 +252,15 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
       },
       { ifStatus: Array.from(ACTIVE_STATUSES) },
     ).catch((innerError) => {
-      process.stderr.write(
-        `runner_spawn_failed state update failed: ${
-          innerError instanceof Error ? innerError.stack || innerError.message : String(innerError)
-        }\n`,
-      );
+      process.stderr.write(`${JSON.stringify({
+        schema_version: 1,
+        timestamp: nowIso(),
+        event: "runner_spawn_failed_state_update_failed",
+        error: {
+          code: innerError?.code ?? "run_state_update_failed",
+          message: boundedDiagnosticMessage(innerError),
+        },
+      })}\n`);
     });
     releaseSessionRun(effectiveCliSessionRef, runId).catch(() => undefined);
   });
@@ -269,6 +273,12 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
     session_generation: sessionRecord?.generation,
     poll_after_ms: POLL_AFTER_MS,
   };
+}
+
+function boundedDiagnosticMessage(error) {
+  const value = error instanceof Error ? error.message : String(error);
+  const normalized = value.replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized.length > 4096 ? `${normalized.slice(0, 4095)}…` : normalized;
 }
 
 function normalizeInternalRetention(internal) {

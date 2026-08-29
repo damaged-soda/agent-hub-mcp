@@ -10,6 +10,8 @@ let workerMode = null;
 let discussionId = null;
 let commandId = null;
 
+installFatalHandlers();
+
 async function main() {
   const [mode, first, second] = process.argv.slice(2);
   workerMode = mode ?? null;
@@ -101,6 +103,17 @@ function logWorkerEvent(event, error = null) {
 function compactLogMessage(value) {
   const normalized = String(value).replace(/[\t\r\n]+/g, " ").replace(/\s+/g, " ").trim();
   return normalized.length > 4096 ? `${normalized.slice(0, 4095)}…` : normalized;
+}
+
+function installFatalHandlers() {
+  process.once("uncaughtException", (error) => {
+    logWorkerEvent("worker.uncaught_exception", error);
+    process.exit(1);
+  });
+  process.once("unhandledRejection", (error) => {
+    logWorkerEvent("worker.unhandled_rejection", error);
+    process.exit(1);
+  });
 }
 
 main().catch((error) => {

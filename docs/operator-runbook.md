@@ -187,8 +187,9 @@ discussions/<discussion-id>/
 
 Detached coordinators append private JSONL diagnostics to `discussions/.workers.log`. Every record
 has a timestamp, worker event, mode, PID, and a Discussion ID once one exists; rejected preflight
-requests use a short-lived command ID instead. The log never records prompts, materials, agent
-output, environment values, or stacks.
+requests use a short-lived command ID instead. Agent Hub's structured records never contain
+prompts, materials, agent output, environment values, or stacks. Unexpected runtime stderr from
+Node or a dependency is outside the JSON contract and should be treated as log corruption.
 
 Only terminal Discussions are TTL-cleaned. Linked run state records carry `retain_until`, so their raw CLI artifacts remain available for the Discussion retention window.
 
@@ -263,7 +264,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `protocol_integrity: degraded` | Quorum was met, but a participant missed or failed a later formal turn. | Inspect participant statuses and `events.jsonl`; the DecisionRecord may still be valid. |
 | `completion_quality: partial` | The Discussion completed with a valid DecisionRecord after one or more required later turns failed. | Read `phase_statistics` and `failure_summary` before relying on the decision. |
 | Discussion `failed` with `quorum_not_met`, `moderation_failed`, or `decision_failed` | The fixed protocol could not produce the required formal record. | Inspect linked run artifacts and structured validation errors; start a new Discussion after correcting inputs/config. |
-| `failure_summary.last_cause.error.code: turn_deadline` | The coordinator cancelled that run at the phase deadline. | Check `remaining_ms_at_dispatch` and the phase timing before treating it as a provider failure. |
+| `failure_summary.last_cause.error.code: turn_deadline` | The coordinator cancelled that run at the phase deadline. Records created before this diagnostic field existed used indistinguishable `cancelled` errors. | Check `remaining_ms_at_dispatch` and the phase timing before treating it as a provider failure; old `cancelled` records cannot be classified retrospectively. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |
 
 ## Cancellation

@@ -1036,8 +1036,9 @@ Discussion controller 使用轻量快照入口；TTL 清理在 daemon 启动时�
 
 `discussions/.workers.log` 是 detached coordinator 的私有 JSONL 诊断流，不属于任何单场
 事件权威。每条记录包含 timestamp、worker event、mode、PID，以及 accepted 后可用的
-discussion ID；preflight 尚未产生 ID 时仅记录短期 command ID。不得写 prompt、material、
-agent 输出、环境值或 stack。
+discussion ID；preflight 尚未产生 ID 时仅记录短期 command ID。Agent Hub 自己产生的
+结构化记录不得写 prompt、material、agent 输出、环境值或 stack；Node 或依赖意外写入的
+runtime stderr 不属于 JSON 契约，读取方必须按日志损坏处理。
 
 Discussion 与 run 是平级资源。Discussion 只引用 `run_ref`，不复制底层 stdout、stderr
 或 events。
@@ -1152,6 +1153,8 @@ MCP terminal response 把 `decision.md` 放入 `content`，把 DecisionRecord �
 deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline`，不能降格为
 无法区分用户取消、provider 取消和阶段超时的通用 `cancelled`。attempt 还记录派发时的
 剩余阶段预算，便于后续预算 profile 调优；这些字段只描述事实，不改变 MVP deadline。
+本改动之前的持久化记录只留下同形 `cancelled`，无法与用户取消可靠区分，因此旧记录的
+`timed_out` 只能保持 0，不能根据当前时间或 stderr 猜造历史。
 
 ## 16. 兼容性约束
 

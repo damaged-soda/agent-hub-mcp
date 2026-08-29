@@ -35,6 +35,7 @@ const MAX_LIST_LIMIT = 200;
 const DEFAULT_LIST_LIMIT = 50;
 const ERROR_MESSAGE_LIMIT = 1024;
 const OBJECTIVE_SUMMARY_LIMIT = 240;
+const MAX_FAILED_ATTEMPTS = 20;
 
 export function completionQuality(state) {
   if (state?.status === "completed") {
@@ -95,7 +96,7 @@ export function failureSummary(state, topError = state?.error) {
     .map(([attemptKey, attempt], index) => failedAttempt(attemptKey, attempt, index))
     .sort(compareFailures);
   const failedTurns = failedMemberTurns(state);
-  if (!topError && failedAttempts.length === 0 && failedTurns.length === 0) return null;
+  if (!topError && failedTurns.length === 0) return null;
 
   const rawLastCause = failedAttempts.at(-1) ?? failedTurns.at(-1) ?? null;
   const lastCause = rawLastCause && "_order" in rawLastCause
@@ -106,7 +107,9 @@ export function failureSummary(state, topError = state?.error) {
     primary_error: topError ? compactError(topError) : null,
     last_cause: lastCause,
     failed_turns: failedTurns,
-    failed_attempts: failedAttempts.map(stripFailureSortFields),
+    failed_turns_total: failedTurns.length,
+    failed_attempts: failedAttempts.slice(-MAX_FAILED_ATTEMPTS).map(stripFailureSortFields),
+    failed_attempts_total: failedAttempts.length,
   };
 }
 
@@ -195,7 +198,7 @@ export function discussionSummary(state) {
     cwd: state.cwd ?? null,
     quorum: state.quorum ?? null,
     progress: progressFromState(state),
-    failure_summary: summary,
+    failure_summary: listFailureSummary(summary),
     created_at: state.created_at ?? null,
     started_at: state.started_at ?? null,
     accepted_at: state.accepted_at ?? null,
@@ -288,6 +291,17 @@ function failedMemberTurns(state) {
     }
   }
   return failures;
+}
+
+function listFailureSummary(summary) {
+  if (!summary) return null;
+  return {
+    phase: summary.phase,
+    primary_error: summary.primary_error,
+    last_cause: summary.last_cause,
+    failed_turns_total: summary.failed_turns_total,
+    failed_attempts_total: summary.failed_attempts_total,
+  };
 }
 
 function parseAttemptKey(attemptKey) {

@@ -321,6 +321,20 @@ export async function listDiscussionStates() {
         });
         continue;
       }
+      if (
+        typeof state !== "object" ||
+        Array.isArray(state) ||
+        state.discussion_id !== entry.name
+      ) {
+        sourceErrors.push({
+          discussion_ref: { discussion_id: entry.name },
+          error: {
+            code: "state_identity_invalid",
+            message: "Discussion state identity does not match its directory",
+          },
+        });
+        continue;
+      }
       states.push(state);
     } catch (error) {
       sourceErrors.push({

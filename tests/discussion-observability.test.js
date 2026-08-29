@@ -76,6 +76,37 @@ describe("discussion observability", () => {
     });
     expect(summary.last_cause).not.toHaveProperty("_timestamp");
     expect(summary.failed_attempts).toHaveLength(2);
+    expect(summary.failed_attempts_total).toBe(2);
+  });
+
+  it("does not report a recovered attempt as a Discussion failure", () => {
+    const state = failedState("recovered", "2026-08-29T00:00:00.000Z");
+    state.status = "completed";
+    state.protocol_integrity = "complete";
+    state.error = null;
+    state.members.host.turns.decision_record = { status: "accepted" };
+
+    expect(failureSummary(state)).toBeNull();
+  });
+
+  it("bounds failed attempt details while preserving totals", () => {
+    const state = failedState("many-attempts", "2026-08-29T00:00:00.000Z");
+    state.turn_attempts = Object.fromEntries(
+      Array.from({ length: 25 }, (_, index) => [
+        `decision_record:host:${index + 1}`,
+        {
+          status: "failed",
+          error: { code: "structured_output_invalid", message: `failure ${index + 1}` },
+          completed_at: new Date(Date.parse("2026-08-29T00:00:00.000Z") + index).toISOString(),
+        },
+      ]),
+    );
+
+    const summary = failureSummary(state);
+    expect(summary.failed_attempts).toHaveLength(20);
+    expect(summary.failed_attempts_total).toBe(25);
+    expect(summary.failed_attempts[0].attempt).toBe(6);
+    expect(summary.last_cause.attempt).toBe(25);
   });
 
   it("lists newest records with status, relative-time, cwd, and limit filters", () => {
@@ -100,6 +131,7 @@ describe("discussion observability", () => {
       discussion_ref: { discussion_id: "recent" },
       completion_quality: "partial",
     });
+    expect(result.discussions[0].failure_summary).toBeNull();
     expect(result.total_matching).toBe(1);
     expect(result.has_more).toBe(false);
     expect(result.filters.since).toBe("2026-08-22T12:00:00.000Z");

@@ -729,6 +729,7 @@ export class DiscussionManager {
       if (this.now() >= deadline) {
         await this.runApi.cancel({ run_ref: runRef, reason: "discussion phase deadline", actor: "discussion" });
         const cancelled = await this.runApi.query({ run_ref: runRef });
+        if (cancelled.status !== "cancelled" || cancelled.error) return cancelled;
         return {
           ...cancelled,
           error: {

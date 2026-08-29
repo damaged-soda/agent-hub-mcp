@@ -9,6 +9,7 @@ import {
   discussionDirFor,
   discussionLeaseIsLive,
   listDiscussionStates,
+  listNonTerminalDiscussions,
   readDiscussionEvents,
   readDiscussionState,
   recoverDiscussionRecord,
@@ -185,18 +186,26 @@ describe("discussion store", () => {
     await releaseDiscussionLease("discussion-nine", lease);
   });
 
-  it("lists healthy records and reports unreadable state without hiding it", async () => {
+  it("lists healthy records and reports unreadable or mismatched state", async () => {
     await createDiscussionRecord(baseState("discussion-listable"), { kind: "new" });
     const corruptDir = path.join(root, "discussion-corrupt");
     await fsp.mkdir(corruptDir, { mode: 0o700 });
     await fsp.writeFile(path.join(corruptDir, "state.json"), "{", { mode: 0o600 });
+    const mismatchedDir = path.join(root, "discussion-mismatched");
+    await fsp.mkdir(mismatchedDir, { mode: 0o700 });
+    await fsp.writeFile(
+      path.join(mismatchedDir, "state.json"),
+      JSON.stringify({ ...baseState("different-id"), discussion_id: "different-id" }),
+      { mode: 0o600 },
+    );
 
     const listed = await listDiscussionStates();
 
     expect(listed.states.map((state) => state.discussion_id)).toEqual([
       "discussion-listable",
     ]);
-    expect(listed.source_errors).toEqual([
+    expect(await listNonTerminalDiscussions()).toEqual(["discussion-listable"]);
+    expect(listed.source_errors).toEqual(expect.arrayContaining([
       {
         discussion_ref: { discussion_id: "discussion-corrupt" },
         error: {
@@ -204,7 +213,14 @@ describe("discussion store", () => {
           message: expect.stringMatching(/JSON/),
         },
       },
-    ]);
+      {
+        discussion_ref: { discussion_id: "discussion-mismatched" },
+        error: {
+          code: "state_identity_invalid",
+          message: "Discussion state identity does not match its directory",
+        },
+      },
+    ]));
   });
 });
 

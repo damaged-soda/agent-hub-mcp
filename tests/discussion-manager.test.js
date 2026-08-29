@@ -146,7 +146,7 @@ describe("discussion manager lifecycle", () => {
       poll_interval_ms: 5,
       wait_window_ms: 5000,
       phase_durations_ms: {
-        independent: 50,
+        independent: 500,
         moderating: 2000,
         challenge: 2000,
         revision: 2000,
@@ -174,6 +174,31 @@ describe("discussion manager lifecycle", () => {
     ).toMatchObject({ required: 2, accepted: 0, failed: 2, timed_out: 2 });
     expect(fake.cancelled.size).toBe(2);
     await manager.shutdown();
+  });
+
+  it("preserves a real run failure observed at the phase deadline", async () => {
+    let cancelled = false;
+    const manager = new DiscussionManager({
+      now: () => 1000,
+      run_api: {
+        query: async () => cancelled
+          ? {
+              status: "failed",
+              error: { code: "agent_error", message: "authentication failed" },
+            }
+          : { status: "running" },
+        cancel: async () => {
+          cancelled = true;
+        },
+        dispatch: async () => undefined,
+        retain: async () => undefined,
+      },
+    });
+
+    await expect(manager.waitForRun({ run_id: "run-at-deadline" }, 1000)).resolves.toMatchObject({
+      status: "failed",
+      error: { code: "agent_error", message: "authentication failed" },
+    });
   });
 });
 
