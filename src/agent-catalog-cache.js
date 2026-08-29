@@ -9,14 +9,17 @@ import {
   isProcessAlive,
   readJsonIfExists,
 } from "./fs-store.js";
+import { buildAgentEnv } from "./env.js";
 
 const CACHE_SCHEMA_VERSION = 1;
 const CACHE_KIND = "agent-catalog-cache";
 const DEFAULT_FRESH_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_STALE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETRY_MS = 60 * 1000;
-const REFRESH_LOCK_STALE_MS = 60 * 1000;
 const MAX_CLOCK_SKEW_MS = 60 * 1000;
+const LOCK_OWNER_WRITE_GRACE_MS = 1000;
+const SYNC_REFRESH_WAIT_MS = 20 * 1000;
+const CACHE_POLL_MS = 25;
 const REFRESH_WORKER_PATH = fileURLToPath(
   new URL("./agent-catalog-refresh-worker.js", import.meta.url),
 );
@@ -103,6 +106,7 @@ export async function loadAgentCatalogForStatus(options) {
         } catch (error) {
           refresh = "start-failed";
           refreshError = compactError(error);
+          await recordRefreshFailure(location, record, refreshError, now());
         }
       }
       return {
@@ -112,32 +116,25 @@ export async function loadAgentCatalogForStatus(options) {
     }
   }
 
-  const catalog = await options.load_catalog();
-  const observedAt = new Date(now()).toISOString();
-  let writeError = null;
-  try {
-    await writeCacheRecord(location, catalog, observedAt);
-  } catch (error) {
-    writeError = compactError(error);
-  }
-  return {
-    catalog,
-    cache: {
-      status: writeError ? "uncached" : "refreshed",
-      observed_at: observedAt,
-      age_seconds: 0,
-      refresh: "synchronous",
-      ...(writeError ? { error: writeError } : {}),
-    },
-  };
+  return loadAgentCatalogSynchronously(options, location, record, now, nowMs, maxStaleMs);
 }
 
 export async function storeAgentCatalog(cwd, catalog, options = {}) {
   const now = options.now ?? (() => Date.now());
   const location = getAgentCatalogCacheLocation(cwd, options);
-  const observedAt = new Date(now()).toISOString();
-  await writeCacheRecord(location, catalog, observedAt);
-  return observedAt;
+  const lock = await acquireRefreshLockWithWait(
+    location,
+    now,
+    options.sync_wait_ms ?? SYNC_REFRESH_WAIT_MS,
+  );
+  if (!lock) return { stored: false, reason: "refresh-in-progress" };
+  try {
+    const observedAt = new Date(now()).toISOString();
+    await writeCacheRecord(location, catalog, observedAt);
+    return { stored: true, observed_at: observedAt };
+  } finally {
+    await releaseRefreshLock(location, lock);
+  }
 }
 
 export async function refreshAgentCatalogCache(options) {
@@ -176,7 +173,7 @@ export async function spawnAgentCatalogRefreshWorker(options) {
   if (options.cache_root) args.push(options.cache_root);
   const child = spawn(process.execPath, args, {
     detached: true,
-    env: options.env ?? process.env,
+    env: buildRefreshWorkerEnv(options.env ?? process.env),
     stdio: "ignore",
   });
   await new Promise((resolve, reject) => {
@@ -184,6 +181,90 @@ export async function spawnAgentCatalogRefreshWorker(options) {
     child.once("error", reject);
   });
   child.unref();
+}
+
+export function buildRefreshWorkerEnv(source = process.env) {
+  const env = buildAgentEnv(source);
+  for (const key of [
+    "AGENT_HUB_CATALOG_CACHE_DIR",
+    "AGENT_HUB_CWD_ALLOWLIST",
+    "AGENT_HUB_RUN_DIR",
+  ]) {
+    if (typeof source[key] === "string") env[key] = source[key];
+  }
+  return env;
+}
+
+async function loadAgentCatalogSynchronously(
+  options,
+  location,
+  previous,
+  now,
+  nowMs,
+  maxStaleMs,
+) {
+  const lock = await acquireRefreshLockWithWait(
+    location,
+    now,
+    options.sync_wait_ms ?? SYNC_REFRESH_WAIT_MS,
+  );
+  if (!lock) {
+    return uncachedLiveCatalog(options, now, "refresh-in-progress");
+  }
+
+  try {
+    const latest = await readCacheRecord(location.cache_path);
+    if (latest && latest.observed_at !== previous?.observed_at) {
+      const ageMs = cacheAgeMs(latest, nowMs);
+      if (ageMs <= maxStaleMs) {
+        return {
+          catalog: latest.catalog,
+          cache: cacheMetadata("fresh", latest, ageMs, "waited"),
+        };
+      }
+    }
+    const catalog = await options.load_catalog();
+    const observedAt = new Date(now()).toISOString();
+    try {
+      await writeCacheRecord(location, catalog, observedAt);
+    } catch (error) {
+      return uncachedCatalog(catalog, observedAt, error);
+    }
+    return {
+      catalog,
+      cache: {
+        status: "refreshed",
+        observed_at: observedAt,
+        age_seconds: 0,
+        refresh: "synchronous",
+      },
+    };
+  } finally {
+    await releaseRefreshLock(location, lock);
+  }
+}
+
+async function uncachedLiveCatalog(options, now, cause) {
+  const catalog = await options.load_catalog();
+  const observedAt = new Date(now()).toISOString();
+  return uncachedCatalog(catalog, observedAt, cause);
+}
+
+function uncachedCatalog(catalog, observedAt, cause) {
+  const error = cause instanceof Error ? compactError(cause) : {
+    code: cause,
+    message: "catalog refresh is already in progress",
+  };
+  return {
+    catalog,
+    cache: {
+      status: "uncached",
+      observed_at: observedAt,
+      age_seconds: 0,
+      refresh: "synchronous-uncommitted",
+      error,
+    },
+  };
 }
 
 async function readCacheRecord(cachePath) {
@@ -227,7 +308,9 @@ function cacheAgeMs(record, nowMs) {
 
 function timestampAgeMs(value, nowMs) {
   const timestamp = Date.parse(value ?? "");
-  return Number.isFinite(timestamp) ? Math.max(0, nowMs - timestamp) : null;
+  if (!Number.isFinite(timestamp)) return null;
+  const delta = nowMs - timestamp;
+  return delta < -MAX_CLOCK_SKEW_MS ? null : Math.max(0, delta);
 }
 
 function cacheMetadata(status, record, ageMs, refresh, refreshError = null) {
@@ -250,6 +333,13 @@ async function acquireRefreshLock(location, nowMs) {
     const token = crypto.randomUUID();
     try {
       await fsp.mkdir(location.lock_path, { mode: 0o700 });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const reclaimed = await reclaimAbandonedLock(location);
+      if (!reclaimed) return null;
+      continue;
+    }
+    try {
       await atomicWriteJson(path.join(location.lock_path, "owner.json"), {
         token,
         pid: process.pid,
@@ -257,18 +347,43 @@ async function acquireRefreshLock(location, nowMs) {
       });
       return token;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      const owner = await readJsonIfExists(path.join(location.lock_path, "owner.json"))
-        .catch(() => null);
-      const lockStat = await fsp.stat(location.lock_path).catch(() => null);
-      const ownerAgeMs = timestampAgeMs(owner?.created_at, nowMs);
-      const ageMs = ownerAgeMs ?? (lockStat ? Math.max(0, nowMs - lockStat.mtimeMs) : null);
-      const stale = ageMs !== null && ageMs > REFRESH_LOCK_STALE_MS;
-      if (!stale && (!owner || isProcessAlive(owner.pid))) return null;
       await fsp.rm(location.lock_path, { recursive: true, force: true });
+      throw error;
     }
   }
   return null;
+}
+
+async function acquireRefreshLockWithWait(location, now, waitMs) {
+  const deadline = Date.now() + Math.max(0, waitMs);
+  while (true) {
+    const lock = await acquireRefreshLock(location, now());
+    if (lock) return lock;
+    if (Date.now() >= deadline) return null;
+    await sleep(Math.min(CACHE_POLL_MS, Math.max(1, deadline - Date.now())));
+  }
+}
+
+async function reclaimAbandonedLock(location) {
+  let owner = await readJsonIfExists(path.join(location.lock_path, "owner.json"))
+    .catch(() => null);
+  if (owner && Number.isInteger(owner.pid)) {
+    if (isProcessAlive(owner.pid)) return false;
+  } else {
+    await sleep(LOCK_OWNER_WRITE_GRACE_MS);
+    owner = await readJsonIfExists(path.join(location.lock_path, "owner.json"))
+      .catch(() => null);
+    if (owner && Number.isInteger(owner.pid) && isProcessAlive(owner.pid)) return false;
+  }
+  const quarantine = `${location.lock_path}.abandoned.${crypto.randomUUID()}`;
+  try {
+    await fsp.rename(location.lock_path, quarantine);
+  } catch (error) {
+    if (error?.code === "ENOENT") return true;
+    throw error;
+  }
+  await fsp.rm(quarantine, { recursive: true, force: true });
+  return true;
 }
 
 async function ensureCacheDirectory(location) {
@@ -284,6 +399,27 @@ async function releaseRefreshLock(location, token) {
   if (owner?.token === token) {
     await fsp.rm(location.lock_path, { recursive: true, force: true });
   }
+}
+
+async function recordRefreshFailure(location, record, error, nowMs) {
+  const lock = await acquireRefreshLock(location, nowMs);
+  if (!lock) return false;
+  try {
+    const current = await readCacheRecord(location.cache_path);
+    if (!current || current.observed_at !== record.observed_at) return false;
+    await atomicWriteJson(location.cache_path, {
+      ...current,
+      last_refresh_failed_at: new Date(nowMs).toISOString(),
+      last_refresh_error: error,
+    });
+    return true;
+  } finally {
+    await releaseRefreshLock(location, lock);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function compactError(error) {

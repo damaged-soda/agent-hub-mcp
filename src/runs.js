@@ -43,13 +43,13 @@ import {
 
 const CANCEL_GRACE_MS = 10000;
 
-export async function listAgents(input = {}) {
+export async function listAgents(input = {}, internal = {}) {
   await cleanupExpiredRuns();
   let cwd = process.cwd();
   if (input?.cwd !== undefined) {
     ({ cwd } = await validateRequestPaths(input.cwd));
   }
-  const env = buildAgentEnv(process.env);
+  const env = buildAgentEnv(internal.env ?? process.env);
   const described = await Promise.all(
     allAdapters().map((adapter) => adapter.listAgent({ cwd, env })),
   );

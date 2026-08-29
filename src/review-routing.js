@@ -160,7 +160,8 @@ async function resolveReviewCwd(value) {
 }
 
 function liveCatalog(cwd, internal) {
-  return (internal.listAgents ?? listAgents)({ cwd });
+  if (internal.listAgents) return internal.listAgents({ cwd });
+  return listAgents({ cwd }, { env: internal.env ?? process.env });
 }
 
 async function statusCatalog(cwd, internal) {
