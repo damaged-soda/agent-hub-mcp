@@ -225,7 +225,10 @@ function projectClaudeTranscriptRecord(record, provider, nativeSessionId, state)
       : requestId
         ? `request:${requestId}`
         : null;
-    if (usage && (!modelCallKey || !state.seenClaudeModelCalls.has(modelCallKey))) {
+    const hasStopReason = Object.hasOwn(objectValue(record.message), "stop_reason");
+    const isTerminalUsage = !hasStopReason || record.message.stop_reason !== null;
+    if (usage && isTerminalUsage &&
+        (!modelCallKey || !state.seenClaudeModelCalls.has(modelCallKey))) {
       if (modelCallKey) state.seenClaudeModelCalls.add(modelCallKey);
       events.push(
         transcriptEvent(
