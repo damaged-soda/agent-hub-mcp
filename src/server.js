@@ -12,6 +12,7 @@ import {
   runAgent,
   waitAgentRun,
 } from "./runs.js";
+import { DISCUSSION_BUDGET_PROFILE_NAMES } from "./discussion-budget.js";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 const HTTP_SHUTDOWN_GRACE_MS = 30000;
@@ -116,6 +117,7 @@ const DiscussionDispatchInputSchema = z.union([
       host: DiscussionHostSchema,
       participants: z.array(DiscussionParticipantSchema).min(2),
       quorum: z.number().int().positive(),
+      budget_profile: z.enum(DISCUSSION_BUDGET_PROFILE_NAMES).optional(),
     })
     .strict(),
   z
@@ -220,7 +222,7 @@ function registerDiscussionTools(server, manager) {
     {
       title: "Dispatch Discussion",
       description:
-        "Start a fixed-protocol multi-agent discussion. Participants are selected by the caller during preparation. Runs use adapter-configured best-effort read-only behavior; this is not a security boundary.",
+        "Start a fixed-protocol multi-agent discussion. New requests may choose quick (30-minute), standard (60-minute, default), or research (90-minute) hard budget profiles; follow-ups inherit the parent. Participants are selected by the caller during preparation. Runs use adapter-configured best-effort read-only behavior; this is not a security boundary.",
       inputSchema: DiscussionDispatchInputSchema,
     },
     async (input) => asToolResult(await manager.dispatch(input)),

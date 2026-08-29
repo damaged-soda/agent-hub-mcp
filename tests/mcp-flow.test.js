@@ -208,6 +208,7 @@ describe("MCP flow", () => {
             },
           ],
           quorum: 2,
+          budget_profile: "research",
         },
         url,
         { requestTimeoutMs: 30000 },
@@ -223,6 +224,11 @@ describe("MCP flow", () => {
 
       expect(completed.structuredContent.status).toBe("completed");
       expect(completed.structuredContent.protocol_integrity).toBe("complete");
+      expect(completed.structuredContent.budget_status).toMatchObject({
+        profile: "research",
+        total_ms: 90 * 60 * 1000,
+        repair_min_ms: 2 * 60 * 1000,
+      });
       expect(completed.structuredContent.run_refs).toHaveLength(8);
       expect(completed.structuredContent.decision.recommendation.summary).toBe("string");
       expect(completed.content[0].text).toMatch(/^# Discussion Decision/m);
@@ -256,6 +262,7 @@ describe("MCP flow", () => {
         { requestTimeoutMs: 30000 },
       );
       expect(followUpCompleted.structuredContent.status).toBe("completed");
+      expect(followUpCompleted.structuredContent.budget_status.profile).toBe("research");
       expect(followUpCompleted.structuredContent.run_refs).toHaveLength(8);
       expect(
         followUpCompleted.structuredContent.participant_statuses.map((member) => member.session_mode),

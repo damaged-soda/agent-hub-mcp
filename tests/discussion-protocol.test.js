@@ -25,6 +25,22 @@ describe("discussion protocol", () => {
       quorum: 2,
     });
     expect(parsed.kind).toBe("new");
+    expect(parsed.budget_profile).toBe("standard");
+
+    expect(parseDiscussionDispatch({
+      kind: "new",
+      objective: "decide quickly",
+      question: "ship?",
+      cwd: "/tmp",
+      materials: [],
+      host: { agent_id: "codex", metadata: {} },
+      participants: [
+        { participant_id: "a", agent_id: "codex", role: "r", focus: "f", metadata: {} },
+        { participant_id: "b", agent_id: "codex", role: "r", focus: "f", metadata: {} },
+      ],
+      quorum: 2,
+      budget_profile: "quick",
+    }).budget_profile).toBe("quick");
 
     expect(() =>
       parseDiscussionDispatch({
@@ -33,6 +49,16 @@ describe("discussion protocol", () => {
         question: "what changed?",
         materials: [],
         quorum: 1,
+      }),
+    ).toThrow();
+
+    expect(() =>
+      parseDiscussionDispatch({
+        kind: "follow_up",
+        parent_discussion_ref: { discussion_id: "parent" },
+        question: "what changed?",
+        materials: [],
+        budget_profile: "research",
       }),
     ).toThrow();
 

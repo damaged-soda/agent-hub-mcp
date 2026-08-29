@@ -239,6 +239,11 @@ Treat `completion_quality: "partial"` as a usable but incomplete protocol result
 start with `failure_summary.last_cause`; `error.code` continues to describe the terminal lifecycle
 failure such as `quorum_not_met` or `decision_failed`.
 
+Use `budget_profile: "quick"`, `"standard"`, or `"research"` in a new Discussion request. Their
+hard caps are 30, 60, and 90 minutes; standard is the default. Inspect `budget_status` to distinguish
+the global remaining budget, current phase remaining time, future-phase reserve, and format-repair
+minimum. Follow-ups inherit the parent profile and reject attempts to override it.
+
 The dispatch command exits after its detached Discussion worker accepts the request. Query, wait, and cancel commands trigger recovery when the record is nonterminal; the lease prevents two workers from coordinating the same Discussion. After an unclean worker exit, allow the 20-second lease staleness window before expecting a replacement worker to acquire it.
 
 ## Troubleshooting
@@ -265,6 +270,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `completion_quality: partial` | The Discussion completed with a valid DecisionRecord after one or more required later turns failed. | Read `phase_statistics` and `failure_summary` before relying on the decision. |
 | Discussion `failed` with `quorum_not_met`, `moderation_failed`, or `decision_failed` | The fixed protocol could not produce the required formal record. | Inspect linked run artifacts and structured validation errors; start a new Discussion after correcting inputs/config. |
 | `failure_summary.last_cause.error.code: turn_deadline` | The coordinator cancelled that run at the phase deadline. Records created before this diagnostic field existed used indistinguishable `cancelled` errors. | Check `remaining_ms_at_dispatch` and the phase timing before treating it as a provider failure; old `cancelled` records cannot be classified retrospectively. |
+| `failure_summary.last_cause.error.code: repair_budget_exhausted` | The first output was structurally invalid, but the phase had less than the frozen minimum repair window left. | Use a larger budget profile or reduce the turn's research scope; the coordinator deliberately did not launch a doomed repair run. |
 | Permission prompts or edit approval friction | The request used a restrictive Claude permission mode. | Omit `metadata.claude.permission_mode`; Agent Hub defaults to `auto`. |
 
 ## Cancellation
