@@ -24,7 +24,38 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "tool-call").data.arguments).toEqual({
       command: "git status --short",
     });
+    const modelCalls = events.filter((event) => event.kind === "model-call");
+    expect(modelCalls).toHaveLength(1);
+    expect(modelCalls[0].data).toMatchObject({
+      status: "completed",
+      model: "claude-opus-test",
+      effort: "high",
+      usage: {
+        input_tokens: 11,
+        cache_creation_input_tokens: 3,
+        cache_read_input_tokens: 5,
+        output_tokens: 7,
+        reasoning_tokens: 2,
+      },
+    });
+    expect(modelCalls[0].data.usage).not.toHaveProperty("total_tokens");
     expect(JSON.stringify(events)).not.toContain("hidden reasoning");
+  });
+
+  it("deduplicates Claude usage by request id when message id is absent", () => {
+    const record = {
+      type: "assistant",
+      sessionId: "550e8400-e29b-41d4-a716-446655440000",
+      requestId: "request-without-message-id",
+      message: {
+        role: "assistant",
+        model: "claude-test",
+        usage: { input_tokens: 3, output_tokens: 2 },
+        content: [],
+      },
+    };
+    const events = projectNativeTranscript("claude", [record, structuredClone(record)]);
+    expect(events.filter((event) => event.kind === "model-call")).toHaveLength(1);
   });
 
   it("projects Codex base/developer prompts, context and tools", () => {

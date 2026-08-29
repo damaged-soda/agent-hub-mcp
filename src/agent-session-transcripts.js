@@ -36,6 +36,7 @@ export function createTranscriptProjector(providerValue, nativeSessionId) {
   const provider = canonicalProvider(providerValue);
   const state = {
     context: {},
+    seenClaudeModelCalls: new Set(),
     seenToolEvents: new Set(),
   };
   return {
@@ -209,6 +210,38 @@ function projectClaudeTranscriptRecord(record, provider, nativeSessionId, state)
       );
     }
   } else if (record.type === "assistant") {
+    const rawUsage = objectValue(record.message?.usage);
+    const usage = safeUsage(rawUsage);
+    const thinkingTokens = numberValue(rawUsage.output_tokens_details?.thinking_tokens);
+    if (usage && thinkingTokens !== null &&
+        !Object.hasOwn(usage, "reasoning_tokens") &&
+        !Object.hasOwn(usage, "reasoning_output_tokens")) {
+      usage.reasoning_tokens = thinkingTokens;
+    }
+    const messageId = stringValue(record.message?.id);
+    const requestId = stringValue(record.requestId);
+    const modelCallKey = messageId
+      ? `message:${messageId}`
+      : requestId
+        ? `request:${requestId}`
+        : null;
+    if (usage && (!modelCallKey || !state.seenClaudeModelCalls.has(modelCallKey))) {
+      if (modelCallKey) state.seenClaudeModelCalls.add(modelCallKey);
+      events.push(
+        transcriptEvent(
+          provider,
+          nativeSessionId,
+          "model-call",
+          {
+            status: "completed",
+            model: stringValue(record.message?.model ?? state.context.model),
+            effort: stringValue(record.effort ?? state.context.effort),
+            usage,
+          },
+          record,
+        ),
+      );
+    }
     const content = textFromBlocks(blocks, new Set(["text", "output_text"]));
     if (content) {
       events.push(

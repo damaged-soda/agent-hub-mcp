@@ -158,6 +158,10 @@ summarize a sensitive topic, so the list remains part of the private inspector s
 `inspect` uses normalized event sequence cursors, defaults to `metadata`, and requires an explicit
 `--profile inspect` to return transcript bodies. None of these commands accepts arbitrary source
 paths or mutates provider/session state.
+Claude transcript assistant rows project native usage as one `model-call` per observed
+`message.id`, falling back to `requestId` when needed. Repeated rows for the same native call do not
+duplicate usage; nested `output_tokens_details.thinking_tokens` is exposed as `reasoning_tokens`,
+while an unreported `total_tokens` remains absent.
 `resolve` accepts exactly one canonical session or event reference. Only the event form returns the
 bounded body-bearing diagnostic package described above. Neither reference contains transcript body
 or grants network access.
