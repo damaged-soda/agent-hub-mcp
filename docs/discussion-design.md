@@ -384,7 +384,7 @@ Discussion。支持：
   "budget_status": {
     "profile": "standard",
     "total_ms": 3600000,
-    "repair_min_ms": 300000,
+    "repair_min_ms": 90000,
     "elapsed_ms": 900000,
     "remaining_ms": 2700000,
     "phase_remaining_ms": 600000,
@@ -857,18 +857,18 @@ lease 保证，而不是只靠单个 Discussion controller 自律。
 
 | Profile | 全局硬上限 | repair 最小窗口 | 适用范围 |
 |---|---:|---:|---|
-| quick | 30 分钟 | 2 分钟 | 边界清楚、很少工具调查的短评审 |
-| standard | 60 分钟 | 5 分钟 | 默认仓库设计与评审 |
-| research | 90 分钟 | 8 分钟 | 明确需要实验或跨仓核实 |
+| quick | 30 分钟 | 1 分钟 | 边界清楚、很少工具调查的短评审 |
+| standard | 60 分钟 | 1.5 分钟 | 默认仓库设计与评审 |
+| research | 90 分钟 | 2 分钟 | 明确需要实验或跨仓核实 |
 
 每阶段同时冻结 minimum 和 maximum。minimum 只用于保护后续阶段，maximum 限制当前
 阶段即使有大量结余也不能独占整场：
 
 | Profile | independent min/max | moderating min/max | challenge min/max | revision min/max | synthesizing min/max |
 |---|---:|---:|---:|---:|---:|
-| quick | 10/15m | 3/5m | 6/10m | 6/10m | 5/8m |
+| quick | 10/10m | 3/5m | 6/10m | 6/10m | 5/8m |
 | standard | 15/25m | 5/10m | 10/20m | 10/20m | 10/15m |
-| research | 25/40m | 8/15m | 15/30m | 15/25m | 15/20m |
+| research | 25/37m | 8/15m | 15/30m | 15/25m | 15/20m |
 
 - `global_deadline = T0 + total`。
 - `phase_absolute_deadline = global_deadline - sum(later_phase_minimums)`；因此当前阶段永远
@@ -877,6 +877,9 @@ lease 保证，而不是只靠单个 Discussion controller 自律。
   提前完成时，后续阶段可以在自身 maximum 内使用结余。
 - quick 的绝对截止点仍是 `T0 + 10/13/19/25/30m`，兼容旧版 30 分钟边界；区别只在于
   前序提前完成后允许受限结转。
+- 引入 profile 之前，省略预算的请求隐含使用旧 30 分钟计划；本版本起省略
+  `budget_profile` 会选择 standard，把默认硬上限提升到 60 分钟。需要旧成本/墙钟边界的
+  调用方必须显式选择 quick。
 - 阶段截止时取消仍在运行的 runs；首轮按 quorum 决定继续或失败，后续 participant
   阶段按已接受结果继续并降级。主持人阶段截止仍没有合法输出时 Discussion 失败。
 - 重试只能使用当前阶段剩余时间，不能延长 deadline。

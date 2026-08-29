@@ -167,6 +167,10 @@ the profile's global deadline. Follow-ups inherit the parent profile. Query/list
 `budget_status`, including elapsed/remaining time and the minimum window required before a format
 repair can be dispatched.
 
+Before budget profiles existed, every omitted budget implicitly used the legacy 30-minute
+schedule. Omitting `budget_profile` now selects standard and therefore raises the default hard cap
+to 60 minutes; callers that need the old wall-clock/cost boundary should request quick explicitly.
+
 ## Optional MCP Server
 
 MCP clients may still launch an ephemeral stdio server for the six run tools:

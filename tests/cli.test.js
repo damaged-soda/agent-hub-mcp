@@ -276,7 +276,7 @@ describe("agenthub CLI", () => {
     expect(completed.budget_status).toMatchObject({
       profile: "quick",
       total_ms: 30 * 60 * 1000,
-      repair_min_ms: 2 * 60 * 1000,
+      repair_min_ms: 60 * 1000,
     });
     expect(completed.run_refs).toHaveLength(8);
 

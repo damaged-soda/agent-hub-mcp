@@ -32,6 +32,8 @@ describe("discussion budget profiles", () => {
       revision: 25,
       synthesizing: 30,
     });
+    expect(budget.repair_min_ms).toBe(1 * MINUTE);
+    expect(budget.phase_maximums_ms.independent).toBe(10 * MINUTE);
   });
 
   it("freezes standard and research hard caps with future phase reserves", () => {
@@ -51,6 +53,9 @@ describe("discussion budget profiles", () => {
         revision: 75,
         synthesizing: 90,
       });
+    expect(resolveDiscussionBudget("standard").repair_min_ms).toBe(1.5 * MINUTE);
+    expect(resolveDiscussionBudget("research").repair_min_ms).toBe(2 * MINUTE);
+    expect(resolveDiscussionBudget("research").phase_maximums_ms.independent).toBe(37 * MINUTE);
   });
 
   it("carries early completion forward without crossing the reserved absolute cutoff", () => {
@@ -79,7 +84,7 @@ describe("discussion budget profiles", () => {
     expect(discussionBudgetStatus(state, START + 2 * 60 * MINUTE)).toMatchObject({
       profile: "standard",
       total_ms: 60 * MINUTE,
-      repair_min_ms: 5 * MINUTE,
+      repair_min_ms: 1.5 * MINUTE,
       elapsed_ms: 12 * MINUTE,
       remaining_ms: 48 * MINUTE,
       phase_remaining_ms: 8 * MINUTE,
@@ -92,8 +97,8 @@ describe("discussion budget profiles", () => {
       budget,
       phase_deadline_at: new Date(START + 5 * MINUTE).toISOString(),
     };
-    expect(hasRepairBudget(state, START)).toBe(true);
-    expect(hasRepairBudget(state, START + 1)).toBe(false);
+    expect(hasRepairBudget(state, START + 3.5 * MINUTE)).toBe(true);
+    expect(hasRepairBudget(state, START + 3.5 * MINUTE + 1)).toBe(false);
 
     expect(discussionBudgetStatus({
       accepted_at: new Date(START).toISOString(),
@@ -114,6 +119,14 @@ describe("discussion budget profiles", () => {
       budget_profile: "quick",
       budget: resolveDiscussionBudget("standard"),
     })).toBe("standard");
+    expect(discussionBudgetStatus({
+      budget_profile: "standard",
+      phase: "preparing",
+    }, START)).toMatchObject({
+      profile: "standard",
+      source: "pending",
+      total_ms: null,
+    });
   });
 });
 

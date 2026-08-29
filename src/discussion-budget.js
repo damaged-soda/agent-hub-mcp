@@ -18,7 +18,7 @@ const MINUTE_MS = 60 * 1000;
 const PROFILE_DEFINITIONS = Object.freeze({
   quick: profile("quick", {
     total_minutes: 30,
-    repair_min_minutes: 2,
+    repair_min_minutes: 1,
     minimum_minutes: {
       independent: 10,
       moderating: 3,
@@ -27,7 +27,7 @@ const PROFILE_DEFINITIONS = Object.freeze({
       synthesizing: 5,
     },
     maximum_minutes: {
-      independent: 15,
+      independent: 10,
       moderating: 5,
       challenge: 10,
       revision: 10,
@@ -36,7 +36,7 @@ const PROFILE_DEFINITIONS = Object.freeze({
   }),
   standard: profile("standard", {
     total_minutes: 60,
-    repair_min_minutes: 5,
+    repair_min_minutes: 1.5,
     minimum_minutes: {
       independent: 15,
       moderating: 5,
@@ -54,7 +54,7 @@ const PROFILE_DEFINITIONS = Object.freeze({
   }),
   research: profile("research", {
     total_minutes: 90,
-    repair_min_minutes: 8,
+    repair_min_minutes: 2,
     minimum_minutes: {
       independent: 25,
       moderating: 8,
@@ -63,7 +63,7 @@ const PROFILE_DEFINITIONS = Object.freeze({
       synthesizing: 15,
     },
     maximum_minutes: {
-      independent: 40,
+      independent: 37,
       moderating: 15,
       challenge: 30,
       revision: 25,
@@ -136,7 +136,7 @@ export function discussionBudgetStatus(state, now = Date.now()) {
     : null;
   return {
     profile: storedBudget?.profile ?? state?.budget_profile ?? "legacy",
-    source: storedBudget?.source ?? "legacy",
+    source: storedBudget?.source ?? (state?.budget_profile ? "pending" : "legacy"),
     total_ms: totalMs,
     repair_min_ms: storedBudget?.repair_min_ms ?? 0,
     elapsed_ms: elapsedMs,
@@ -164,9 +164,19 @@ function profile(name, input) {
   if (sumPhaseMap(minimums) > totalMs) {
     throw new Error("Discussion phase minimums exceed the total budget");
   }
+  const repairMinMs = input.repair_min_minutes * MINUTE_MS;
+  if (repairMinMs >= Math.min(...Object.values(minimums))) {
+    throw new Error("Discussion repair minimum must be below every phase minimum");
+  }
   for (const phase of DISCUSSION_PHASES) {
     if (maximums[phase] < minimums[phase]) {
       throw new Error(`Discussion phase maximum is below its minimum: ${phase}`);
+    }
+    const index = DISCUSSION_PHASES.indexOf(phase);
+    const futureReserve = DISCUSSION_PHASES.slice(index + 1)
+      .reduce((sum, later) => sum + minimums[later], 0);
+    if (maximums[phase] > totalMs - futureReserve) {
+      throw new Error(`Discussion phase maximum exceeds its absolute cutoff: ${phase}`);
     }
   }
   return Object.freeze({
@@ -174,7 +184,7 @@ function profile(name, input) {
     profile: name,
     source: "profile",
     total_ms: totalMs,
-    repair_min_ms: input.repair_min_minutes * MINUTE_MS,
+    repair_min_ms: repairMinMs,
     phase_minimums_ms: Object.freeze(minimums),
     phase_maximums_ms: Object.freeze(maximums),
   });
@@ -214,11 +224,26 @@ function validateBudget(budget) {
   if (sumPhaseMap(minimums) > budget.total_ms) {
     throw codedError("invalid_discussion_budget", "Discussion phase minimums exceed total budget");
   }
+  if (budget.repair_min_ms >= Math.min(...Object.values(minimums))) {
+    throw codedError(
+      "invalid_discussion_budget",
+      "Discussion repair minimum must be below every phase minimum",
+    );
+  }
   for (const phase of DISCUSSION_PHASES) {
     if (maximums[phase] < minimums[phase]) {
       throw codedError(
         "invalid_discussion_budget",
         `Discussion phase maximum is below its minimum: ${phase}`,
+      );
+    }
+    const index = DISCUSSION_PHASES.indexOf(phase);
+    const futureReserve = DISCUSSION_PHASES.slice(index + 1)
+      .reduce((sum, later) => sum + minimums[later], 0);
+    if (maximums[phase] > budget.total_ms - futureReserve) {
+      throw codedError(
+        "invalid_discussion_budget",
+        `Discussion phase maximum exceeds its absolute cutoff: ${phase}`,
       );
     }
   }

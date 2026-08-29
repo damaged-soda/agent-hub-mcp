@@ -227,7 +227,7 @@ describe("MCP flow", () => {
       expect(completed.structuredContent.budget_status).toMatchObject({
         profile: "research",
         total_ms: 90 * 60 * 1000,
-        repair_min_ms: 8 * 60 * 1000,
+        repair_min_ms: 2 * 60 * 1000,
       });
       expect(completed.structuredContent.run_refs).toHaveLength(8);
       expect(completed.structuredContent.decision.recommendation.summary).toBe("string");

@@ -226,7 +226,7 @@ describe("discussion manager lifecycle", () => {
       profile: "standard",
       source: "profile",
       total_ms: 60 * 60 * 1000,
-      repair_min_ms: 5 * 60 * 1000,
+      repair_min_ms: 1.5 * 60 * 1000,
     });
     expect(Date.parse(state.deadline_at) - Date.parse(state.accepted_at)).toBe(60 * 60 * 1000);
     expect(
@@ -239,19 +239,30 @@ describe("discussion manager lifecycle", () => {
   });
 
   it("skips a format repair that cannot receive its minimum budget", async () => {
-    const fake = createFakeRunApi({ hold: false, invalid_first: true });
+    let now = Date.now();
+    let advanced = false;
+    const fake = createFakeRunApi({
+      hold: false,
+      invalid_first: true,
+      on_query: (record) => {
+        if (record.sequence === 1 && !advanced) {
+          advanced = true;
+          now += 650;
+        }
+      },
+    });
     const budget = resolveDiscussionBudget("standard");
-    budget.total_ms = 2000;
-    budget.repair_min_ms = 1700;
+    budget.total_ms = 1500;
+    budget.repair_min_ms = 100;
     budget.phase_minimums_ms = {
       independent: 200,
-      moderating: 100,
-      challenge: 100,
-      revision: 100,
-      synthesizing: 100,
+      moderating: 200,
+      challenge: 200,
+      revision: 200,
+      synthesizing: 200,
     };
     budget.phase_maximums_ms = {
-      independent: 1600,
+      independent: 700,
       moderating: 500,
       challenge: 500,
       revision: 500,
@@ -262,6 +273,7 @@ describe("discussion manager lifecycle", () => {
       poll_interval_ms: 5,
       wait_window_ms: 5000,
       budget_override: budget,
+      now: () => now,
     });
     await manager.start();
     const accepted = await manager.dispatch(newRequest(workspace));
@@ -365,7 +377,11 @@ function createFakeRunApi(options) {
           session_generation: record.session_generation,
         };
       },
-      query: async ({ run_ref: runRef }) => snapshot(records.get(runRef.run_id)),
+      query: async ({ run_ref: runRef }) => {
+        const record = records.get(runRef.run_id);
+        options.on_query?.(record);
+        return snapshot(record);
+      },
       cancel: async ({ run_ref: runRef }) => {
         const record = records.get(runRef.run_id);
         cancelled.add(runRef.run_id);

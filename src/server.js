@@ -222,7 +222,7 @@ function registerDiscussionTools(server, manager) {
     {
       title: "Dispatch Discussion",
       description:
-        "Start a fixed-protocol multi-agent discussion. New requests may choose quick, standard (default), or research budget profiles; follow-ups inherit the parent. Participants are selected by the caller during preparation. Runs use adapter-configured best-effort read-only behavior; this is not a security boundary.",
+        "Start a fixed-protocol multi-agent discussion. New requests may choose quick (30-minute), standard (60-minute, default), or research (90-minute) hard budget profiles; follow-ups inherit the parent. Participants are selected by the caller during preparation. Runs use adapter-configured best-effort read-only behavior; this is not a security boundary.",
       inputSchema: DiscussionDispatchInputSchema,
     },
     async (input) => asToolResult(await manager.dispatch(input)),
