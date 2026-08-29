@@ -104,7 +104,16 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "tool-call").data.arguments).toEqual({
       command: "git status --short",
     });
-    expect(events.find((event) => event.kind === "model-call").data.model).toBe("k3");
+    expect(events.find((event) =>
+      event.provenance.native_type === "kimi/usage.record").data).toMatchObject({
+      model: "k3",
+      usage: {
+        inputOther: 10,
+        inputCacheRead: 90,
+        inputCacheCreation: 2,
+        output: 3,
+      },
+    });
   });
 
   it("projects OpenCode exports while excluding reasoning", () => {
