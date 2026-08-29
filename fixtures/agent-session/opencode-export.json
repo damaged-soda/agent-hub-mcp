@@ -56,10 +56,14 @@
         "modelID": "glm-5.3-flash",
         "providerID": "zai-coding-plan",
         "tokens": {
-          "total": 21,
+          "total": 27,
           "input": 16,
           "output": 5,
-          "reasoning": 2
+          "reasoning": 2,
+          "cache": {
+            "read": 3,
+            "write": 1
+          }
         },
         "cost": 0,
         "time": {

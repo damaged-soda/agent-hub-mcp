@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_SESSION_INSPECT_LIMITS,
   AGENT_SESSION_SCHEMA_VERSION,
+  canonicalTokenUsage,
   canonicalProvider,
   createContextObservation,
   createSessionEvent,
@@ -49,6 +50,82 @@ describe("agent session identity", () => {
   it("rejects unsupported providers and unsafe session ids", () => {
     expect(() => canonicalProvider("agenthub")).toThrow(/Unsupported/);
     expect(() => createSessionIdentity("codex", "../escape")).toThrow(/native_session_id/);
+  });
+});
+
+describe("canonical token usage", () => {
+  it("normalizes provider-native accounting without inventing missing values", () => {
+    expect(canonicalTokenUsage("codex", {
+      input_tokens: 100,
+      cached_input_tokens: 70,
+      output_tokens: 40,
+      reasoning_output_tokens: 25,
+    })).toEqual({
+      input_total_tokens: 100,
+      input_new_tokens: 30,
+      input_cache_read_tokens: 70,
+      input_cache_write_tokens: 0,
+      output_total_tokens: 40,
+      output_visible_tokens: 15,
+      reasoning_tokens: 25,
+      reasoning_relation: "subset",
+    });
+    expect(canonicalTokenUsage("claude-code", {
+      input_tokens: 10,
+      cache_read_input_tokens: 80,
+      cache_creation_input_tokens: 5,
+      output_tokens: 20,
+      reasoning_tokens: 12,
+    })).toEqual({
+      input_total_tokens: 95,
+      input_new_tokens: 15,
+      input_cache_read_tokens: 80,
+      input_cache_write_tokens: 5,
+      output_total_tokens: 20,
+      output_visible_tokens: 8,
+      reasoning_tokens: 12,
+      reasoning_relation: "subset",
+    });
+    expect(canonicalTokenUsage("kimi-code", {
+      inputOther: 10,
+      inputCacheRead: 90,
+      inputCacheCreation: 2,
+      output: 3,
+    })).toEqual({
+      input_total_tokens: 102,
+      input_new_tokens: 12,
+      input_cache_read_tokens: 90,
+      input_cache_write_tokens: 2,
+      output_total_tokens: 3,
+      output_visible_tokens: null,
+      reasoning_tokens: null,
+      reasoning_relation: "unavailable",
+    });
+    expect(canonicalTokenUsage("opencode", {
+      input_tokens: 16,
+      cache_read_tokens: 3,
+      cache_write_tokens: 1,
+      output_tokens: 5,
+      reasoning_tokens: 2,
+    })).toEqual({
+      input_total_tokens: 20,
+      input_new_tokens: 17,
+      input_cache_read_tokens: 3,
+      input_cache_write_tokens: 1,
+      output_total_tokens: 7,
+      output_visible_tokens: 5,
+      reasoning_tokens: 2,
+      reasoning_relation: "additive",
+    });
+    expect(canonicalTokenUsage("codex", {
+      input_tokens: 10,
+      output_tokens: 3,
+    })).toMatchObject({
+      input_new_tokens: null,
+      input_cache_read_tokens: null,
+      output_visible_tokens: null,
+      reasoning_tokens: null,
+    });
   });
 });
 

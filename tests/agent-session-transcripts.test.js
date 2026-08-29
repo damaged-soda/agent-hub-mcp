@@ -39,6 +39,16 @@ describe("native transcript projections", () => {
       },
     });
     expect(modelCalls[0].data.usage).not.toHaveProperty("total_tokens");
+    expect(modelCalls[0].data.canonical_usage).toEqual({
+      input_total_tokens: 19,
+      input_new_tokens: 14,
+      input_cache_read_tokens: 5,
+      input_cache_write_tokens: 3,
+      output_total_tokens: 7,
+      output_visible_tokens: 5,
+      reasoning_tokens: 2,
+      reasoning_relation: "subset",
+    });
     expect(modelCalls[0].occurred_at).toBe("2026-08-26T10:00:01.100Z");
     expect(JSON.stringify(events)).not.toContain("hidden reasoning");
   });
@@ -90,6 +100,8 @@ describe("native transcript projections", () => {
       effort: "high",
       usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 },
     });
+    expect(events.find((event) => event.kind === "model-call").data.canonical_usage)
+      .toMatchObject({ output_total_tokens: 3, reasoning_relation: "subset" });
   });
 
   it("projects Kimi profile/tool snapshots and transcript events", () => {
@@ -115,6 +127,17 @@ describe("native transcript projections", () => {
       },
     });
     expect(events.find((event) =>
+      event.provenance.native_type === "kimi/usage.record").data.canonical_usage).toEqual({
+      input_total_tokens: 102,
+      input_new_tokens: 12,
+      input_cache_read_tokens: 90,
+      input_cache_write_tokens: 2,
+      output_total_tokens: 3,
+      output_visible_tokens: null,
+      reasoning_tokens: null,
+      reasoning_relation: "unavailable",
+    });
+    expect(events.find((event) =>
       event.provenance.native_type === "kimi/context.append_loop_event" &&
       event.kind === "model-call").data).toMatchObject({
       status: "completed",
@@ -128,7 +151,7 @@ describe("native transcript projections", () => {
     });
   });
 
-  it("projects OpenCode exports while excluding reasoning", () => {
+  it("projects OpenCode exports while excluding reasoning content", () => {
     const events = projectNativeTranscript("opencode", fixture("opencode-export.json"));
     expect(events.find((event) => event.kind === "context").data).toMatchObject({
       cwd: "/workspace/example",
@@ -151,11 +174,33 @@ describe("native transcript projections", () => {
       output: "clean\n",
     });
     expect(events.find((event) => event.kind === "model-call").data.usage).toMatchObject({
-      total_tokens: 21,
+      total_tokens: 27,
       input_tokens: 16,
       output_tokens: 5,
+      reasoning_tokens: 2,
+      cache_read_tokens: 3,
+      cache_write_tokens: 1,
+    });
+    expect(events.find((event) => event.kind === "model-call").data.canonical_usage).toEqual({
+      input_total_tokens: 20,
+      input_new_tokens: 17,
+      input_cache_read_tokens: 3,
+      input_cache_write_tokens: 1,
+      output_total_tokens: 7,
+      output_visible_tokens: 5,
+      reasoning_tokens: 2,
+      reasoning_relation: "additive",
     });
     expect(JSON.stringify(events)).not.toContain("hidden OpenCode reasoning");
+  });
+
+  it("ignores non-turn Kimi usage records", () => {
+    const events = projectNativeTranscript("kimi", [{
+      type: "usage.record",
+      usageScope: "session",
+      usage: { inputOther: 10, inputCacheRead: 20, inputCacheCreation: 1, output: 2 },
+    }], { native_session_id: "session_437f4ac7-19f4-472b-be3c-a87be0f41419" });
+    expect(events).toEqual([]);
   });
 
   it("keeps OpenCode session and message refs stable across mutable usage totals", () => {
