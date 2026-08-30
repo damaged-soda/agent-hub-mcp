@@ -55,19 +55,20 @@ Use `agenthub run` only for short tasks. Prefer `dispatch` plus `wait` for revie
 
 ## Run a repository evaluation
 
-When the user asks to run a repository-owned code-navigation eval, use the single interactive
-command from the clean target worktree root:
+When the user asks to run a repository-owned code-navigation or patch eval, use the single
+interactive command from the clean target worktree root:
 
 ```sh
 agenthub eval run --agent codex --cwd "$PWD"
 ```
 
-The repository must provide `.agenthub/evals.json` questions without answers. The command collects
-the human standard `path`, `symbol`, and `definition_line` values before launching any case and
-keeps them outside child prompts and artifacts. Do not create an answer file or work around
-`unsupported_isolation`: Eval V1 requires Codex CLI 0.151.0 or newer and the enforced
-`workspace-readonly/v1` profile. Agent Hub produces one run result; comparison across commits or
-worktrees belongs to the caller.
+The repository must provide `.agenthub/evals.json` questions without answers. Schema v1 collects
+the human standard `path`, `symbol`, and `definition_line` values and enforces
+`workspace-readonly/v1`. Schema v2 collects one external executable verifier path per case, runs
+the agent in a disposable detached worktree under `workspace-write/v1`, and invokes the verifier
+only after the agent exits. Standards stay outside child prompts and artifacts. Do not create an
+answer file or work around `unsupported_isolation`: Eval requires Codex CLI 0.151.0 or newer. Agent
+Hub produces one run result; comparison across commits or worktrees belongs to the caller.
 
 ## Continue a session
 

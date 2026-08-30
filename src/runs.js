@@ -42,6 +42,10 @@ import {
 } from "./session-registry.js";
 
 const CANCEL_GRACE_MS = 10000;
+const INTERNAL_EXECUTION_PROFILES = new Set([
+  "workspace-readonly/v1",
+  "workspace-write/v1",
+]);
 
 export async function listAgents(input = {}, internal = {}) {
   await cleanupExpiredRuns();
@@ -84,7 +88,7 @@ async function normalizeExecutionProfile(value, agentId, cwd) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Internal execution_profile must be an object");
   }
-  if (value.kind !== "workspace-readonly/v1") {
+  if (!INTERNAL_EXECUTION_PROFILES.has(value.kind)) {
     throw new Error(`Unsupported internal execution_profile: ${value.kind}`);
   }
   if (agentId !== "codex") {

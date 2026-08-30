@@ -152,6 +152,84 @@ process.exitCode = await main(process.argv.slice(2), io);
     expect(await allText(evalDir)).not.toContain(secretSymbol);
   }, 20000);
 
+  it("runs a patch case in a disposable worktree and grades it with a hidden verifier", async () => {
+    await fsp.writeFile(
+      path.join(workspace, ".agenthub", "evals.json"),
+      `${JSON.stringify({
+        schema_version: 2,
+        suite_id: "patch-eval",
+        cases: [{
+          id: "change-target",
+          prompt: "Change locateTarget so it returns the string changed.",
+          answer_schema: "workspace-patch/v1",
+        }],
+      }, null, 2)}\n`,
+    );
+    await git(workspace, "add", ".");
+    await git(workspace, "commit", "-m", "patch suite");
+    const hookMarker = path.join(root, "post-checkout-called");
+    const gitDir = (await git(workspace, "rev-parse", "--git-dir")).stdout.trim();
+    const hook = path.join(workspace, gitDir, "hooks", "post-checkout");
+    await fsp.writeFile(
+      hook,
+      `#!/bin/sh\nprintf called > ${JSON.stringify(hookMarker)}\n`,
+      { mode: 0o700 },
+    );
+    await fsp.chmod(hook, 0o700);
+    const verifierDir = path.join(root, "verifiers");
+    const verifier = path.join(verifierDir, "hidden-patch-verifier");
+    await fsp.mkdir(verifierDir);
+    await fsp.writeFile(
+      verifier,
+      `#!/bin/sh\n# human-only-verifier-secret\n` +
+        `if [ "$0" = ${JSON.stringify(verifier)} ]; then exit 9; fi\n` +
+        "grep -q '\"changed\"' src/app.js\n",
+      { mode: 0o700 },
+    );
+    await fsp.chmod(verifier, 0o700);
+
+    const original = await fsp.readFile(path.join(workspace, "src", "app.js"), "utf8");
+    const result = await invokeEval([verifier]);
+
+    expect(result).toMatchObject({
+      schema_version: 2,
+      grader_version: "workspace-patch/v1",
+      isolation: {
+        policy: "workspace-write/v1",
+        git_history: false,
+        memory: "off",
+      },
+      summary: { pass: 1, fail: 0, error: 0 },
+    });
+    expect(result.cases[0]).toMatchObject({
+      status: "pass",
+      reason: "verifier_passed",
+      metrics: {
+        patch: {
+          status: "available",
+          changed_files: 1,
+          modified_files: 1,
+        },
+        verifier: { status: "passed", exit_code: 0 },
+      },
+    });
+    expect(result.cases[0].metrics.patch.patch_digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(await fsp.readFile(path.join(workspace, "src", "app.js"), "utf8")).toBe(original);
+    await expect(fsp.access(hookMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await allText(runDir)).not.toContain(verifier);
+    expect(await allText(evalDir)).not.toContain(verifier);
+    expect(await allText(runDir)).not.toContain("human-only-verifier-secret");
+    expect(await allText(evalDir)).not.toContain("human-only-verifier-secret");
+    const command = JSON.parse(await fsp.readFile(
+      path.join(runDir, result.cases[0].agent_run_ref.run_id, "command.json"),
+      "utf8",
+    ));
+    expect(command.argv.find((item) => item.startsWith("permissions.agenthub-eval=")))
+      .toContain('":workspace_roots" = { "." = "write"');
+    expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
+      .toEqual([]);
+  }, 20000);
+
   it("fails before collecting answers when the provider cannot enforce the whitelist", async () => {
     const failure = await invokeEvalFailure([], "claude-code");
     expect(failure).toEqual({
@@ -208,6 +286,7 @@ async function writeFakeCodex(target) {
   await fsp.writeFile(
     target,
     `#!/usr/bin/env node
+const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("codex-cli 0.151.0\\n");
@@ -230,7 +309,13 @@ let input = "";
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   const threadId = "019f38ae-357d-7db3-89fb-670f88316240";
-  const output = JSON.stringify({ path: "src/app.js", symbol: "locateTarget", definition_line: 1 });
+  const patchEval = input.includes("Implement the requested change");
+  if (patchEval) {
+    fs.writeFileSync("src/app.js", 'export function locateTarget() { return "changed"; }\\n');
+  }
+  const output = patchEval
+    ? JSON.stringify({ status: "completed" })
+    : JSON.stringify({ path: "src/app.js", symbol: "locateTarget", definition_line: 1 });
   const events = [
     { type: "thread.started", thread_id: threadId },
     { type: "turn.started" },

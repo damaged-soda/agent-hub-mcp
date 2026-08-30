@@ -240,11 +240,14 @@ AGENT_HUB_EVAL_DIR=/tmp/agent-hub-evals \
 agenthub eval run --agent codex --cwd "$PWD"
 ```
 
-The CLI must ask for `path`, `symbol`, and `definition_line` before starting any case. Confirm the
-result reports `isolation.policy = "workspace-readonly/v1"`, the backing run's `command.json`
-contains `--ephemeral` and a `permissions.agenthub-eval` inline profile, and it does not contain
-`--sandbox`. A non-Codex provider or Codex older than 0.151.0 must fail with
-`unsupported_isolation`; do not work around that error with a broader permission mode.
+For a schema v1 suite, the CLI must ask for `path`, `symbol`, and `definition_line` before starting
+any case. Confirm the result reports `isolation.policy = "workspace-readonly/v1"`. For a schema v2
+suite, supply an executable verifier outside the evaluated repository and confirm the result reports
+`workspace-write/v1`, a patch digest, and verifier exit status while the original worktree remains
+clean. In both modes, the backing run's `command.json` must contain `--ephemeral` and a
+`permissions.agenthub-eval` inline profile, and it must not contain `--sandbox`. A non-Codex
+provider or Codex older than 0.151.0 must fail with `unsupported_isolation`; do not work around
+that error with a broader permission mode.
 
 ## Discussion Smoke Test
 

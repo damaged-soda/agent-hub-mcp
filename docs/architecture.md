@@ -204,9 +204,15 @@ command network 关闭。同时使用 ephemeral session、忽略用户 config/ru
 subagent。profile 路径在普通 run 建立前 realpath 校验，scratch 必须与 cwd 分离且 output
 schema 必须位于 scratch 内。
 
-V1 只接受 `source-location/v1` 并做 `path + symbol + definition_line` 精确匹配。Agent
-Hub 持有一次 eval 的执行与判分事实，不做跨 commit 比较；完整契约见
-[evals.md](evals.md)。
+suite schema v1 只接受 `source-location/v1` 并做
+`path + symbol + definition_line` 精确匹配。schema v2 的 `workspace-patch/v1` 为每个 case
+从 subject commit 创建 disposable detached worktree，使用同一套 fail-closed profile 但仅把
+该副本改为可写；worktree add 显式覆盖到私有空 `core.hooksPath`，不触发仓库 checkout hook；
+人工提供的外置 self-contained executable verifier 在 agent 退出后才由前台 supervisor
+复制到从未授予 agent 的新私有目录并执行，原路径、正文与输出均不进入 agent run。patch eval 另把前台探测到的 system Python
+runtime root 只读开放给 agent，使仓库测试不必扩大到用户目录；patch 正文不进入 eval result，
+普通 run 仍按既有 TTL 保留 provider-native tool transcript。Agent Hub 持有一次 eval 的执行与
+判分事实，不做跨 commit 比较；完整契约见 [evals.md](evals.md)。
 
 ### dispatch_to_agent
 

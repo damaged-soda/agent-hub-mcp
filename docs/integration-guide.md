@@ -24,11 +24,12 @@ Repository evaluations are a separate interactive CLI-only surface:
 agenthub eval run --agent codex --cwd "$PWD"
 ```
 
-The command discovers `.agenthub/evals.json` in a clean Git worktree, collects the human standard
-answers through the TTY before dispatching any case, runs one fresh workspace-only Codex session per
-case, and prints one `agent-eval-run` JSON document. It intentionally has no MCP tool, no prepare
-command, and no non-interactive answer-file input. See [Repository evaluations](evals.md) for the
-suite and result contracts.
+The command discovers `.agenthub/evals.json` in a clean Git worktree, collects the human standards
+through the TTY before dispatching any case, runs one fresh workspace-only Codex session per case,
+and prints one `agent-eval-run` JSON document. Source-location suites use the original worktree
+read-only; patch suites edit disposable detached worktrees and execute an external verifier after
+the agent exits. It intentionally has no MCP tool, no prepare command, and no non-interactive
+answer-file input. See [Repository evaluations](evals.md) for the suite and result contracts.
 
 Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.
 
