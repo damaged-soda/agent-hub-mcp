@@ -68,8 +68,9 @@ The verifier must be a self-contained regular executable outside both the evalua
 the agent's runtime read capabilities. Agent Hub pins its content digest in memory and starts the
 case from the subject commit in a fresh detached worktree. Only after the agent exits, the
 supervisor copies the still-matching verifier bytes to a new private directory that was never part
-of the agent permission profile and executes that copy with the disposable worktree as cwd. Exit
-zero passes; a nonzero exit fails. The verifier path, contents, output, and agent patch body are not
+of the agent permission profile under the private Eval state root and executes that copy with the
+disposable worktree as cwd. Exit zero passes; a nonzero exit fails. Verifier stdout/stderr are
+drained without retention or a grading size limit. The verifier path, contents, output, and agent patch body are not
 persisted in the eval result. Only the verifier digest, bounded change metrics, and patch digest are
 retained. The verifier may inject hidden tests before invoking the repository's ordinary test
 entrypoint.
@@ -139,6 +140,18 @@ prefix, and enclosing macOS Command Line Tools root read-only; no Python user si
 or home directory is added. Disposable worktree creation overrides `core.hooksPath` with a private
 empty directory, so repository checkout hooks cannot publish the temporary path or mutate external
 state. Agent Hub records the patch before verifier execution and removes the worktree afterward.
+Patch metric collection is best-effort telemetry: an oversized or otherwise unprojectable patch is
+reported as `patch.status = "unavailable"` but does not skip or override verifier grading. Worktree
+cleanup always attempts both Git deregistration and filesystem removal; a cleanup failure is
+reported to the foreground stderr without replacing the completed case result.
+
+The agent sandbox does not extend to verifier execution. The verifier is evaluator-trusted and may
+execute code written by the agent with the foreground user's filesystem and network authority when
+it invokes repository tests. A background process deliberately left by the agent is another known
+residual risk: Agent Hub does not kill a persisted process group from stored pid metadata because of
+pid-reuse/incorrect-target risk. The verifier copy stays outside the agent permission profile, but
+patch eval is not a hostile-code sandbox. Run it only on repositories and tasks for which executing
+the resulting tests as the current user is acceptable.
 
 ## Result and retention
 

@@ -40,6 +40,7 @@ import {
 import {
   cleanupExpiredEvalResults,
   evalExpiresAt,
+  getEvalRoot,
   writeEvalResult,
 } from "./eval-store.js";
 
@@ -163,7 +164,7 @@ export async function runEval(input, io, internal = {}) {
         "workspace",
         "minimal-runtime",
         "agent-runtime",
-        ...(patchEval ? ["detected-patch-runtime"] : []),
+        ...(patchEval && agent.patch_runtime_detected ? ["detected-patch-runtime"] : []),
         "private-per-case-scratch",
       ],
       data_write: patchEval
@@ -237,15 +238,17 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
       `Effort ${effort} is not supported by model ${model.id}`,
     );
   }
+  const runtime = await codexRuntimeReadPaths(
+    env,
+    executionProfile === PATCH_EVAL_EXECUTION_PROFILE,
+  );
   return {
     agent_id: input.agent_id,
     version: availability.version,
     model: model.id,
     effort,
-    runtime_read_paths: await codexRuntimeReadPaths(
-      env,
-      executionProfile === PATCH_EVAL_EXECUTION_PROFILE,
-    ),
+    runtime_read_paths: runtime.paths,
+    patch_runtime_detected: runtime.patch_runtime_detected,
   };
 }
 
@@ -277,10 +280,12 @@ async function codexRuntimeReadPaths(env, includePatchRuntime = false) {
   if (paths.size === 0) {
     throw evalError("unsupported_isolation", "Codex executable path could not be resolved");
   }
-  if (includePatchRuntime) {
-    for (const item of await pythonRuntimeReadPaths(env)) paths.add(item);
-  }
-  return Array.from(paths).sort();
+  const patchRuntimePaths = includePatchRuntime ? await pythonRuntimeReadPaths(env) : [];
+  for (const item of patchRuntimePaths) paths.add(item);
+  return {
+    paths: Array.from(paths).sort(),
+    patch_runtime_detected: patchRuntimePaths.length > 0,
+  };
 }
 
 async function pythonRuntimeReadPaths(env) {
@@ -513,13 +518,6 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       });
     }
     const metrics = await patchEvalMetrics(accepted.run_ref, snapshot, disposable.workspace);
-    if (metrics.patch?.status !== "available") {
-      return baseCaseResult(item, expected, accepted.run_ref, {
-        status: "error",
-        reason: metrics.patch?.reason ?? "patch_projection_error",
-        metrics,
-      });
-    }
     if (!await verifierUnchanged(expected)) {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "invalid",
@@ -540,7 +538,15 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       metrics,
     });
   } finally {
-    await removeDisposableWorktree(subject.root, disposable);
+    try {
+      await removeDisposableWorktree(subject.root, disposable);
+    } catch (error) {
+      process.stderr.write(`${JSON.stringify({
+        event: "eval_disposable_worktree_cleanup_failed",
+        code: error?.code ?? "eval_cleanup_error",
+        message: error instanceof Error ? error.message : String(error),
+      })}\n`);
+    }
   }
 }
 
@@ -561,7 +567,17 @@ async function patchEvalMetrics(runRef, snapshot, cwd) {
 }
 
 async function runVerifier(expected, cwd, env, timeoutMs) {
-  const verificationRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-eval-verifier-"));
+  const verificationParent = path.join(getEvalRoot(env), ".verifier-scratch");
+  await fsp.mkdir(verificationParent, { recursive: true, mode: 0o700 });
+  await fsp.chmod(verificationParent, 0o700).catch(() => undefined);
+  const realVerificationParent = await fsp.realpath(verificationParent);
+  if (pathIsInside(realVerificationParent, cwd)) {
+    throw evalError(
+      "invalid_eval_storage",
+      "Eval verifier scratch must stay outside the evaluated workspace",
+    );
+  }
+  const verificationRoot = await fsp.mkdtemp(path.join(realVerificationParent, "case-"));
   await fsp.chmod(verificationRoot, 0o700).catch(() => undefined);
   const verifierPath = path.join(verificationRoot, "verifier");
   const verifierTmp = path.join(verificationRoot, "tmp");
@@ -589,7 +605,7 @@ async function runVerifier(expected, cwd, env, timeoutMs) {
         TEMP: verifierTmp,
       },
       timeoutMs,
-      maxOutputBytes: 1024 * 1024,
+      captureOutput: false,
     });
     const metrics = {
       status: result.error ? "error" : result.code === 0 ? "passed" : "failed",
@@ -654,8 +670,38 @@ async function createDisposableWorktree(subject) {
 }
 
 async function removeDisposableWorktree(repository, disposable) {
-  await checkedGit(repository, ["worktree", "remove", "--force", disposable.workspace]);
-  await fsp.rm(disposable.root, { recursive: true, force: true });
+  let gitError = null;
+  let fileError = null;
+  try {
+    await checkedGit(repository, ["worktree", "remove", "--force", disposable.workspace]);
+  } catch (error) {
+    gitError = error;
+  }
+  try {
+    await fsp.rm(disposable.root, { recursive: true, force: true });
+  } catch (error) {
+    fileError = error;
+  }
+  if (gitError) {
+    try {
+      await checkedGit(repository, ["worktree", "remove", "--force", disposable.workspace]);
+      gitError = null;
+    } catch (error) {
+      gitError = error;
+    }
+  }
+  if (gitError && !await worktreeRegistered(repository, disposable.workspace)) {
+    gitError = null;
+  }
+  if (gitError || fileError) {
+    const errors = [gitError, fileError].filter(Boolean).map((error) => error.message);
+    throw evalError("eval_cleanup_error", errors.join("; "));
+  }
+}
+
+async function worktreeRegistered(repository, workspace) {
+  const listed = await checkedGit(repository, ["worktree", "list", "--porcelain"]);
+  return listed.stdout.split("\n").some((line) => line === `worktree ${workspace}`);
 }
 
 async function workspacePatchSummary(cwd) {
@@ -745,7 +791,7 @@ function baseCaseResult(item, expected, runRef, fields) {
     case_id: item.id,
     question_digest: item.question_digest,
     answer_digest: item.answer_schema === WORKSPACE_PATCH_SCHEMA
-      ? expected.content_digest
+      ? answerDigest({ kind: WORKSPACE_PATCH_SCHEMA, verifier_digest: expected.content_digest })
       : answerDigest(expected),
     agent_run_ref: runRef,
     ...fields,
@@ -833,4 +879,9 @@ function summarizeCases(cases, planned) {
 
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
+function pathIsInside(candidate, root) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

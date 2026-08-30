@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -214,6 +215,10 @@ process.exitCode = await main(process.argv.slice(2), io);
       },
     });
     expect(result.cases[0].metrics.patch.patch_digest).toMatch(/^[0-9a-f]{64}$/);
+    const rawVerifierDigest = crypto.createHash("sha256")
+      .update(await fsp.readFile(verifier))
+      .digest("hex");
+    expect(result.cases[0].answer_digest).not.toBe(rawVerifierDigest);
     expect(await fsp.readFile(path.join(workspace, "src", "app.js"), "utf8")).toBe(original);
     await expect(fsp.access(hookMarker)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await allText(runDir)).not.toContain(verifier);
@@ -226,6 +231,47 @@ process.exitCode = await main(process.argv.slice(2), io);
     ));
     expect(command.argv.find((item) => item.startsWith("permissions.agenthub-eval=")))
       .toContain('":workspace_roots" = { "." = "write"');
+    expect(await fsp.readdir(path.join(evalDir, ".verifier-scratch"))).toEqual([]);
+    expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
+      .toEqual([]);
+  }, 20000);
+
+  it("keeps verifier grading independent from patch telemetry and verifier output size", async () => {
+    await fsp.writeFile(
+      path.join(workspace, ".agenthub", "evals.json"),
+      `${JSON.stringify({
+        schema_version: 2,
+        suite_id: "patch-telemetry-eval",
+        cases: [{
+          id: "change-with-unprojectable-patch",
+          prompt: "Change the target and force patch telemetry unavailable.",
+          answer_schema: "workspace-patch/v1",
+        }],
+      }, null, 2)}\n`,
+    );
+    await git(workspace, "add", ".");
+    await git(workspace, "commit", "-m", "patch telemetry suite");
+    const verifierDir = path.join(root, "large-verifier");
+    const verifier = path.join(verifierDir, "verify");
+    await fsp.mkdir(verifierDir);
+    await fsp.writeFile(
+      verifier,
+      "#!/bin/sh\ndd if=/dev/zero bs=1048576 count=2 2>/dev/null\n" +
+        "grep -q '\"changed\"' src/app.js\n",
+      { mode: 0o700 },
+    );
+    await fsp.chmod(verifier, 0o700);
+
+    const result = await invokeEval([verifier]);
+
+    expect(result.cases[0]).toMatchObject({
+      status: "pass",
+      reason: "verifier_passed",
+      metrics: {
+        patch: { status: "unavailable" },
+        verifier: { status: "passed", exit_code: 0 },
+      },
+    });
     expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
       .toEqual([]);
   }, 20000);
@@ -287,6 +333,7 @@ async function writeFakeCodex(target) {
     target,
     `#!/usr/bin/env node
 const fs = require("node:fs");
+const childProcess = require("node:child_process");
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("codex-cli 0.151.0\\n");
@@ -312,6 +359,10 @@ process.stdin.on("end", () => {
   const patchEval = input.includes("Implement the requested change");
   if (patchEval) {
     fs.writeFileSync("src/app.js", 'export function locateTarget() { return "changed"; }\\n');
+    if (input.includes("force patch telemetry unavailable")) {
+      childProcess.execFileSync("git", ["init", "nested"]);
+      fs.writeFileSync("nested/file.txt", "nested\\n");
+    }
   }
   const output = patchEval
     ? JSON.stringify({ status: "completed" })
