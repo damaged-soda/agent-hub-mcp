@@ -6,6 +6,8 @@ import {
   interpretCodexExit,
   parseCodexModelCatalog,
   parseCodexStdout,
+  parseCodexVersion,
+  supportsCodexEvalVersion,
 } from "../src/codex-adapter.js";
 
 const THREAD_ID = "019f38ae-357d-7db3-89fb-670f88316240";
@@ -23,6 +25,13 @@ function successStdout(text = "hello\n") {
 }
 
 describe("codex adapter", () => {
+  it("detects the minimum Codex version required by the eval permission profile", () => {
+    expect(parseCodexVersion("codex-cli 0.151.0")).toEqual([0, 151, 0]);
+    expect(supportsCodexEvalVersion("codex-cli 0.150.9")).toBe(false);
+    expect(supportsCodexEvalVersion("codex-cli 0.151.0")).toBe(true);
+    expect(supportsCodexEvalVersion("unexpected")).toBe(false);
+  });
+
   it("normalizes visible models and excludes hidden catalog entries", () => {
     const models = parseCodexModelCatalog(
       JSON.stringify({
@@ -119,6 +128,72 @@ describe("codex adapter", () => {
       "-",
     ]);
     expect(command.output_format).toBe("jsonl");
+  });
+
+  it("builds an ephemeral workspace-only eval profile without legacy sandbox flags", () => {
+    const command = buildCodexCommand({
+      request: {
+        prompt: "find it",
+        metadata: { model: "gpt-visible", codex: { effort: "medium" } },
+        resolved_metadata: {
+          model: "gpt-visible",
+          codex: { effort: "medium", add_dirs: [] },
+        },
+        execution_profile: {
+          kind: "workspace-readonly/v1",
+          scratch_path: "/private/tmp/agenthub-eval-case-test",
+          output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+          runtime_read_paths: ["/opt/homebrew/bin/codex"],
+        },
+      },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: {},
+    });
+
+    expect(command.argv).toContain("--ephemeral");
+    expect(command.argv).toContain("--ignore-user-config");
+    expect(command.argv).toContain("--ignore-rules");
+    expect(command.argv).toContain("--output-schema");
+    expect(command.argv).not.toContain("--sandbox");
+    expect(command.argv).not.toContain("--ask-for-approval");
+    expect(command.argv).toContain('default_permissions="agenthub-eval"');
+    expect(command.argv).toContain('approval_policy="never"');
+    const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
+    expect(profile).toContain('":minimal" = "read"');
+    expect(profile).toContain('".git" = "deny"');
+    expect(profile).toContain('"/private/tmp/agenthub-eval-case-test" = "write"');
+    expect(profile).toContain('"/opt/homebrew/bin/codex" = "read"');
+    expect(profile).toContain("network = { enabled = false }");
+  });
+
+  it("rejects eval profile permission overrides and session resume", () => {
+    const executionProfile = {
+      kind: "workspace-readonly/v1",
+      scratch_path: "/private/tmp/agenthub-eval-case-test",
+      output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+      runtime_read_paths: ["/opt/homebrew/bin/codex"],
+    };
+    expect(() => buildCodexCommand({
+      request: {
+        metadata: { permission: "full" },
+        resolved_metadata: { permission: "full", codex: { add_dirs: [] } },
+        execution_profile: executionProfile,
+      },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: {},
+    })).toThrow(/owns sandbox/);
+    expect(() => buildCodexCommand({
+      request: {
+        metadata: {},
+        resolved_metadata: { codex: { add_dirs: [] } },
+        execution_profile: executionProfile,
+      },
+      effectiveCliSessionRef: createCodexSessionRef({
+        agent_id: "codex",
+        native_session_id: THREAD_ID,
+      }),
+      env: {},
+    })).toThrow(/cannot resume/);
   });
 
   it("defaults to auto permission: workspace-write with network access", () => {

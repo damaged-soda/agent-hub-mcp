@@ -1,6 +1,6 @@
 ---
 name: agent-hub
-description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and OpenCode processes through the daemon-free agenthub CLI, and resolve copied agenthub:// session or event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, continue or inspect a native CLI session, resolve an Agent Hub reference, or participate in a durable structured discussion.
+description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and OpenCode processes through the daemon-free agenthub CLI, run repository-owned coding-agent evaluations, and resolve copied agenthub:// session or event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, evaluate code navigation, continue or inspect a native CLI session, resolve an Agent Hub reference, or participate in a durable structured discussion.
 ---
 
 # Agent Hub
@@ -52,6 +52,22 @@ shown or diagnosed.
 If a wait result has `timed_out: true`, call `agenthub wait RUN_ID` again. Do not treat a timeout as failure and do not cancel unless the user asks to stop.
 
 Use `agenthub run` only for short tasks. Prefer `dispatch` plus `wait` for reviews, investigations, and edits.
+
+## Run a repository evaluation
+
+When the user asks to run a repository-owned code-navigation eval, use the single interactive
+command from the clean target worktree root:
+
+```sh
+agenthub eval run --agent codex --cwd "$PWD"
+```
+
+The repository must provide `.agenthub/evals.json` questions without answers. The command collects
+the human standard `path`, `symbol`, and `definition_line` values before launching any case and
+keeps them outside child prompts and artifacts. Do not create an answer file or work around
+`unsupported_isolation`: Eval V1 requires Codex CLI 0.151.0 or newer and the enforced
+`workspace-readonly/v1` profile. Agent Hub produces one run result; comparison across commits or
+worktrees belongs to the caller.
 
 ## Continue a session
 

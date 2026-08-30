@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { questionUntilClosed } from "../src/cli.js";
 
 const CLI_PATH = path.resolve("src/cli.js");
 
@@ -37,6 +39,14 @@ describe("agenthub CLI", () => {
       maxRetries: 10,
       retryDelay: 50,
     });
+  });
+
+  it("fails an interactive eval question when stdin closes", async () => {
+    const promptInterface = new EventEmitter();
+    promptInterface.question = () => new Promise(() => undefined);
+    const pending = questionUntilClosed(promptInterface, "standard path: ");
+    promptInterface.emit("close");
+    await expect(pending).rejects.toMatchObject({ code: "interactive_eval_required" });
   });
 
   it("dispatches and waits across separate CLI processes", async () => {
