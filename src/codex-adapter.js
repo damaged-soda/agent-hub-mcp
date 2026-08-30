@@ -248,10 +248,21 @@ function appendEvalProfileArgs(argv, profile) {
   if (!isInside(outputSchemaPath, scratchPath)) {
     throw new Error("execution_profile.output_schema_path must be inside scratch_path");
   }
+  if (!Array.isArray(profile.runtime_read_paths) || profile.runtime_read_paths.length === 0) {
+    throw new Error("execution_profile.runtime_read_paths must be a non-empty array");
+  }
+  const runtimeRules = profile.runtime_read_paths.map((item, index) => {
+    const runtimePath = absoluteProfilePath(
+      item,
+      `execution_profile.runtime_read_paths[${index}]`,
+    );
+    return `${JSON.stringify(runtimePath)} = "read"`;
+  });
   const permissionProfile = [
     '{ description = "Agent Hub workspace-only evaluation"',
     'filesystem = { ":minimal" = "read"',
     '":workspace_roots" = { "." = "read", ".git" = "deny", ".git/**" = "deny" }',
+    ...runtimeRules,
     `${JSON.stringify(scratchPath)} = "write" }`,
     "network = { enabled = false } }",
   ].join(", ");
@@ -260,8 +271,6 @@ function appendEvalProfileArgs(argv, profile) {
     "--ignore-user-config",
     "--ignore-rules",
     "--strict-config",
-    "--ask-for-approval",
-    "never",
     "--disable",
     "memories",
     "--disable",
@@ -274,6 +283,8 @@ function appendEvalProfileArgs(argv, profile) {
     outputSchemaPath,
     "-c",
     'default_permissions="agenthub-eval"',
+    "-c",
+    'approval_policy="never"',
     "-c",
     `permissions.agenthub-eval=${permissionProfile}`,
   );

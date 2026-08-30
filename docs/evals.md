@@ -80,8 +80,8 @@ The `workspace-readonly/v1` profile is fail-closed:
 - Each case starts a new non-resumed, ephemeral Codex session.
 - Codex user configuration and exec rules are ignored for the case.
 - Codex memories, external memory import, and subagents are disabled.
-- Codex permission profiles expose only `:minimal` runtime paths and the current workspace as
-  read-only data.
+- Codex permission profiles expose only `:minimal` runtime paths, the resolved Codex executable
+  directories (including its standalone runtime root), and the current workspace as read-only data.
 - `.git` is denied inside the workspace, so linked worktree pointers and repository history are not
   agent-readable.
 - A new private scratch directory is the only writable path and is removed after the case.

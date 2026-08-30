@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildEvalPrompt,
+  canonicalizeExistingSourceLocation,
   cleanWorkspaceSnapshot,
   gradeSourceLocation,
   loadEvalSuite,
@@ -73,6 +74,14 @@ describe("eval protocol", () => {
       symbol: "target",
       definition_line: 1,
     }, root)).rejects.toMatchObject({ code: "invalid_eval_answer" });
+
+    await fsp.symlink("app.js", path.join(root, "src", "alias.js"));
+    const alias = await canonicalizeExistingSourceLocation({
+      path: "src/alias.js",
+      symbol: "target",
+      definition_line: 1,
+    }, root);
+    expect(alias.path).toBe("src/app.js");
   });
 
   it("pins evaluation to a clean Git commit", async () => {

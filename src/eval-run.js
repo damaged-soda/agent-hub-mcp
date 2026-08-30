@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -20,6 +21,7 @@ import {
   SOURCE_LOCATION_GRADER_VERSION,
   answerDigest,
   buildEvalPrompt,
+  canonicalizeExistingSourceLocation,
   cleanWorkspaceSnapshot,
   evalError,
   gradeSourceLocation,
@@ -123,7 +125,12 @@ export async function runEval(input, io, internal = {}) {
     isolation: {
       policy: EVAL_EXECUTION_PROFILE,
       enforcement: "codex-permission-profile",
-      data_read: ["workspace", "minimal-runtime", "private-per-case-scratch"],
+      data_read: [
+        "workspace",
+        "minimal-runtime",
+        "agent-runtime",
+        "private-per-case-scratch",
+      ],
       data_write: ["private-per-case-scratch"],
       git_history: false,
       tool_network: false,
@@ -196,7 +203,49 @@ async function resolveEvalAgent(input, cwd, env) {
     version: availability.version,
     model: model.id,
     effort,
+    runtime_read_paths: await codexRuntimeReadPaths(env),
   };
+}
+
+async function codexRuntimeReadPaths(env) {
+  const codeHome = path.resolve(env.CODEX_HOME ?? path.join(env.HOME ?? os.homedir(), ".codex"));
+  const candidates = [
+    ...String(env.PATH ?? "")
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((entry) => path.resolve(entry, "codex")),
+    path.join(env.HOME ?? os.homedir(), ".local", "bin", "codex"),
+    path.join(codeHome, "bin", "codex"),
+    path.join(codeHome, "packages", "standalone", "current", "bin", "codex"),
+  ];
+  const paths = new Set();
+  for (const candidate of candidates) {
+    try {
+      await fsp.access(candidate, fsConstants.X_OK);
+      const lexical = path.resolve(candidate);
+      const real = await fsp.realpath(candidate);
+      paths.add(path.dirname(lexical));
+      paths.add(path.dirname(real));
+      const standaloneRoot = ancestorNamed(real, "standalone");
+      if (standaloneRoot) paths.add(standaloneRoot);
+    } catch {
+      // Only existing executable candidates become runtime capabilities.
+    }
+  }
+  if (paths.size === 0) {
+    throw evalError("unsupported_isolation", "Codex executable path could not be resolved");
+  }
+  return Array.from(paths).sort();
+}
+
+function ancestorNamed(value, name) {
+  let current = path.resolve(value);
+  while (true) {
+    if (path.basename(current) === name) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
 }
 
 async function collectAnswers(suite, cwd, io) {
@@ -250,6 +299,7 @@ async function runCase({ item, expected, cwd, agent, timeoutMs }) {
           kind: EVAL_EXECUTION_PROFILE,
           scratch_path: scratchPath,
           output_schema_path: schemaPath,
+          runtime_read_paths: agent.runtime_read_paths,
         },
       },
     );
@@ -279,7 +329,10 @@ async function runCase({ item, expected, cwd, agent, timeoutMs }) {
     }
     let actual;
     try {
-      actual = parseSourceLocationOutput(snapshot.content?.[0]?.text ?? "");
+      actual = await canonicalizeExistingSourceLocation(
+        parseSourceLocationOutput(snapshot.content?.[0]?.text ?? ""),
+        cwd,
+      );
     } catch (error) {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "fail",

@@ -143,6 +143,7 @@ describe("codex adapter", () => {
           kind: "workspace-readonly/v1",
           scratch_path: "/private/tmp/agenthub-eval-case-test",
           output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+          runtime_read_paths: ["/opt/homebrew/bin/codex"],
         },
       },
       effectiveCliSessionRef: createCodexSessionRef(null),
@@ -154,11 +155,14 @@ describe("codex adapter", () => {
     expect(command.argv).toContain("--ignore-rules");
     expect(command.argv).toContain("--output-schema");
     expect(command.argv).not.toContain("--sandbox");
+    expect(command.argv).not.toContain("--ask-for-approval");
     expect(command.argv).toContain('default_permissions="agenthub-eval"');
+    expect(command.argv).toContain('approval_policy="never"');
     const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
     expect(profile).toContain('":minimal" = "read"');
     expect(profile).toContain('".git" = "deny"');
     expect(profile).toContain('"/private/tmp/agenthub-eval-case-test" = "write"');
+    expect(profile).toContain('"/opt/homebrew/bin/codex" = "read"');
     expect(profile).toContain("network = { enabled = false }");
   });
 
@@ -167,6 +171,7 @@ describe("codex adapter", () => {
       kind: "workspace-readonly/v1",
       scratch_path: "/private/tmp/agenthub-eval-case-test",
       output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+      runtime_read_paths: ["/opt/homebrew/bin/codex"],
     };
     expect(() => buildCodexCommand({
       request: {

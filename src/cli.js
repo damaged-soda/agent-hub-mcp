@@ -449,13 +449,35 @@ function defaultIo() {
         output: process.stderr,
         terminal: true,
       });
-      return promptInterface.question(prompt);
+      return questionUntilClosed(promptInterface, prompt);
     },
     closeInput: () => {
       promptInterface?.close();
       promptInterface = null;
     },
   };
+}
+
+export function questionUntilClosed(promptInterface, prompt) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      promptInterface.removeListener("close", onClose);
+      fn(value);
+    };
+    const onClose = () => {
+      const error = new Error("Interactive eval input closed before all answers were collected");
+      error.code = "interactive_eval_required";
+      finish(reject, error);
+    };
+    promptInterface.once("close", onClose);
+    promptInterface.question(prompt).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+  });
 }
 
 if (

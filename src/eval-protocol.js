@@ -155,6 +155,20 @@ export function parseSourceLocationOutput(text) {
   return normalizeSourceLocationShape(value, "agent output");
 }
 
+export async function canonicalizeExistingSourceLocation(value, cwd) {
+  const workspace = await realDirectory(cwd, "eval cwd");
+  const candidate = path.resolve(workspace, value.path);
+  if (!isInside(candidate, workspace)) return value;
+  const real = await fsp.realpath(candidate).catch(() => null);
+  if (!real || !isInside(real, workspace)) return value;
+  const stat = await fsp.stat(real).catch(() => null);
+  if (!stat?.isFile()) return value;
+  return {
+    ...value,
+    path: slashPath(path.relative(workspace, real)),
+  };
+}
+
 export function gradeSourceLocation(expected, actual) {
   return (
     expected.path === actual.path &&

@@ -103,10 +103,27 @@ async function normalizeExecutionProfile(value, agentId, cwd) {
   if (isInside(scratchPath, cwd) || isInside(cwd, scratchPath)) {
     throw new Error("execution_profile.scratch_path must be separate from cwd");
   }
+  if (!Array.isArray(value.runtime_read_paths) || value.runtime_read_paths.length === 0) {
+    throw new Error("execution_profile.runtime_read_paths must be a non-empty array");
+  }
+  const runtimeReadPaths = [];
+  for (const [index, item] of value.runtime_read_paths.entries()) {
+    if (typeof item !== "string" || !path.isAbsolute(item)) {
+      throw new Error(`execution_profile.runtime_read_paths[${index}] must be absolute`);
+    }
+    const lexical = path.resolve(item);
+    const real = await fsp.realpath(lexical);
+    const stat = await fsp.stat(real);
+    if (!stat.isFile() && !stat.isDirectory()) {
+      throw new Error(`execution_profile.runtime_read_paths[${index}] must be a file or directory`);
+    }
+    runtimeReadPaths.push(lexical, real);
+  }
   return {
     kind: value.kind,
     scratch_path: scratchPath,
     output_schema_path: outputSchemaPath,
+    runtime_read_paths: Array.from(new Set(runtimeReadPaths)).sort(),
   };
 }
 
