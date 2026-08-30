@@ -317,14 +317,14 @@ async function runCase({ item, expected, cwd, agent, timeoutMs }) {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "error",
         reason: "timeout",
-        metrics: await evalMetrics(accepted.run_ref, cancelled),
+        metrics: await evalMetrics(accepted.run_ref, cancelled, cwd),
       });
     }
     if (snapshot.status !== "completed") {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "error",
         reason: snapshot.error?.code ?? snapshot.status,
-        metrics: await evalMetrics(accepted.run_ref, snapshot),
+        metrics: await evalMetrics(accepted.run_ref, snapshot, cwd),
       });
     }
     let actual;
@@ -337,13 +337,13 @@ async function runCase({ item, expected, cwd, agent, timeoutMs }) {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "fail",
         reason: error.code ?? "invalid_agent_output",
-        metrics: await evalMetrics(accepted.run_ref, snapshot),
+        metrics: await evalMetrics(accepted.run_ref, snapshot, cwd),
       });
     }
     return baseCaseResult(item, expected, accepted.run_ref, {
       status: gradeSourceLocation(expected, actual) ? "pass" : "fail",
       reason: gradeSourceLocation(expected, actual) ? "exact_match" : "incorrect",
-      metrics: await evalMetrics(accepted.run_ref, snapshot),
+      metrics: await evalMetrics(accepted.run_ref, snapshot, cwd),
     });
   } finally {
     await fsp.rm(scratchPath, { recursive: true, force: true });
@@ -368,7 +368,7 @@ function invalidWorkspaceCase(item, expected) {
   });
 }
 
-async function evalMetrics(runRef, snapshot) {
+async function evalMetrics(runRef, snapshot, cwd) {
   const started = Date.parse(snapshot.started_at ?? "");
   const completed = Date.parse(snapshot.completed_at ?? "");
   const metrics = {
@@ -388,7 +388,10 @@ async function evalMetrics(runRef, snapshot) {
     if (eventsText === null) {
       return compact({ ...metrics, telemetry_status: "missing-events" });
     }
-    const events = projectLiveStream("codex", eventsText, { profile: "inspect" });
+    const events = projectLiveStream("codex", eventsText, {
+      profile: "inspect",
+      default_cwd: cwd,
+    });
     const toolCalls = events.filter((event) => event.kind === "tool-call");
     const turnEnd = events.findLast?.((event) => event.kind === "turn-end") ??
       [...events].reverse().find((event) => event.kind === "turn-end");

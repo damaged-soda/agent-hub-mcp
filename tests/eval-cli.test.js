@@ -234,8 +234,8 @@ process.stdin.on("end", () => {
   const events = [
     { type: "thread.started", thread_id: threadId },
     { type: "turn.started" },
-    { type: "item.started", item: { id: "tool-1", type: "command_execution", command: "sed -n 1p src/app.js" } },
-    { type: "item.completed", item: { id: "tool-1", type: "command_execution", command: "sed -n 1p src/app.js", status: "completed", exit_code: 0, aggregated_output: "ok" } },
+    { type: "item.started", item: { id: "tool-1", type: "command_execution", command: "/bin/zsh -lc \\\"nl -ba src/app.js | sed -n 1p\\\"" } },
+    { type: "item.completed", item: { id: "tool-1", type: "command_execution", command: "/bin/zsh -lc \\\"nl -ba src/app.js | sed -n 1p\\\"", status: "completed", exit_code: 0, aggregated_output: "ok" } },
     { type: "item.completed", item: { id: "message-1", type: "agent_message", text: output } },
     { type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 20, output_tokens: 10 } }
   ];

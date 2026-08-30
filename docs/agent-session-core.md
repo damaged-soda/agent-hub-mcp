@@ -74,8 +74,10 @@ Cockpit may retain fewer fields and remains responsible for its own fail-loud re
 Tool-call events may carry `resource_accesses[]`. Each row records `read|write`, normalized path,
 `file|skill`, evidence, and coverage. The extractor only accepts structured path fields, patch
 headers, explicit `SKILL.md` literals, and bounded adapters for literal operands of
-`sed/cat/head/tail/wc` plus explicit file operands of `rg/grep` and `git show/diff --`. Variables,
-globs, directory-wide searches, and indirect process I/O remain unknown rather than being guessed.
+`sed/cat/head/tail/wc/nl` plus explicit file operands of `rg/grep` and `git show/diff --`.
+Known `sh/bash/zsh/dash/ksh -c` launchers are unwrapped with bounded depth before applying the same
+literal-operand rules. Variables, globs, directory-wide searches, and indirect process I/O remain
+unknown rather than being guessed.
 The access stays on the exact tool-call sequence so an inspector can audit which step touched it.
 Shell write commands are intentionally outside this bounded adapter set; writes are currently
 reported only from structured write tools and patch headers.
