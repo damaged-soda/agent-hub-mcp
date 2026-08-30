@@ -81,6 +81,18 @@ describe("agent session resource access projection", () => {
       "/workspace/cockpit",
     )).toEqual(["/workspace/cockpit/README.md"]);
     expect(shellReadPaths("zsh -l scripts/report.sh", "/workspace/cockpit")).toEqual([]);
+    expect(shellReadPaths(
+      "nl -b a -n rz -s : --number-width 4 src/app.js",
+      "/workspace/cockpit",
+    )).toEqual(["/workspace/cockpit/src/app.js"]);
+    expect(shellReadPaths(
+      "nl --body-numbering a --number-format rz --number-separator : src/app.js",
+      "/workspace/cockpit",
+    )).toEqual(["/workspace/cockpit/src/app.js"]);
+    expect(shellReadPaths(
+      "bash -- -c 'cat README.md'; zsh --command 'cat docs/guide.md'",
+      "/workspace/cockpit",
+    )).toEqual([]);
     const observed = "/bin/zsh -lc \"sed -n '780,850p' deploy/assets/charter.js && " +
       "rg -n -C 3 hotspot deploy/glance-agent.yml deploy/glance-charter.yml deploy/glance.yml\"";
     expect(shellReadPaths(observed, "/workspace/cockpit")).toEqual([

@@ -156,7 +156,8 @@ function shellCommandPayload(name, args) {
   if (!SHELL_WRAPPERS.has(name)) return null;
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
-    const commandFlag = token === "-c" || token === "--command" ||
+    if (token === "--") return null;
+    const commandFlag = token === "-c" ||
       (/^-[^-]+$/.test(token) && token.slice(1).includes("c"));
     if (!commandFlag) continue;
     const payload = args[index + 1];
@@ -169,7 +170,19 @@ function shellCommandPayload(name, args) {
 
 function simpleFileOperands(name, args) {
   const values = [];
-  const consumes = new Set(name === "head" || name === "tail" ? ["-n", "--lines", "-c", "--bytes"] : []);
+  const consumes = new Set(
+    name === "head" || name === "tail"
+      ? ["-n", "--lines", "-c", "--bytes"]
+      : name === "nl"
+        ? [
+            "-b", "--body-numbering", "-d", "--section-delimiter",
+            "-f", "--footer-numbering", "-h", "--header-numbering",
+            "-i", "--line-increment", "-l", "--join-blank-lines",
+            "-n", "--number-format", "-s", "--number-separator",
+            "-v", "--starting-line-number", "-w", "--number-width",
+          ]
+        : [],
+  );
   let options = true;
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
