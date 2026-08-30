@@ -5,13 +5,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  WORKSPACE_PATCH_SCHEMA,
   buildEvalPrompt,
   canonicalizeExistingSourceLocation,
   cleanWorkspaceSnapshot,
   gradeSourceLocation,
   loadEvalSuite,
+  normalizeExpectedVerifier,
   normalizeExpectedSourceLocation,
   parseSourceLocationOutput,
+  verifierUnchanged,
 } from "../src/eval-protocol.js";
 
 const execFileAsync = promisify(execFile);
@@ -100,6 +103,60 @@ describe("eval protocol", () => {
     expect(prompt).toContain("Find the implementation.");
     expect(prompt).toContain("definition_line");
     expect(prompt).not.toContain("target\"");
+  });
+
+  it("loads patch questions without repository-owned verifier fields", async () => {
+    await writeSuite(root, {
+      schema_version: 2,
+      suite_id: "patch-eval",
+      cases: [{
+        id: "change-target",
+        prompt: "Change the target behavior.",
+        answer_schema: WORKSPACE_PATCH_SCHEMA,
+      }],
+    });
+    const suite = await loadEvalSuite(root);
+    expect(suite).toMatchObject({
+      schema_version: 2,
+      cases: [{ id: "change-target", answer_schema: "workspace-patch/v1" }],
+    });
+    expect(buildEvalPrompt(suite.cases[0])).toContain("Implement the requested change");
+
+    await writeSuite(root, {
+      schema_version: 2,
+      suite_id: "patch-eval",
+      cases: [{
+        id: "change-target",
+        prompt: "Change the target behavior.",
+        answer_schema: WORKSPACE_PATCH_SCHEMA,
+        verifier: "/tmp/hidden",
+      }],
+    });
+    await expect(loadEvalSuite(root)).rejects.toMatchObject({ code: "invalid_eval_suite" });
+  });
+
+  it("pins an executable verifier outside agent-readable paths by content", async () => {
+    const verifierDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-verifier-"));
+    const verifier = path.join(verifierDir, "verify");
+    await fsp.writeFile(verifier, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await fsp.chmod(verifier, 0o700);
+    try {
+      const expected = await normalizeExpectedVerifier(verifier, root, []);
+      expect(expected.path).toBe(await fsp.realpath(verifier));
+      expect(expected.content_digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(await verifierUnchanged(expected)).toBe(true);
+      await fsp.appendFile(verifier, "# changed\n");
+      expect(await verifierUnchanged(expected)).toBe(false);
+      await expect(normalizeExpectedVerifier(
+        path.join(root, "src", "app.js"),
+        root,
+        [],
+      )).rejects.toMatchObject({ code: "invalid_eval_answer" });
+      await expect(normalizeExpectedVerifier(verifier, root, [verifierDir]))
+        .rejects.toMatchObject({ code: "invalid_eval_answer" });
+    } finally {
+      await fsp.rm(verifierDir, { recursive: true, force: true });
+    }
   });
 });
 

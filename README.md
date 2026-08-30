@@ -114,20 +114,20 @@ The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, K
 
 Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
 
-Run a repository-owned code-navigation evaluation with one interactive command:
+Run a repository-owned code-navigation or patch evaluation with one interactive command:
 
 ```sh
 agenthub eval run --agent codex --cwd "$PWD"
 ```
 
-The evaluated clean worktree provides `.agenthub/evals.json` questions but no oracle. Agent Hub
-collects the current commit's standard `path`, `symbol`, and `definition_line` values in the
-foreground, keeps them out of child prompts and artifacts, starts one fresh ephemeral session per
-case, and performs exact deterministic grading. Eval V1 requires Codex CLI 0.151.0 or newer and
-uses a Codex permission profile that exposes the worktree read-only, denies `.git`, disables command
-network, memory, session persistence, and subagents, and grants only a private per-case scratch
-directory for writes. Providers without an equivalent whitelist fail with
-`unsupported_isolation`. See the [evaluation contract](docs/evals.md).
+The evaluated clean worktree provides `.agenthub/evals.json` questions but no oracle. Schema v1
+collects the current commit's standard source location and performs exact grading in the read-only
+workspace. Schema v2 collects an external executable verifier, lets the agent edit a disposable
+detached worktree, and runs the verifier only after the agent exits. Both keep standards out of
+child prompts and artifacts, use fresh ephemeral sessions, deny `.git` and command network, and
+disable memory, session persistence, and subagents. Eval requires Codex CLI 0.151.0 or newer;
+providers without an equivalent whitelist fail with `unsupported_isolation`. See the
+[evaluation contract](docs/evals.md).
 
 For PR cross-review, use the persisted requester route instead of choosing an adapter ad hoc:
 

@@ -39,6 +39,7 @@ export function defaultFromEnv(env, envKey) {
 
 export async function runCommand(command, args, options = {}) {
   const {
+    captureOutput = true,
     cwd,
     env,
     input,
@@ -57,6 +58,7 @@ export async function runCommand(command, args, options = {}) {
   let timedOut = false;
 
   const collect = (chunks) => (chunk) => {
+    if (!captureOutput) return;
     const value = Buffer.from(chunk);
     outputBytes += value.length;
     if (outputBytes > maxOutputBytes) {

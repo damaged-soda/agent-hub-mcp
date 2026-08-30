@@ -10,7 +10,13 @@ import { sessionRefFromLiveEvent } from "./agent-session-core.js";
 
 export const CODEX_AGENT_ID = "codex";
 export const CODEX_EVAL_MIN_VERSION = Object.freeze([0, 151, 0]);
-export const CODEX_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
+export const CODEX_READONLY_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
+export const CODEX_PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v1";
+export const CODEX_EVAL_EXECUTION_PROFILE = CODEX_READONLY_EVAL_EXECUTION_PROFILE;
+const CODEX_EVAL_EXECUTION_PROFILES = new Set([
+  CODEX_READONLY_EVAL_EXECUTION_PROFILE,
+  CODEX_PATCH_EVAL_EXECUTION_PROFILE,
+]);
 export const CODEX_DISCUSSION_CAPABILITIES = Object.freeze({
   supported_permissions: ["read-only", "auto"],
   preferred_discussion_permission: "read-only",
@@ -124,7 +130,7 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
   const usingResolvedMetadata = Boolean(request.resolved_metadata);
   const meta = request.resolved_metadata ?? request.metadata ?? {};
   const codex = meta.codex ?? {};
-  const evalProfile = request.execution_profile?.kind === CODEX_EVAL_EXECUTION_PROFILE
+  const evalProfile = CODEX_EVAL_EXECUTION_PROFILES.has(request.execution_profile?.kind)
     ? request.execution_profile
     : null;
   if (request.execution_profile && !evalProfile) {
@@ -236,6 +242,13 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     args: argv.slice(1),
     argv,
     output_format: "jsonl",
+    env: evalProfile
+      ? {
+          TMPDIR: path.resolve(evalProfile.scratch_path),
+          TMP: path.resolve(evalProfile.scratch_path),
+          TEMP: path.resolve(evalProfile.scratch_path),
+        }
+      : undefined,
   };
 }
 
@@ -258,10 +271,13 @@ function appendEvalProfileArgs(argv, profile) {
     );
     return `${JSON.stringify(runtimePath)} = "read"`;
   });
+  const workspaceAccess = profile.kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE
+    ? "write"
+    : "read";
   const permissionProfile = [
     '{ description = "Agent Hub workspace-only evaluation"',
     'filesystem = { ":minimal" = "read"',
-    '":workspace_roots" = { "." = "read", ".git" = "deny", ".git/**" = "deny" }',
+    `":workspace_roots" = { "." = "${workspaceAccess}", ".git" = "deny", ".git/**" = "deny" }`,
     ...runtimeRules,
     `${JSON.stringify(scratchPath)} = "write" }`,
     "network = { enabled = false } }",
@@ -432,8 +448,8 @@ export async function listCodexAgent(options = {}) {
       evaluation: {
         supported: availability.available && supportsCodexEvalVersion(availability.version),
         command: "agenthub eval run --agent codex --cwd DIR",
-        execution_profiles: [CODEX_EVAL_EXECUTION_PROFILE],
-        answer_schemas: ["source-location/v1"],
+        execution_profiles: Array.from(CODEX_EVAL_EXECUTION_PROFILES),
+        answer_schemas: ["source-location/v1", "workspace-patch/v1"],
         minimum_version: CODEX_EVAL_MIN_VERSION.join("."),
         interactive: true,
       },

@@ -1,17 +1,24 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { runCommand } from "./adapter-utils.js";
 
 export const EVAL_SUITE_RELATIVE_PATH = ".agenthub/evals.json";
 export const EVAL_SUITE_SCHEMA_VERSION = 1;
+export const PATCH_EVAL_SUITE_SCHEMA_VERSION = 2;
 export const SOURCE_LOCATION_SCHEMA = "source-location/v1";
 export const SOURCE_LOCATION_GRADER_VERSION = "source-location/v1";
-export const EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
+export const WORKSPACE_PATCH_SCHEMA = "workspace-patch/v1";
+export const WORKSPACE_PATCH_GRADER_VERSION = "workspace-patch/v1";
+export const READONLY_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
+export const PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v1";
+export const EVAL_EXECUTION_PROFILE = READONLY_EVAL_EXECUTION_PROFILE;
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_CASES = 100;
 const MAX_PROMPT_BYTES = 64 * 1024;
+const MAX_VERIFIER_BYTES = 1024 * 1024;
 
 export async function loadEvalSuite(cwd, suitePath = undefined) {
   const workspace = await realDirectory(cwd, "eval cwd");
@@ -43,12 +50,18 @@ export function normalizeSuite(value) {
   if (!plainObject(value)) {
     throw evalError("invalid_eval_suite", "Eval suite must be a JSON object");
   }
-  if (value.schema_version !== EVAL_SUITE_SCHEMA_VERSION) {
+  if (![EVAL_SUITE_SCHEMA_VERSION, PATCH_EVAL_SUITE_SCHEMA_VERSION].includes(
+    value.schema_version,
+  )) {
     throw evalError(
       "invalid_eval_suite",
-      `Eval suite schema_version must be ${EVAL_SUITE_SCHEMA_VERSION}`,
+      `Eval suite schema_version must be ${EVAL_SUITE_SCHEMA_VERSION} or ` +
+        `${PATCH_EVAL_SUITE_SCHEMA_VERSION}`,
     );
   }
+  const answerSchema = value.schema_version === EVAL_SUITE_SCHEMA_VERSION
+    ? SOURCE_LOCATION_SCHEMA
+    : WORKSPACE_PATCH_SCHEMA;
   const suiteId = identifier(value.suite_id, "suite_id");
   if (!Array.isArray(value.cases) || value.cases.length === 0) {
     throw evalError("invalid_eval_suite", "Eval suite cases must be a non-empty array");
@@ -75,10 +88,10 @@ export function normalizeSuite(value) {
         `cases[${index}].prompt exceeds ${MAX_PROMPT_BYTES} bytes`,
       );
     }
-    if (item.answer_schema !== SOURCE_LOCATION_SCHEMA) {
+    if (item.answer_schema !== answerSchema) {
       throw evalError(
         "invalid_eval_suite",
-        `cases[${index}].answer_schema must be ${SOURCE_LOCATION_SCHEMA}`,
+        `cases[${index}].answer_schema must be ${answerSchema}`,
       );
     }
     const unknown = Object.keys(item).filter(
@@ -93,7 +106,7 @@ export function normalizeSuite(value) {
     const normalized = {
       id,
       prompt: item.prompt.trim(),
-      answer_schema: SOURCE_LOCATION_SCHEMA,
+      answer_schema: answerSchema,
     };
     return {
       ...normalized,
@@ -110,10 +123,68 @@ export function normalizeSuite(value) {
     );
   }
   return {
-    schema_version: EVAL_SUITE_SCHEMA_VERSION,
+    schema_version: value.schema_version,
     suite_id: suiteId,
     cases,
   };
+}
+
+export async function normalizeExpectedVerifier(value, cwd, deniedReadPaths = []) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw evalError("invalid_eval_answer", "Standard verifier path must be non-empty");
+  }
+  if (!path.isAbsolute(value.trim())) {
+    throw evalError("invalid_eval_answer", "Standard verifier path must be absolute");
+  }
+  const workspace = await realDirectory(cwd, "eval cwd");
+  const verifier = await fsp.realpath(path.resolve(value.trim())).catch((error) => {
+    throw evalError("invalid_eval_answer", `Standard verifier is unavailable: ${error.message}`);
+  });
+  const stat = await fsp.stat(verifier).catch((error) => {
+    throw evalError("invalid_eval_answer", `Standard verifier is unavailable: ${error.message}`);
+  });
+  if (!stat.isFile()) {
+    throw evalError("invalid_eval_answer", "Standard verifier must be a regular file");
+  }
+  if (stat.size > MAX_VERIFIER_BYTES) {
+    throw evalError(
+      "invalid_eval_answer",
+      `Standard verifier exceeds ${MAX_VERIFIER_BYTES} bytes`,
+    );
+  }
+  await fsp.access(verifier, fsConstants.X_OK).catch(() => {
+    throw evalError("invalid_eval_answer", "Standard verifier must be executable");
+  });
+  if (isInside(verifier, workspace)) {
+    throw evalError(
+      "invalid_eval_answer",
+      "Standard verifier must stay outside the evaluated workspace",
+    );
+  }
+  for (const item of deniedReadPaths) {
+    const readable = await fsp.realpath(path.resolve(item)).catch(() => path.resolve(item));
+    if (isInside(verifier, readable)) {
+      throw evalError(
+        "invalid_eval_answer",
+        "Standard verifier must stay outside agent runtime read capabilities",
+      );
+    }
+  }
+  return {
+    path: verifier,
+    content_digest: crypto.createHash("sha256").update(await fsp.readFile(verifier)).digest("hex"),
+  };
+}
+
+export async function verifierUnchanged(expected) {
+  try {
+    const stat = await fsp.stat(expected.path);
+    if (!stat.isFile() || stat.size > MAX_VERIFIER_BYTES) return false;
+    const digest = crypto.createHash("sha256").update(await fsp.readFile(expected.path)).digest("hex");
+    return digest === expected.content_digest;
+  } catch {
+    return false;
+  }
 }
 
 export async function normalizeExpectedSourceLocation(value, cwd) {
@@ -178,6 +249,9 @@ export function gradeSourceLocation(expected, actual) {
 }
 
 export function buildEvalPrompt(item) {
+  if (item.answer_schema === WORKSPACE_PATCH_SCHEMA) {
+    return `${item.prompt}\n\n[Agent Hub Eval completion contract]\nImplement the requested change in the current workspace and run the relevant visible tests. Do not only describe a proposed patch. When the implementation is complete, return only this JSON object:\n{"status":"completed"}\nDo not include Markdown fences or explanation.`;
+  }
   return `${item.prompt}\n\n[Agent Hub Eval output contract]\nReturn only one JSON object with exactly these fields:\n{"path":"repository/relative/file","symbol":"qualified_symbol","definition_line":1}\nUse a repository-relative path and the 1-based line containing the symbol definition. Do not include Markdown fences or explanation.`;
 }
 

@@ -160,10 +160,43 @@ describe("codex adapter", () => {
     expect(command.argv).toContain('approval_policy="never"');
     const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
     expect(profile).toContain('":minimal" = "read"');
+    expect(profile).toContain('":workspace_roots" = { "." = "read"');
     expect(profile).toContain('".git" = "deny"');
     expect(profile).toContain('"/private/tmp/agenthub-eval-case-test" = "write"');
     expect(profile).toContain('"/opt/homebrew/bin/codex" = "read"');
     expect(profile).toContain("network = { enabled = false }");
+    expect(command.env).toEqual({
+      TMPDIR: "/private/tmp/agenthub-eval-case-test",
+      TMP: "/private/tmp/agenthub-eval-case-test",
+      TEMP: "/private/tmp/agenthub-eval-case-test",
+    });
+  });
+
+  it("builds a write-only-to-workspace patch eval profile", () => {
+    const command = buildCodexCommand({
+      request: {
+        prompt: "change it",
+        metadata: { model: "gpt-visible", codex: { effort: "medium" } },
+        resolved_metadata: {
+          model: "gpt-visible",
+          codex: { effort: "medium", add_dirs: [] },
+        },
+        execution_profile: {
+          kind: "workspace-write/v1",
+          scratch_path: "/private/tmp/agenthub-eval-patch-test",
+          output_schema_path: "/private/tmp/agenthub-eval-patch-test/schema.json",
+          runtime_read_paths: ["/opt/homebrew/bin/codex"],
+        },
+      },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: {},
+    });
+
+    const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
+    expect(profile).toContain('":workspace_roots" = { "." = "write"');
+    expect(profile).toContain('".git" = "deny"');
+    expect(profile).toContain("network = { enabled = false }");
+    expect(command.argv).toContain("--ephemeral");
   });
 
   it("rejects eval profile permission overrides and session resume", () => {
