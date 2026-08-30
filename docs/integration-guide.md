@@ -18,6 +18,18 @@ agenthub dispatch --agent claude-code --cwd "$PWD" --prompt "Review the current 
 agenthub wait RUN_ID
 ```
 
+Repository evaluations are a separate interactive CLI-only surface:
+
+```sh
+agenthub eval run --agent codex --cwd "$PWD"
+```
+
+The command discovers `.agenthub/evals.json` in a clean Git worktree, collects the human standard
+answers through the TTY before dispatching any case, runs one fresh workspace-only Codex session per
+case, and prints one `agent-eval-run` JSON document. It intentionally has no MCP tool, no prepare
+command, and no non-interactive answer-file input. See [Repository evaluations](evals.md) for the
+suite and result contracts.
+
 Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.
 
 ## Provider-native Session Inspector

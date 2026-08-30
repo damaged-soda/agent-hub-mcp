@@ -33,6 +33,9 @@ Key files:
 | `src/session-server.js` | Loopback-only no-store session API for Cockpit. |
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
+| `src/eval-run.js` | Interactive repository-eval supervisor, per-case execution, grading, and telemetry. |
+| `src/eval-protocol.js` | Question-suite, source-location answer, Git snapshot, digest, and grader contracts. |
+| `src/eval-store.js` | Private TTL-bound eval-result storage; never stores plaintext standard answers. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |
 | `src/discussion-cli.js` | CLI Discussion dispatch, passive query/wait/cancel, and worker startup. |
 | `src/discussion-worker.js` | Detached per-Discussion coordinator process. |
@@ -63,6 +66,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 ## Behavioral Rules
 
 - Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
+- Eval is the only other prompt-construction surface: it may combine a repository-owned question with the fixed `source-location/v1` output contract, but it must never include the human standard answer or silently weaken `workspace-readonly/v1`.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.
@@ -80,6 +84,8 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 |---|---|
 | `AGENT_HUB_RUN_DIR` | Override run storage root. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | Terminal run retention; default is `604800`. |
+| `AGENT_HUB_EVAL_DIR` | Private eval-result storage root. |
+| `AGENT_HUB_EVAL_TTL_SECONDS` | Eval-result retention; default follows run TTL. |
 | `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage root. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Terminal Discussion retention; default follows run TTL. |
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Exact comma-separated browser origins allowed to call the loopback HTTP daemon. |
@@ -120,3 +126,4 @@ is not rejected: the agent runs namespace-less（charter's `gh` wrapper 点名 t
 | `docs/architecture.md` | Changing lifecycle, storage, adapter, or process-group behavior. |
 | `docs/agent-session-core.md` | Changing provider-neutral session/event projections or content profiles. |
 | `docs/discussion-design.md` | Changing the fixed Discussion protocol, schemas, recovery, or safety boundaries. |
+| `docs/evals.md` | Changing repository question suites, human answer handling, eval isolation, grading, or result facts. |

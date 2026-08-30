@@ -9,6 +9,8 @@ import {
 import { sessionRefFromLiveEvent } from "./agent-session-core.js";
 
 export const CODEX_AGENT_ID = "codex";
+export const CODEX_EVAL_MIN_VERSION = Object.freeze([0, 151, 0]);
+export const CODEX_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
 export const CODEX_DISCUSSION_CAPABILITIES = Object.freeze({
   supported_permissions: ["read-only", "auto"],
   preferred_discussion_permission: "read-only",
@@ -97,6 +99,23 @@ function isCodexVersionOutput(stdout, stderr) {
   return text.includes("codex");
 }
 
+export function parseCodexVersion(value) {
+  const match = /(?:^|\s)codex(?:-cli)?\s+(\d+)\.(\d+)\.(\d+)(?:\s|$)/i.exec(
+    String(value ?? "").trim(),
+  );
+  return match ? match.slice(1).map(Number) : null;
+}
+
+export function supportsCodexEvalVersion(value) {
+  const version = Array.isArray(value) ? value : parseCodexVersion(value);
+  if (!version) return false;
+  for (let index = 0; index < CODEX_EVAL_MIN_VERSION.length; index += 1) {
+    if (version[index] > CODEX_EVAL_MIN_VERSION[index]) return true;
+    if (version[index] < CODEX_EVAL_MIN_VERSION[index]) return false;
+  }
+  return true;
+}
+
 export function buildCodexCommand({ request, effectiveCliSessionRef, env = process.env }) {
   const resumed = effectiveCliSessionRef?.resumed === true;
   if (resumed) {
@@ -105,6 +124,15 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
   const usingResolvedMetadata = Boolean(request.resolved_metadata);
   const meta = request.resolved_metadata ?? request.metadata ?? {};
   const codex = meta.codex ?? {};
+  const evalProfile = request.execution_profile?.kind === CODEX_EVAL_EXECUTION_PROFILE
+    ? request.execution_profile
+    : null;
+  if (request.execution_profile && !evalProfile) {
+    throw new Error(`Unsupported Codex execution profile: ${request.execution_profile.kind}`);
+  }
+  if (evalProfile && resumed) {
+    throw new Error("Eval execution profile cannot resume a Codex session");
+  }
 
   const argv = ["codex", "exec"];
   if (resumed) {
@@ -134,22 +162,6 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     argv.push("-c", `model_reasoning_effort="${effort}"`);
   }
 
-  const nativeSandbox = assertMetadataString(codex.sandbox, "metadata.codex.sandbox");
-  let sandbox;
-  let networkAccess = false;
-  if (nativeSandbox) {
-    if (!SANDBOX_MODES.has(nativeSandbox)) {
-      throw new Error(
-        `metadata.codex.sandbox must be one of: ${Array.from(SANDBOX_MODES).join(", ")}`,
-      );
-    }
-    sandbox = nativeSandbox;
-  } else {
-    const permission = resolveUnifiedPermission(meta);
-    sandbox = UNIFIED_PERMISSION_TO_SANDBOX[permission];
-    networkAccess = permission === "auto";
-  }
-
   const addDirs = codex.add_dirs ?? [];
   if (!Array.isArray(addDirs)) {
     throw new Error("metadata.codex.add_dirs must be an array");
@@ -164,26 +176,54 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     return usingResolvedMetadata ? addDir : path.resolve(addDir);
   });
 
-  // `codex exec resume` accepts a narrower flag set than `codex exec`; sandbox
-  // and writable roots go through -c config overrides on continuations.
-  if (resumed) {
-    argv.push("-c", `sandbox_mode="${sandbox}"`);
-    if (networkAccess) {
-      argv.push("-c", NETWORK_ACCESS_OVERRIDE);
+  if (evalProfile) {
+    if (
+      codex.sandbox !== undefined ||
+      meta.permission !== undefined ||
+      meta.add_dirs !== undefined ||
+      resolvedAddDirs.length > 0
+    ) {
+      throw new Error("Eval execution profile owns sandbox, permission, and add_dirs settings");
     }
-    if (resolvedAddDirs.length > 0) {
-      argv.push(
-        "-c",
-        `sandbox_workspace_write.writable_roots=${JSON.stringify(resolvedAddDirs)}`,
-      );
-    }
+    appendEvalProfileArgs(argv, evalProfile);
   } else {
-    argv.push("--sandbox", sandbox);
-    if (networkAccess) {
-      argv.push("-c", NETWORK_ACCESS_OVERRIDE);
+    const nativeSandbox = assertMetadataString(codex.sandbox, "metadata.codex.sandbox");
+    let sandbox;
+    let networkAccess = false;
+    if (nativeSandbox) {
+      if (!SANDBOX_MODES.has(nativeSandbox)) {
+        throw new Error(
+          `metadata.codex.sandbox must be one of: ${Array.from(SANDBOX_MODES).join(", ")}`,
+        );
+      }
+      sandbox = nativeSandbox;
+    } else {
+      const permission = resolveUnifiedPermission(meta);
+      sandbox = UNIFIED_PERMISSION_TO_SANDBOX[permission];
+      networkAccess = permission === "auto";
     }
-    for (const addDir of resolvedAddDirs) {
-      argv.push("--add-dir", addDir);
+
+    // `codex exec resume` accepts a narrower flag set than `codex exec`; sandbox
+    // and writable roots go through -c config overrides on continuations.
+    if (resumed) {
+      argv.push("-c", `sandbox_mode="${sandbox}"`);
+      if (networkAccess) {
+        argv.push("-c", NETWORK_ACCESS_OVERRIDE);
+      }
+      if (resolvedAddDirs.length > 0) {
+        argv.push(
+          "-c",
+          `sandbox_workspace_write.writable_roots=${JSON.stringify(resolvedAddDirs)}`,
+        );
+      }
+    } else {
+      argv.push("--sandbox", sandbox);
+      if (networkAccess) {
+        argv.push("-c", NETWORK_ACCESS_OVERRIDE);
+      }
+      for (const addDir of resolvedAddDirs) {
+        argv.push("--add-dir", addDir);
+      }
     }
   }
 
@@ -197,6 +237,58 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     argv,
     output_format: "jsonl",
   };
+}
+
+function appendEvalProfileArgs(argv, profile) {
+  const scratchPath = absoluteProfilePath(profile.scratch_path, "execution_profile.scratch_path");
+  const outputSchemaPath = absoluteProfilePath(
+    profile.output_schema_path,
+    "execution_profile.output_schema_path",
+  );
+  if (!isInside(outputSchemaPath, scratchPath)) {
+    throw new Error("execution_profile.output_schema_path must be inside scratch_path");
+  }
+  const permissionProfile = [
+    '{ description = "Agent Hub workspace-only evaluation"',
+    'filesystem = { ":minimal" = "read"',
+    '":workspace_roots" = { "." = "read", ".git" = "deny", ".git/**" = "deny" }',
+    `${JSON.stringify(scratchPath)} = "write" }`,
+    "network = { enabled = false } }",
+  ].join(", ");
+  argv.push(
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--strict-config",
+    "--ask-for-approval",
+    "never",
+    "--disable",
+    "memories",
+    "--disable",
+    "external_agent_memory_import",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "multi_agent_v2",
+    "--output-schema",
+    outputSchemaPath,
+    "-c",
+    'default_permissions="agenthub-eval"',
+    "-c",
+    `permissions.agenthub-eval=${permissionProfile}`,
+  );
+}
+
+function absoluteProfilePath(value, key) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) {
+    throw new Error(`${key} must be an absolute path`);
+  }
+  return path.resolve(value);
+}
+
+function isInside(candidate, root) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export function parseCodexStdout(stdout) {
@@ -326,6 +418,14 @@ export async function listCodexAgent(options = {}) {
       session_resume: true,
       command: "codex exec --json --skip-git-repo-check",
       discussion: CODEX_DISCUSSION_CAPABILITIES,
+      evaluation: {
+        supported: availability.available && supportsCodexEvalVersion(availability.version),
+        command: "agenthub eval run --agent codex --cwd DIR",
+        execution_profiles: [CODEX_EVAL_EXECUTION_PROFILE],
+        answer_schemas: ["source-location/v1"],
+        minimum_version: CODEX_EVAL_MIN_VERSION.join("."),
+        interactive: true,
+      },
     },
   };
 }

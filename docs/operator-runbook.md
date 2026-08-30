@@ -34,6 +34,7 @@ It also returns the selectable model catalog for each adapter. Use
 | `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local session API for Cockpit. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
+| `agenthub eval run --agent codex --cwd "$PWD"` | Run one interactive, workspace-only repository evaluation. |
 | `agenthub review status/set/dispatch …` | Inspect, change, and use the requester-specific PR review route. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
 | `agenthub discussion list --status failed --since 7d` | Find retained Discussions without resuming them. |
@@ -135,6 +136,8 @@ endpoint, and API remain below the same canonical prefix.
 |---|---|---|
 | `AGENT_HUB_RUN_DIR` | `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` | Moves run state, logs, and artifacts. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | `604800` | Retention for terminal runs. Must be a non-negative number. |
+| `AGENT_HUB_EVAL_DIR` | `${XDG_STATE_HOME:-~/.local/state}/agent-hub-mcp/evals` | Moves private eval-result JSON files. |
+| `AGENT_HUB_EVAL_TTL_SECONDS` | `AGENT_HUB_RUN_TTL_SECONDS` or `604800` | Retention for completed eval results. |
 | `AGENT_HUB_DISCUSSION_DIR` | sibling `discussions` directory next to the run root | Moves Discussion state, events, materials, prompts, and decisions. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | `AGENT_HUB_RUN_TTL_SECONDS` or `604800` | Retention for terminal Discussions and their linked runs. |
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | unset | Comma-separated exact browser origins allowed to call the loopback daemon. Native MCP clients normally send no `Origin`; browser origins are rejected by default. |
@@ -227,6 +230,21 @@ AGENT_HUB_RUN_DIR=/tmp/agent-hub-runs agenthub dispatch --json '{
 For Codex, use `"agent_id": "codex"` with `metadata.codex`, for example `{"codex": {"effort": "medium"}}`. For Kimi Code, use `"agent_id": "kimi-code"` with `metadata["kimi-code"]`. For OpenCode, use `"agent_id": "opencode"` with `metadata.opencode`, for example `{"opencode":{"model":"zai-coding-plan/glm-5.3-flash","effort":"max"}}`. A new Codex, Kimi, or OpenCode dispatch returns `cli_session_ref: null`; the session id shows up on a later snapshot.
 
 Use the returned run ID with `agenthub wait RUN_ID`, or `agenthub query RUN_ID` when you only need the latest snapshot. Inspect `status`, `content`, `progress_events`, and the run's `command.json` if the result is unexpected.
+
+## Eval Smoke Test
+
+Commit a minimal `.agenthub/evals.json`, verify the worktree is clean, then run:
+
+```sh
+AGENT_HUB_EVAL_DIR=/tmp/agent-hub-evals \
+agenthub eval run --agent codex --cwd "$PWD"
+```
+
+The CLI must ask for `path`, `symbol`, and `definition_line` before starting any case. Confirm the
+result reports `isolation.policy = "workspace-readonly/v1"`, the backing run's `command.json`
+contains `--ephemeral` and a `permissions.agenthub-eval` inline profile, and it does not contain
+`--sandbox`. A non-Codex provider or Codex older than 0.151.0 must fail with
+`unsupported_isolation`; do not work around that error with a broader permission mode.
 
 ## Discussion Smoke Test
 

@@ -43,6 +43,8 @@ agenthub agents --cwd /absolute/path/to/project
 Each agent has a normalized `models` array and a `model_discovery` status. Model discovery
 is best-effort: if a CLI cannot return its catalog, the agent remains available and reports
 `model_discovery.status: "unavailable"` with an empty `models` array.
+Codex additionally reports `capabilities.evaluation`, including the required CLI version and
+supported isolation/answer-schema contract.
 
 ## Inspect native sessions
 
@@ -111,6 +113,21 @@ agenthub dispatch \
 The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, Kimi Code with `"agent_id": "kimi-code"` and `metadata["kimi-code"]`, and OpenCode with `"agent_id": "opencode"` and `metadata.opencode` (see the [integration guide](docs/integration-guide.md)). For a new Codex, Kimi, or OpenCode session the dispatch response has `cli_session_ref: null`; the session id appears on a later snapshot once the CLI reports it.
 
 Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
+
+Run a repository-owned code-navigation evaluation with one interactive command:
+
+```sh
+agenthub eval run --agent codex --cwd "$PWD"
+```
+
+The evaluated clean worktree provides `.agenthub/evals.json` questions but no oracle. Agent Hub
+collects the current commit's standard `path`, `symbol`, and `definition_line` values in the
+foreground, keeps them out of child prompts and artifacts, starts one fresh ephemeral session per
+case, and performs exact deterministic grading. Eval V1 requires Codex CLI 0.151.0 or newer and
+uses a Codex permission profile that exposes the worktree read-only, denies `.git`, disables command
+network, memory, session persistence, and subagents, and grants only a private per-case scratch
+directory for writes. Providers without an equivalent whitelist fail with
+`unsupported_isolation`. See the [evaluation contract](docs/evals.md).
 
 For PR cross-review, use the persisted requester route instead of choosing an adapter ad hoc:
 
@@ -249,6 +266,8 @@ The caller chooses the host and complete participant roster before dispatch. The
 |---|---|
 | `AGENT_HUB_RUN_DIR` | Override the run storage root. |
 | `AGENT_HUB_RUN_TTL_SECONDS` | Override terminal run retention; default is `604800`. |
+| `AGENT_HUB_EVAL_DIR` | Override private eval-result storage; defaults to `${XDG_STATE_HOME:-~/.local/state}/agent-hub-mcp/evals`. |
+| `AGENT_HUB_EVAL_TTL_SECONDS` | Override eval-result retention; defaults to `AGENT_HUB_RUN_TTL_SECONDS` or `604800`. |
 | `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage; by default it is a `discussions` sibling of the run root. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Override terminal Discussion retention; defaults to `AGENT_HUB_RUN_TTL_SECONDS` or `604800`. |
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Comma-separated exact browser origins allowed to call the loopback HTTP daemon; unset rejects requests carrying `Origin`. |
@@ -273,6 +292,7 @@ Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cac
   provenance model, and content projection boundary shared with future inspectors and telemetry
   consumers.
 - [Architecture](docs/architecture.md) explains run/session boundaries, state files, process groups, and adapter behavior.
+- [Repository evaluations](docs/evals.md) specifies question suites, interactive oracle handling, workspace-only isolation, grading, and result facts.
 - [Discussion feature design](docs/discussion-design.md) specifies the durable, structured multi-agent discussion workflow and its invariants.
 - [Integration guide](docs/integration-guide.md) documents the CLI and optional MCP surfaces.
 - [Operator runbook](docs/operator-runbook.md) covers configuration, smoke tests, storage, and troubleshooting.

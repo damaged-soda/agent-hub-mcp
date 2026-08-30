@@ -188,6 +188,26 @@ requester。文件只存与默认值不同的覆盖，位于
 credential 或 provider 原始响应。目录为 `0700`、文件为 `0600`，更新使用原子 rename。
 缓存只改变 status 的等待语义；set/dispatch 的 live 校验继续承担正确性边界。
 
+### repository eval
+
+Eval 是 CLI-only 的前台监督控制面，不进入普通 MCP run schema，也不改变普通 run 的
+prompt 原样透传约束。`agenthub eval run` 从被测干净 worktree 读取
+`.agenthub/evals.json` 问题，在 TTY 中先收齐当前 commit 的人工标准答案，然后为每个 case
+创建一个普通 Agent Hub run。Eval supervisor 只把“问题 + 固定结构化输出契约”交给 run；
+标准答案只留在 supervisor 内存，完成后只保留 digest。
+
+每个 case 的普通 run 带内部 `execution_profile=workspace-readonly/v1`。该字段不在普通 CLI
+或 MCP 输入暴露，只由 Eval supervisor 构造；runner 把它交给 Codex adapter，后者使用
+Codex permission profile，而不是旧 `--sandbox`：`:minimal` 提供运行时只读面，
+`:workspace_roots` 只读开放当前 worktree，`.git` 显式 deny，独立 scratch 显式 write，
+command network 关闭。同时使用 ephemeral session、忽略用户 config/rules、关闭 memory 与
+subagent。profile 路径在普通 run 建立前 realpath 校验，scratch 必须与 cwd 分离且 output
+schema 必须位于 scratch 内。
+
+V1 只接受 `source-location/v1` 并做 `path + symbol + definition_line` 精确匹配。Agent
+Hub 持有一次 eval 的执行与判分事实，不做跨 commit 比较；完整契约见
+[evals.md](evals.md)。
+
 ### dispatch_to_agent
 
 启动一次 run 并立即返回。

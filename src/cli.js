@@ -2,6 +2,7 @@
 import fsp from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import {
   cancelAgentRun,
@@ -19,6 +20,7 @@ import {
   waitDiscussionFromCli,
 } from "./discussion-cli.js";
 import { dispatchReview, reviewStatus, setReviewRoute } from "./review-routing.js";
+import { runEval } from "./eval-run.js";
 
 const HELP = `agenthub — run local coding agents without a resident daemon
 
@@ -32,6 +34,7 @@ Usage:
   agenthub review status [--cwd DIR]
   agenthub review set --requester ID --reviewer ID --model ID [--cwd DIR]
   agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
+  agenthub eval run --agent ID [--cwd DIR] [--suite FILE] [--model ID] [--effort LEVEL] [--timeout-ms MS]
   agenthub discussion dispatch (--json JSON | --json-file FILE)
   agenthub discussion list [--status STATUS[,STATUS]] [--since 7d] [--cwd DIR] [--limit N]
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
@@ -112,9 +115,36 @@ export async function execute(argv, io = defaultIo()) {
     return cancelAgentRun(input);
   }
   if (command === "review") return executeReview(args, io);
+  if (command === "eval") return executeEval(args, io);
   if (command === "discussion") return executeDiscussion(args);
 
   throw usageError(`Unknown command: ${command}`);
+}
+
+async function executeEval(args, io) {
+  const command = args.shift();
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    return { usage: HELP };
+  }
+  if (command !== "run") throw usageError(`Unknown eval command: ${command}`);
+  const parsed = parseArgs(
+    args,
+    new Set(["agent", "cwd", "suite", "model", "effort", "timeout-ms"]),
+  );
+  rejectPositionals(parsed);
+  const input = {
+    agent_id: required(parsed.options.agent, "--agent is required"),
+    cwd: path.resolve(parsed.options.cwd ?? process.cwd()),
+  };
+  if (parsed.options.suite !== undefined) input.suite_path = parsed.options.suite;
+  if (parsed.options.model !== undefined) input.model = parsed.options.model;
+  if (parsed.options.effort !== undefined) input.effort = parsed.options.effort;
+  setOptionalNumber(input, "timeout_ms", parsed.options["timeout-ms"], { positive: true });
+  try {
+    return await runEval(input, io);
+  } finally {
+    io.closeInput?.();
+  }
 }
 
 async function executeReview(args, io) {
@@ -399,6 +429,7 @@ function serializeError(error) {
 }
 
 function defaultIo() {
+  let promptInterface = null;
   return {
     stdout: (value) => process.stdout.write(value),
     stderr: (value) => process.stderr.write(value),
@@ -406,6 +437,23 @@ function defaultIo() {
       const chunks = [];
       for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
       return Buffer.concat(chunks).toString("utf8");
+    },
+    readLine: async (prompt) => {
+      if (!process.stdin.isTTY || !process.stderr.isTTY) {
+        const error = new Error("agenthub eval run requires an interactive terminal");
+        error.code = "interactive_eval_required";
+        throw error;
+      }
+      promptInterface ??= readline.createInterface({
+        input: process.stdin,
+        output: process.stderr,
+        terminal: true,
+      });
+      return promptInterface.question(prompt);
+    },
+    closeInput: () => {
+      promptInterface?.close();
+      promptInterface = null;
     },
   };
 }

@@ -79,6 +79,37 @@ function normalizeMetadata(metadata) {
   return metadata;
 }
 
+async function normalizeExecutionProfile(value, agentId, cwd) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Internal execution_profile must be an object");
+  }
+  if (value.kind !== "workspace-readonly/v1") {
+    throw new Error(`Unsupported internal execution_profile: ${value.kind}`);
+  }
+  if (agentId !== "codex") {
+    const error = new Error(`Execution profile ${value.kind} is not supported by ${agentId}`);
+    error.code = "unsupported_isolation";
+    throw error;
+  }
+  const scratchPath = await realDirectory(value.scratch_path, "execution_profile.scratch_path");
+  const outputSchemaPath = await realFile(
+    value.output_schema_path,
+    "execution_profile.output_schema_path",
+  );
+  if (!isInside(outputSchemaPath, scratchPath)) {
+    throw new Error("execution_profile.output_schema_path must be inside scratch_path");
+  }
+  if (isInside(scratchPath, cwd) || isInside(cwd, scratchPath)) {
+    throw new Error("execution_profile.scratch_path must be separate from cwd");
+  }
+  return {
+    kind: value.kind,
+    scratch_path: scratchPath,
+    output_schema_path: outputSchemaPath,
+  };
+}
+
 export async function dispatchToAgent(input, internal = {}) {
   await cleanupExpiredRuns();
   const idempotencyKey = optionalNonEmptyString(internal.idempotency_key, "idempotency_key");
@@ -152,6 +183,11 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
   const paths = await validateRequestPaths(input.cwd, metadata, {
     metadataKey: adapter.metadataKey,
   });
+  const executionProfile = await normalizeExecutionProfile(
+    internal.execution_profile,
+    adapter.agentId,
+    paths.cwd,
+  );
   const resolvedMetadata = {
     ...metadata,
     [adapter.metadataKey]: {
@@ -194,6 +230,7 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
       : undefined,
     retain_until: internalRetention?.retainUntil,
     retained_by_discussion: internalRetention ? [internalRetention.discussionId] : undefined,
+    execution_profile: executionProfile ? { kind: executionProfile.kind } : undefined,
   };
   try {
     await writeState(runDir, state);
@@ -208,6 +245,7 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
       cli_session_ref: input.cli_session_ref ?? null,
       effective_cli_session_ref: effectiveCliSessionRef,
       session_generation: sessionRecord?.generation,
+      execution_profile: executionProfile,
       created_at: createdAt,
     });
     await atomicWriteFile(path.join(runDir, "input.txt"), input.prompt);
@@ -273,6 +311,31 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
     session_generation: sessionRecord?.generation,
     poll_after_ms: POLL_AFTER_MS,
   };
+}
+
+async function realDirectory(value, label) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) {
+    throw new Error(`${label} must be an absolute path`);
+  }
+  const real = await fsp.realpath(value);
+  const stat = await fsp.stat(real);
+  if (!stat.isDirectory()) throw new Error(`${label} must be a directory`);
+  return real;
+}
+
+async function realFile(value, label) {
+  if (typeof value !== "string" || !path.isAbsolute(value)) {
+    throw new Error(`${label} must be an absolute path`);
+  }
+  const real = await fsp.realpath(value);
+  const stat = await fsp.stat(real);
+  if (!stat.isFile()) throw new Error(`${label} must be a regular file`);
+  return real;
+}
+
+function isInside(candidate, root) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function boundedDiagnosticMessage(error) {
