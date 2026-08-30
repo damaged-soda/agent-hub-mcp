@@ -168,7 +168,10 @@ export function projectLiveStream(providerValue, input, options = {}) {
   let sequence = Number.isInteger(options.start_sequence) ? options.start_sequence : 0;
   const projected = [];
   for (const record of records) {
-    for (const event of projectLiveRecord(provider, record, { nativeSessionId })) {
+    for (const event of projectLiveRecord(provider, record, {
+      nativeSessionId,
+      defaultCwd: options.default_cwd,
+    })) {
       projected.push({ ...event, sequence });
       sequence += 1;
     }
@@ -181,24 +184,28 @@ export function projectLiveRecord(providerValue, record, options = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     return [];
   }
-  const nativeSessionId =
-    options.nativeSessionId ?? inferNativeSessionId(provider, [record]) ?? null;
+  const contextualRecord = provider === "codex" &&
+    typeof options.defaultCwd === "string" && options.defaultCwd && !record.cwd
+    ? { ...record, cwd: options.defaultCwd }
+    : record;
+  const nativeSessionId = options.nativeSessionId ??
+    inferNativeSessionId(provider, [contextualRecord]) ?? null;
   const base = {
     schema_version: AGENT_SESSION_SCHEMA_VERSION,
     provider,
     native_session_id: nativeSessionId,
     sequence: Number.isInteger(options.sequence) && options.sequence >= 0 ? options.sequence : 0,
-    occurred_at: eventTimestamp(record),
+    occurred_at: eventTimestamp(contextualRecord),
     provenance: {
       stage: "observed",
       source: "live-stream",
-      native_type: nativeEventType(provider, record),
+      native_type: nativeEventType(provider, contextualRecord),
     },
   };
-  if (provider === "claude") return projectClaudeRecord(record, base);
-  if (provider === "codex") return projectCodexRecord(record, base);
+  if (provider === "claude") return projectClaudeRecord(contextualRecord, base);
+  if (provider === "codex") return projectCodexRecord(contextualRecord, base);
   if (provider === "opencode") return [];
-  return projectKimiRecord(record, base);
+  return projectKimiRecord(contextualRecord, base);
 }
 
 export function projectSessionEvents(events, profile = "inspect") {

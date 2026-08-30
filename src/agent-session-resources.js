@@ -8,6 +8,8 @@ const PATCH_FILE_LINE_RE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Mo
 const SKILL_PATH_RE = /(^|[^A-Za-z0-9._~@%+=:,/\\-])((?:\/|\.\.?\/)?[A-Za-z0-9._~@+=:,/\\-]+\/SKILL\.md)(?![A-Za-z0-9._~@%+=:,/\\-])/g;
 const MAX_RESOURCE_ACCESSES = 128;
 const MAX_EMBEDDED_COMMAND_CHARS = 256 * 1024;
+const MAX_SHELL_WRAPPER_DEPTH = 4;
+const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const HEREDOC_START_RE = /(^|[^<])<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
 
 export function extractResourceAccesses(input = {}) {
@@ -97,6 +99,10 @@ export function explicitSkillPaths(value) {
 }
 
 export function shellReadPaths(command, cwd = null) {
+  return shellReadPathsAtDepth(command, cwd, 0);
+}
+
+function shellReadPathsAtDepth(command, cwd, depth) {
   if (typeof command !== "string" || !command.trim()) return [];
   const values = [];
   let activeCwd = cwd;
@@ -106,13 +112,20 @@ export function shellReadPaths(command, cwd = null) {
       if (prepared.length === 0) continue;
       const name = path.posix.basename(prepared[0]);
       const args = prepared.slice(1);
+      const nested = shellCommandPayload(name, args);
+      if (nested !== null) {
+        if (depth < MAX_SHELL_WRAPPER_DEPTH) {
+          values.push(...shellReadPathsAtDepth(nested, activeCwd, depth + 1));
+        }
+        continue;
+      }
       if (name === "cd") {
         const target = args.find((item) => !item.startsWith("-"));
         activeCwd = target ? normalizeLiteralPath(target, activeCwd) : null;
         continue;
       }
       const candidates = [];
-      if (["cat", "head", "tail", "wc"].includes(name)) {
+      if (["cat", "head", "tail", "wc", "nl"].includes(name)) {
         candidates.push(...simpleFileOperands(name, args));
       } else if (name === "sed") {
         candidates.push(...sedFileOperands(args));
@@ -139,9 +152,37 @@ export function shellReadPaths(command, cwd = null) {
   return distinct(values);
 }
 
+function shellCommandPayload(name, args) {
+  if (!SHELL_WRAPPERS.has(name)) return null;
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--") return null;
+    const commandFlag = token === "-c" ||
+      (/^-[^-]+$/.test(token) && token.slice(1).includes("c"));
+    if (!commandFlag) continue;
+    const payload = args[index + 1];
+    return typeof payload === "string" && payload.length <= MAX_EMBEDDED_COMMAND_CHARS
+      ? payload
+      : null;
+  }
+  return null;
+}
+
 function simpleFileOperands(name, args) {
   const values = [];
-  const consumes = new Set(name === "head" || name === "tail" ? ["-n", "--lines", "-c", "--bytes"] : []);
+  const consumes = new Set(
+    name === "head" || name === "tail"
+      ? ["-n", "--lines", "-c", "--bytes"]
+      : name === "nl"
+        ? [
+            "-b", "--body-numbering", "-d", "--section-delimiter",
+            "-f", "--footer-numbering", "-h", "--header-numbering",
+            "-i", "--line-increment", "-l", "--join-blank-lines",
+            "-n", "--number-format", "-s", "--number-separator",
+            "-v", "--starting-line-number", "-w", "--number-width",
+          ]
+        : [],
+  );
   let options = true;
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];

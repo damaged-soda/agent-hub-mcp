@@ -254,6 +254,31 @@ describe("provider conformance fixtures", () => {
     });
   });
 
+  it("uses the supplied run cwd for Codex live shell resource projection", () => {
+    const events = projectLiveStream("codex", [
+      {
+        type: "thread.started",
+        thread_id: "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6",
+      },
+      {
+        type: "item.started",
+        item: {
+          id: "tool-1",
+          type: "command_execution",
+          command: "/bin/zsh -lc \"cd src && nl -ba app.js | sed -n '1p'\"",
+        },
+      },
+    ], { default_cwd: "/workspace/example" });
+    expect(events.find((event) => event.kind === "tool-call").data.resource_accesses)
+      .toEqual([{
+        operation: "read",
+        path: "/workspace/example/src/app.js",
+        resource_kind: "file",
+        evidence: "shell-explicit-operand",
+        coverage: "high-confidence",
+      }]);
+  });
+
   it("projects Kimi tools before the terminal resume hint reports its session id", () => {
     const events = projectLiveStream("kimi", fixture("kimi-live.jsonl"));
     expect(events.every((event) => event.native_session_id?.startsWith("session_"))).toBe(true);

@@ -69,6 +69,44 @@ describe("agent session resource access projection", () => {
     expect(accesses.every((item) => item.evidence === "shell-explicit-operand")).toBe(true);
   });
 
+  it("unwraps bounded shell -c launchers and recognizes nl reads", () => {
+    const command = "/bin/zsh -lc \"nl -ba bin/cockpit-agent | sed -n '1p'; " +
+      "rg -n pattern docs/agent-data-pipeline.md\"";
+    expect(shellReadPaths(command, "/workspace/cockpit")).toEqual([
+      "/workspace/cockpit/bin/cockpit-agent",
+      "/workspace/cockpit/docs/agent-data-pipeline.md",
+    ]);
+    expect(shellReadPaths(
+      "/usr/bin/env bash -lc \"zsh -c 'cat README.md'\"",
+      "/workspace/cockpit",
+    )).toEqual(["/workspace/cockpit/README.md"]);
+    expect(shellReadPaths("zsh -l scripts/report.sh", "/workspace/cockpit")).toEqual([]);
+    expect(shellReadPaths(
+      "nl -b a -n rz -s : --number-width 4 src/app.js",
+      "/workspace/cockpit",
+    )).toEqual(["/workspace/cockpit/src/app.js"]);
+    expect(shellReadPaths(
+      "nl --body-numbering a --number-format rz --number-separator : src/app.js",
+      "/workspace/cockpit",
+    )).toEqual(["/workspace/cockpit/src/app.js"]);
+    expect(shellReadPaths(
+      "bash -- -c 'cat README.md'; zsh --command 'cat docs/guide.md'",
+      "/workspace/cockpit",
+    )).toEqual([]);
+    const observed = "/bin/zsh -lc \"sed -n '780,850p' deploy/assets/charter.js && " +
+      "rg -n -C 3 hotspot deploy/glance-agent.yml deploy/glance-charter.yml deploy/glance.yml\"";
+    expect(shellReadPaths(observed, "/workspace/cockpit")).toEqual([
+      "/workspace/cockpit/deploy/assets/charter.js",
+      "/workspace/cockpit/deploy/glance-agent.yml",
+      "/workspace/cockpit/deploy/glance-charter.yml",
+      "/workspace/cockpit/deploy/glance.yml",
+    ]);
+    expect(shellReadPaths(
+      "/bin/zsh -lc \"rg --files | rg -i charter\"",
+      "/workspace/cockpit",
+    )).toEqual([]);
+  });
+
   it("finds nested programmatic commands and explicit SKILL.md reads", () => {
     const input = String.raw`const r = await tools.exec_command({"cmd":"sed -n '1,220p' /repo/.agents/skills/demo/SKILL.md","workdir":"/repo"});`;
     const accesses = extractResourceAccesses({ tool_name: "exec", arguments: input, cwd: "/repo" });
