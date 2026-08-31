@@ -116,20 +116,25 @@ The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, K
 
 Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
 
-Run a repository-owned code-navigation or patch evaluation with one interactive command:
+Run an evaluator-selected code-navigation or patch suite against one clean commit with one
+interactive command:
 
 ```sh
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals.json \
+  --model gpt-5.6-sol --effort medium
 ```
 
-The evaluated clean worktree provides `.agenthub/evals.json` questions but no oracle. Schema v1
-collects the current commit's standard source location and performs exact grading in the read-only
-workspace. Schema v2 collects an external executable verifier, lets the agent edit a disposable
-detached worktree, and runs the verifier only after the agent exits. Both keep standards out of
-child prompts and artifacts, use fresh ephemeral sessions, deny `.git` and command network, and
-disable memory, session persistence, and subagents. Eval requires Codex CLI 0.151.0 or newer;
-providers without an equivalent whitelist fail with `unsupported_isolation`. See the
-[evaluation contract](docs/evals.md).
+The suite is evaluator input: repositories may provide `.agenthub/evals.json` as a default sample,
+while `--suite` may select an uncommitted file outside the evaluated workspace. Agent Hub snapshots
+and hashes its questions at startup; the evaluated worktree itself must remain clean and immutable.
+Schema v1 collects the current commit's standard source location and performs exact grading in the
+read-only workspace. Schema v2 collects an external executable verifier, lets the agent edit a
+disposable detached worktree, and runs the verifier only after the agent exits. Both keep standards
+and external suite paths out of child inputs, use fresh ephemeral sessions, deny `.git` and command
+network, and disable memory, session persistence, and subagents. Eval requires an explicit model
+and effort plus Codex CLI 0.151.0 or newer; providers without an equivalent whitelist fail with
+`unsupported_isolation`. See the [evaluation contract](docs/evals.md).
 
 For PR cross-review, use the persisted requester route instead of choosing an adapter ad hoc:
 

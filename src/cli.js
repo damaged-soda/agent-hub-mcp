@@ -34,7 +34,7 @@ Usage:
   agenthub review status [--cwd DIR]
   agenthub review set --requester ID --reviewer ID --model ID [--cwd DIR]
   agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
-  agenthub eval run --agent ID [--cwd DIR] [--suite FILE] [--model ID] [--effort LEVEL] [--timeout-ms MS]
+  agenthub eval run --agent ID --model ID --effort LEVEL [--cwd DIR] [--suite FILE] [--timeout-ms MS]
   agenthub discussion dispatch (--json JSON | --json-file FILE)
   agenthub discussion list [--status STATUS[,STATUS]] [--since 7d] [--cwd DIR] [--limit N]
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
@@ -134,11 +134,11 @@ async function executeEval(args, io) {
   rejectPositionals(parsed);
   const input = {
     agent_id: required(parsed.options.agent, "--agent is required"),
+    model: required(parsed.options.model, "--model is required"),
+    effort: required(parsed.options.effort, "--effort is required"),
     cwd: path.resolve(parsed.options.cwd ?? process.cwd()),
   };
   if (parsed.options.suite !== undefined) input.suite_path = parsed.options.suite;
-  if (parsed.options.model !== undefined) input.model = parsed.options.model;
-  if (parsed.options.effort !== undefined) input.effort = parsed.options.effort;
   setOptionalNumber(input, "timeout_ms", parsed.options["timeout-ms"], { positive: true });
   try {
     return await runEval(input, io);

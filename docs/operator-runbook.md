@@ -34,7 +34,7 @@ It also returns the selectable model catalog for each adapter. Use
 | `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local session API for Cockpit. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
-| `agenthub eval run --agent codex --cwd "$PWD"` | Run one interactive, workspace-only repository evaluation. |
+| `agenthub eval run --agent codex --model ID --effort LEVEL --cwd "$PWD" --suite FILE` | Run one interactive suite against a clean repository commit. |
 | `agenthub review status/set/dispatch …` | Inspect, change, and use the requester-specific PR review route. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
 | `agenthub discussion list --status failed --since 7d` | Find retained Discussions without resuming them. |
@@ -233,11 +233,14 @@ Use the returned run ID with `agenthub wait RUN_ID`, or `agenthub query RUN_ID` 
 
 ## Eval Smoke Test
 
-Commit a minimal `.agenthub/evals.json`, verify the worktree is clean, then run:
+Prepare a question-only suite anywhere readable by the foreground evaluator, verify the subject
+worktree is clean, then run:
 
 ```sh
 AGENT_HUB_EVAL_DIR=/tmp/agent-hub-evals \
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals.json \
+  --model gpt-5.6-sol --effort medium
 ```
 
 For a schema v1 suite, the CLI must ask for `path`, `symbol`, and `definition_line` before starting
@@ -247,7 +250,9 @@ suite, supply an executable verifier outside the evaluated repository and confir
 clean. In both modes, the backing run's `command.json` must contain `--ephemeral` and a
 `permissions.agenthub-eval` inline profile, and it must not contain `--sandbox`. A non-Codex
 provider or Codex older than 0.151.0 must fail with `unsupported_isolation`; do not work around
-that error with a broader permission mode.
+that error with a broader permission mode. Omitting `--model` or `--effort` must fail before the
+first standard prompt. An external suite may change between separate eval commands, but the
+normalized suite and question digests are fixed for each accepted command.
 
 ## Discussion Smoke Test
 

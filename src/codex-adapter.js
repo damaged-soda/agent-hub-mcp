@@ -447,7 +447,7 @@ export async function listCodexAgent(options = {}) {
       discussion: CODEX_DISCUSSION_CAPABILITIES,
       evaluation: {
         supported: availability.available && supportsCodexEvalVersion(availability.version),
-        command: "agenthub eval run --agent codex --cwd DIR",
+        command: "agenthub eval run --agent codex --model MODEL --effort LEVEL --cwd DIR --suite FILE",
         execution_profiles: Array.from(CODEX_EVAL_EXECUTION_PROFILES),
         answer_schemas: ["source-location/v1", "workspace-patch/v1"],
         minimum_version: CODEX_EVAL_MIN_VERSION.join("."),

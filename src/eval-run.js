@@ -67,6 +67,8 @@ const MAX_PATCH_BYTES = 16 * 1024 * 1024;
 const MAX_CHANGED_FILES = 1000;
 
 export async function runEval(input, io, internal = {}) {
+  const explicitModel = explicitEvalSetting(input.model, "model");
+  const explicitEffort = explicitEvalSetting(input.effort, "effort");
   await cleanupExpiredEvalResults(internal.env ?? process.env);
   const cwd = path.resolve(input.cwd ?? process.cwd());
   const suite = await loadEvalSuite(cwd, input.suite_path);
@@ -75,7 +77,7 @@ export async function runEval(input, io, internal = {}) {
     ? PATCH_EVAL_EXECUTION_PROFILE
     : READONLY_EVAL_EXECUTION_PROFILE;
   const agent = await resolveEvalAgent(
-    input,
+    { ...input, model: explicitModel, effort: explicitEffort },
     cwd,
     internal.env ?? process.env,
     requestedProfile,
@@ -220,13 +222,11 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
       `Codex model discovery is unavailable: ${described.model_discovery?.reason ?? "empty catalog"}`,
     );
   }
-  const model = input.model
-    ? described.models.find((item) => item.id === input.model)
-    : described.models.find((item) => item.recommended) ?? described.models[0];
+  const model = described.models.find((item) => item.id === input.model);
   if (!model) {
     throw evalError("eval_model_unavailable", `Codex model is not available: ${input.model}`);
   }
-  const effort = input.effort ?? model.default_effort ?? null;
+  const effort = input.effort;
   if (
     effort &&
     Array.isArray(model.supported_efforts) &&
@@ -250,6 +250,13 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
     runtime_read_paths: runtime.paths,
     patch_runtime_detected: runtime.patch_runtime_detected,
   };
+}
+
+function explicitEvalSetting(value, name) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw evalError("invalid_eval_request", `Eval requires an explicit ${name}`);
+  }
+  return value.trim();
 }
 
 async function codexRuntimeReadPaths(env, includePatchRuntime = false) {

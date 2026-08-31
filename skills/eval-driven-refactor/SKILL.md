@@ -10,7 +10,8 @@ description: 使用 Agent Hub 为仓库结构重构设计、运行和解读受�
 
 ## 守住权威边界
 
-- 待评测仓库持有 `.agenthub/evals.json` 这类只含问题的评测集。
+- 待评测仓库可以用 `.agenthub/evals.json` 提供只含问题的样例；评测者持有本次运行使用的 suite，
+  它可以位于被测 worktree 外且无需提交。
 - Agent Hub 只针对一个不可变 commit 运行并判定一份评测集，私有保存原始结果。
 - 评测者通过交互输入源码位置标准答案或外部 patch verifier。标准答案、verifier 身份、
   固定答案注释等 oracle 质料不得进入待评测仓库。
@@ -22,8 +23,9 @@ description: 使用 Agent Hub 为仓库结构重构设计、运行和解读受�
 ## 测量前先定义实验
 
 先写清结构假设，以及实验要支持什么决策。在查看候选结果之前选定语义等价的任务，避免根据
-重构结果反向调题。记录 baseline 与 candidate commit，以及必须保持一致的 agent、model、
-effort、timeout、评测集 digest、CLI 版本和隔离策略。
+重构结果反向调题。可以复制仓库样例并在评测者侧修改或类推，再把选定 suite 同时用于两侧。
+记录 baseline 与 candidate commit，以及必须保持一致的 agent、model、effort、timeout、评测集
+digest、CLI 版本和隔离策略。
 
 编写或修改用例时读取 [references/case-design.md](references/case-design.md)。定位题和代码修改题
 必须分属不同评测集，因为对应的 Agent Hub schema 不能混用。
@@ -34,12 +36,18 @@ effort、timeout、评测集 digest、CLI 版本和隔离策略。
 配置运行同一评测集：
 
 ```sh
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals.json \
+  --model gpt-5.6-sol --effort medium
 ```
 
-只有实验预先指定时才传 `--suite`、`--model`、`--effort` 和 `--timeout-ms`，且两侧必须完全
-一致。分别为两个 commit 输入当时正确的标准答案：重构可能合理地移动权威路径、symbol 或定义
-行，只要任务语义没有变化。代码修改题两侧必须使用语义相同的 verifier。
+`--model` 和 `--effort` 必须显式传入；Agent Hub 不接受默认值。`--suite` 选择评测者本次固定的
+问题快照，`--timeout-ms` 只在实验预先指定时传入。两侧的 suite、model、effort 与 timeout 必须
+完全一致。分别为两个 commit 输入当时正确的标准答案：重构可能合理地移动权威路径、symbol 或
+定义行，只要任务语义没有变化。代码修改题两侧必须使用语义相同的 verifier。
+
+评测者可以在一组成对运行开始前修改或类推样例问题。若两侧的 suite 或 question digest 不同，
+就把它们视为探索性新用例，只做定性观察，不计算成对效率收益。
 
 `eval run` 要求 stdin 和 stderr 连接真实终端或 PTY。标准答案只能由评测者提供，不能交给被测
 agent。当前环境若无法维持交互 PTY，就准备好成对 worktree 和命令，请人类在终端执行，不要从

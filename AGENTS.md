@@ -67,7 +67,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 ## Behavioral Rules
 
 - Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
-- Eval is the only other prompt-construction surface: it may combine a repository-owned question with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree.
+- Eval is the only other prompt-construction surface: it may combine an evaluator-supplied question snapshot with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, expose an external suite path to the child, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree. Eval requires an explicit model and effort; it never selects either from defaults.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.
