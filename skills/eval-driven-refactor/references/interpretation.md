@@ -1,57 +1,52 @@
-# Result interpretation
+# 结果解读
 
-Compare paired cases, not just suite totals. Structural refactors often trade one kind of work for
-another, and aggregate numbers can hide a regression in the exact path the refactor was meant to
-improve.
+逐个比较配对用例，不要只看评测集总数。结构重构常常用一种工作量交换另一种工作量，汇总数字
+可能掩盖重构目标路径上的退化。
 
-## Verify comparability first
+## 先确认可比性
 
-Before interpreting a delta, verify that both results used:
+解读差异前，确认两份结果使用了：
 
-- the intended immutable commits and clean worktrees;
-- matching suite and question digests;
-- the same agent, model, effort, timeout, CLI version, and isolation policy;
-- semantically equivalent human standards or patch verifiers;
-- fresh, non-resumed sessions without extra readable directories.
+- 预定的不可变 commit 与干净 worktree；
+- 一致的评测集和题目 digest；
+- 相同的 agent、model、effort、timeout、CLI 版本与隔离策略；
+- 语义等价的人工标准答案或 patch verifier；
+- 未恢复旧上下文、没有额外可读目录的全新会话。
 
-Mark the comparison inconclusive when a material control differs. Do not adjust one side after
-seeing its result and still describe the pair as controlled.
+任何实质性控制变量不同，都应把比较标记为无法判断。看到一侧结果后再单独调整配置，不能继续把
+这组运行描述为受控实验。
 
-## Use a metric hierarchy
+## 按指标层级判断
 
-1. **Correctness:** pass/fail/invalid/error status is the gate. An efficiency gain does not offset a
-   wrong location or behavior regression.
-2. **Work performed:** compare turns, tool calls, high-confidence file reads, and the breadth of files
-   visited. For patch cases also compare writes, changed files/lines, verifier status, and whether the
-   agent stayed within the intended ownership boundary.
-3. **Cost and elapsed time:** use token/usage facts when available and elapsed time as supporting
-   evidence. They are noisier because provider latency and model variation can dominate small
-   structural effects.
+1. **正确性：** `pass`、`fail`、`invalid`、`error` 是第一道门槛。效率提升不能抵消位置错误
+   或行为退化。
+2. **实际工作量：** 比较轮次、工具调用、高置信文件读取数和访问文件广度。代码修改题还要比较
+   写入次数、修改文件与行数、verifier 状态，以及 agent 是否留在预期权威边界内。
+3. **成本与耗时：** 有 usage 事实时使用 token/usage，并把耗时作为辅助证据。两者噪声更大，
+   provider 延迟和模型波动可能盖过微小的结构收益。
 
-Prefer a consistent per-case direction over one dramatic aggregate improvement. If only one pair
-was run, describe numeric deltas exactly but do not claim statistical significance.
+多道题方向一致，比某个夸张的汇总改善更可信。只运行一组对照时，可以准确陈述数值差异，但不能
+声称具有统计显著性。
 
-## Inspect the process behind the number
+## 检查数字背后的过程
 
-Use each case's backing `agent_run_ref` and the Agent Hub session inspection workflow when a result
-is surprising or materially affects the decision. Look for evidence such as:
+结果意外或会实质影响决策时，通过每道题的 `agent_run_ref` 和 Agent Hub 会话检查流程寻找以下
+证据：
 
-- broad repository scans before the agent identifies the true entry point;
-- repeated backtracking between files or competing owners;
-- a lucky unique-keyword hit that bypasses the structure being evaluated;
-- edits applied to an adapter or presentation layer when another component owns the behavior;
-- changes scattered across unrelated responsibilities;
-- tests or verifier feedback doing the navigation the repository structure failed to provide.
+- agent 找到真实入口前进行了大范围仓库扫描；
+- 在多个文件或竞争权威之间反复折返；
+- 幸运命中唯一关键词，绕过了本应接受评测的结构；
+- 行为由其它组件持有，修改却落在 adapter 或呈现层；
+- 修改散落到无关职责；
+- 测试或 verifier 反馈替仓库结构完成了导航。
 
-Session inspection is explanatory evidence, not an invitation to grade style. Do not penalize a
-different but direct route merely because it was not the route the evaluator expected.
+会话检查只提供解释性证据，不用于评判操作风格。某条路径即使不同于评测者预期，只要直接有效，
+就不应受罚。
 
-## Make the decision explicit
+## 明确给出决策
 
-Relate the result to the predeclared hypothesis. A useful summary contains, for each matched case,
-correctness, the meaningful work deltas, and one short process observation. Then state whether the
-evidence supports, rejects, or cannot decide the refactor.
+把结果重新对应到预先声明的假设。有效总结应逐题给出正确性、有意义的工作量差异和一条简短过程
+观察，再明确说明证据支持、不支持，还是无法判断这次重构。
 
-If the result is inconclusive, choose the smallest remedy: rerun a noisy case, replace an ambiguous
-case, or add one task that exercises a missing maintenance shape. Do not keep adding cases until the
-desired outcome appears.
+结论无法判断时，选择最小补救：复跑噪声较大的题目、替换含糊题目，或补一道覆盖缺失维护形态的
+任务。不得持续加题，直到出现想要的结果。

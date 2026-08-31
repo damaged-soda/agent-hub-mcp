@@ -1,61 +1,54 @@
-# Case design
+# 用例设计
 
-Design cases around maintenance intent, not the current repository layout. A case should remain a
-fair question if files, symbols, and line numbers move during the proposed refactor.
+围绕维护意图设计用例，而不是围绕当前仓库布局。即使重构移动了文件、symbol 和行号，题目也应
+继续公平有效。
 
-## Choose the case type
+## 选择题型
 
-Use `source-location/v1` when the claim is that the new structure helps an agent identify the
-production owner of behavior. It measures navigation and explanation only; it is weak evidence for
-edit quality.
+如果假设是新结构能帮助 agent 找到某项行为的生产权威，用 `source-location/v1`。它只测定位与
+解释，对修改质量的证明力较弱。
 
-Use `workspace-patch/v1` when the claim is that the new structure makes a realistic change easier or
-safer. Prefer it for deciding whether to continue a large refactor because the external verifier can
-check behavior and unintended scope. Keep the verifier outside every agent-readable path and supply
-it interactively.
+如果假设是新结构能让真实修改更简单或更安全，用 `workspace-patch/v1`。判断是否继续大型重构时
+优先使用它，因为外部 verifier 可以检查行为与意外修改范围。verifier 必须位于所有 agent 可读
+路径之外，并通过交互输入。
 
-Do not mix the two answer schemas in one suite. When both are useful, create separate question-only
-suites and run each pair independently.
+同一评测集不得混用两种答案 schema。两者都有价值时，分别建立只含问题的评测集，各自独立运行
+成对实验。
 
-## Write layout-independent prompts
+## 编写不依赖布局的题目
 
-A good prompt describes observable intent in the language a maintainer would naturally use. It
-does not prescribe a search strategy, name the expected file or symbol, or reveal a unique literal
-that turns the task into direct text lookup.
+好题目用维护者自然使用的语言描述可观察意图，不规定搜索策略，不点名预期文件或 symbol，也不
+暴露能把任务退化为直接文本搜索的唯一字面量。
 
-Prefer questions that require following a real control or data path from a public entry point to the
-code that owns the decision. The answer should be discoverable from ordinary repository evidence,
-not from a planted comment or benchmark-only marker.
+优先选择必须沿真实控制流或数据流，从公共入口追到决策权威代码的问题。答案应当能从仓库正常
+证据中得出，不能依赖人为埋入的注释或只为 benchmark 服务的标记。
 
-Reject or rewrite a case when:
+遇到以下情况应放弃或重写用例：
 
-- the prompt says which commands, directories, files, or intermediate symbols to inspect;
-- a prompt phrase has one unique textual match that is already the answer;
-- it depends on a line number, function name, or variable name remaining unchanged;
-- multiple implementations could satisfy the prompt but the standard accepts only one without a
-  repository contract that makes it authoritative;
-- the candidate changes the requested behavior rather than only its organization;
-- the case exists only to reward the proposed structure.
+- 题目指定了要检查的命令、目录、文件或中间 symbol；
+- 题目中的某个短语只有一个文本匹配，而且该匹配本身就是答案；
+- 题目依赖行号、函数名或变量名保持不变；
+- 多个实现都满足题意，但仓库没有权威契约，标准答案却只接受其中一个；
+- candidate 改变了题目要求的行为，而不只是组织方式；
+- 用例存在的唯一目的，是奖励预设的新结构。
 
-## Cover the structural hypothesis
+## 覆盖结构假设
 
-A small benchmark is more useful when cases exercise different maintenance shapes. Depending on the
-refactor, consider:
+小型 benchmark 只有覆盖不同维护形态时才更有价值。根据重构目标，可以考虑：
 
-- tracing from an external entry point to the component that owns a non-obvious decision;
-- making a localized behavior change that should remain within one responsibility boundary;
-- making a cross-boundary change whose coordination cost the proposed structure is meant to reduce;
-- preserving a nearby negative case so a smaller diff is not achieved by silently dropping behavior.
+- 从外部入口追踪到持有某个非显然决策的组件；
+- 完成应当局限在单一职责边界内的局部行为修改；
+- 完成一个跨边界修改，而新结构的目标正是降低这种协调成本；
+- 保留相邻的负例，避免 agent 通过静默删减行为获得更小 diff。
 
-Do not impose a fixed case count. Each case must have a distinct reason to affect the decision.
-Remove redundant or ambiguous cases instead of padding the suite.
+不要规定固定题数。每道题都必须有影响决策的独立理由；删除重复或含糊的题目，不要为了数量填充
+评测集。
 
-## Keep standards outside the suite
+## 标准答案不得进入评测集
 
-Repository suites contain prompts and public answer schemas only. For a location case, inspect each
-commit and enter its current `path`, `symbol`, and `definition_line` at runtime. Movement between the
-baseline and candidate is expected and is not itself a failure.
+仓库评测集只包含题目与公开答案 schema。定位题要分别检查每个 commit，并在运行时输入当时的
+`path`、`symbol` 和 `definition_line`。答案在 baseline 与 candidate 之间移动是正常现象，本身
+不构成失败。
 
-For a patch case, use an external executable verifier with equivalent assertions across both
-commits. It may inject hidden tests and invoke the repository's normal test entrypoint, but it must
-not test for the proposed file layout unless that layout is itself the user requirement.
+代码修改题使用外部可执行 verifier，且两个 commit 上的断言语义必须等价。它可以注入隐藏测试并
+调用仓库正常测试入口，但除非文件布局本身就是用户需求，否则不得断言预设布局。
