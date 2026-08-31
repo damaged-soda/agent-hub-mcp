@@ -1,5 +1,7 @@
 # Dispatch and continue runs
 
+PR and change reviews use [reviews.md](reviews.md), not this workflow.
+
 ## Dispatch work
 
 First discover available agents in the target workspace:
@@ -14,12 +16,12 @@ Then dispatch the task and retain both `run_ref.run_id` and `cli_session_ref`:
 agenthub dispatch \
   --agent claude-code \
   --cwd "$PWD" \
-  --prompt "Review the current changes and report actionable findings only."
+  --prompt "Investigate the reported failure and return evidence."
 agenthub wait RUN_ID
 ```
 
 If a wait result has `timed_out: true`, call `agenthub wait RUN_ID` again. Use `agenthub run` only
-for short tasks. Prefer `dispatch` plus `wait` for reviews, investigations, and edits.
+for short tasks. Prefer `dispatch` plus `wait` for investigations and edits.
 
 ## Continue a native session
 

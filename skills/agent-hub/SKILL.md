@@ -12,7 +12,7 @@ context; do not start the HTTP daemon for ordinary collaboration.
 
 Read only the reference for the requested workflow:
 
-- PR or change review governed by the machine review route:
+- Any PR or change review, including asking another agent to inspect current changes:
   [references/reviews.md](references/reviews.md).
 - Ordinary dispatch, implementation, investigation, continuation, or structured run input:
   [references/runs.md](references/runs.md).
@@ -26,6 +26,8 @@ Read only the reference for the requested workflow:
 
 ## Shared invariants
 
+- PR and change reviews always use `agenthub review dispatch`; never hand-pick their reviewer or
+  model through the ordinary run workflow.
 - Keep Agent Hub `run_id` values separate from provider-native session IDs.
 - Never place credential values in prompts or metadata, and never persist transcript bodies or send
   them to third parties.
