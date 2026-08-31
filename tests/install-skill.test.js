@@ -50,4 +50,24 @@ describe("bundled Skill installer", () => {
 
     await expect(fsp.stat(stale)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("validates every bundled Skill before replacing any installed Skill", async () => {
+    const fixture = path.join(root, "fixture");
+    const fixtureInstaller = path.join(fixture, "scripts", "install-skill.js");
+    const installedSkill = path.join(codexHome, "skills", "agent-hub", "SKILL.md");
+    await fsp.mkdir(path.dirname(fixtureInstaller), { recursive: true });
+    await fsp.copyFile(INSTALLER, fixtureInstaller);
+    await fsp.mkdir(path.join(fixture, "skills", "agent-hub"), { recursive: true });
+    await fsp.writeFile(path.join(fixture, "skills", "agent-hub", "SKILL.md"), "new\n");
+    await fsp.mkdir(path.join(fixture, "skills", "zzz-broken"), { recursive: true });
+    await fsp.mkdir(path.dirname(installedSkill), { recursive: true });
+    await fsp.writeFile(installedSkill, "existing\n");
+
+    await expect(execFileAsync(process.execPath, [fixtureInstaller], {
+      env: { ...process.env, CODEX_HOME: codexHome },
+    })).rejects.toMatchObject({
+      stderr: "Failed to install bundled skills: Bundled skill zzz-broken is missing SKILL.md\n",
+    });
+    await expect(fsp.readFile(installedSkill, "utf8")).resolves.toBe("existing\n");
+  });
 });

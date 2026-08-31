@@ -45,6 +45,11 @@ and keep them identical across the pair. Enter the correct standard for each com
 path, symbol, or definition line may legitimately move during a refactor while the task meaning
 stays fixed. For patch suites, supply the same verifier semantics for both commits.
 
+`eval run` requires stdin and stderr to be attached to a real terminal or PTY. The evaluator, never
+the evaluated child, supplies the standards. If the current environment cannot maintain an
+interactive PTY, prepare the paired worktrees and commands and ask the human to run them instead of
+invoking Eval from a non-interactive tool shell.
+
 Do not add a prepare phase, resume a prior agent session, enable memory, expose extra directories,
 or relax isolation. Agent Hub's eval profile already starts fresh sessions with memory and
 subagents disabled. Stop and report an incomparable run if the worktree is dirty, the suite or

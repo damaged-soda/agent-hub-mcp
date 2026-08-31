@@ -55,6 +55,10 @@ Use `agenthub run` only for short tasks. Prefer `dispatch` plus `wait` for revie
 
 ## Run a repository evaluation
 
+For an individual repository-owned eval, use the command below. When the request is to design,
+control, or interpret paired baseline/candidate runs for a structural refactor, use the separate
+`eval-driven-refactor` Skill and return here only for the single-run CLI and isolation contract.
+
 When the user asks to run a repository-owned code-navigation or patch eval, use the single
 interactive command from the clean target worktree root:
 
