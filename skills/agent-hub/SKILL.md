@@ -1,6 +1,6 @@
 ---
 name: agent-hub
-description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and OpenCode processes through the daemon-free agenthub CLI, run repository-owned coding-agent evaluations, and resolve copied agenthub:// session or event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, evaluate code navigation, continue or inspect a native CLI session, resolve an Agent Hub reference, or participate in a durable structured discussion.
+description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and OpenCode processes through the daemon-free agenthub CLI, run isolated repository coding-agent evaluations, and resolve copied agenthub:// session or event references. Use when Codex needs another coding agent to review, investigate, implement, compare conclusions, evaluate code navigation, continue or inspect a native CLI session, resolve an Agent Hub reference, or participate in a durable structured discussion.
 ---
 
 # Agent Hub
@@ -55,20 +55,29 @@ Use `agenthub run` only for short tasks. Prefer `dispatch` plus `wait` for revie
 
 ## Run a repository evaluation
 
-When the user asks to run a repository-owned code-navigation or patch eval, use the single
+For an individual repository eval, use the command below. When the request is to design,
+control, or interpret paired baseline/candidate runs for a structural refactor, use the separate
+`eval-driven-refactor` Skill and return here only for the single-run CLI and isolation contract.
+
+When the user asks to run a code-navigation or patch eval against a repository, use the single
 interactive command from the clean target worktree root:
 
 ```sh
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals.json \
+  --model gpt-5.6-sol --effort medium
 ```
 
-The repository must provide `.agenthub/evals.json` questions without answers. Schema v1 collects
-the human standard `path`, `symbol`, and `definition_line` values and enforces
-`workspace-readonly/v1`. Schema v2 collects one external executable verifier path per case, runs
-the agent in a disposable detached worktree under `workspace-write/v1`, and invokes the verifier
-only after the agent exits. Standards stay outside child prompts and artifacts. Do not create an
-answer file or work around `unsupported_isolation`: Eval requires Codex CLI 0.151.0 or newer. Agent
-Hub produces one run result; comparison across commits or worktrees belongs to the caller.
+The repository may provide `.agenthub/evals.json` as a question-only sample, but the evaluator owns
+the runtime suite. `--suite` may select an uncommitted file outside the clean subject worktree;
+Agent Hub snapshots its normalized questions and digests at startup. Model and effort are mandatory
+and never come from defaults. Schema v1 collects the human standard `path`, `symbol`, and
+`definition_line` values and enforces `workspace-readonly/v1`. Schema v2 collects one external
+executable verifier path per case, runs the agent in a disposable detached worktree under
+`workspace-write/v1`, and invokes the verifier only after the agent exits. Standards and external
+suite paths stay outside child prompts and artifacts. Do not create an answer file or work around
+`unsupported_isolation`: Eval requires Codex CLI 0.151.0 or newer. Agent Hub produces one run
+result; comparison across commits or worktrees belongs to the caller.
 
 ## Continue a session
 

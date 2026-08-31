@@ -4,11 +4,14 @@ The primary integration is the `agenthub` CLI. It launches from the caller's cur
 
 ## CLI Registration
 
-Install the local package and bundled Codex Skill:
+Install and link the local CLI package:
 
 ```sh
 npm run install:local
 ```
+
+This command does not install Skills. Charter manifests and `skills-sync` own repository-level Skill
+discovery separately from npm package installation.
 
 All successful CLI commands print the direct structured result as JSON. The normal long-running flow is:
 
@@ -21,15 +24,20 @@ agenthub wait RUN_ID
 Repository evaluations are a separate interactive CLI-only surface:
 
 ```sh
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals.json \
+  --model gpt-5.6-sol --effort medium
 ```
 
-The command discovers `.agenthub/evals.json` in a clean Git worktree, collects the human standards
-through the TTY before dispatching any case, runs one fresh workspace-only Codex session per case,
-and prints one `agent-eval-run` JSON document. Source-location suites use the original worktree
+The command reads an evaluator-selected suite, snapshots its normalized digest, collects the human
+standards through the TTY before dispatching any case, runs one fresh workspace-only Codex session
+per case, and prints one `agent-eval-run` JSON document. Repositories may provide
+`.agenthub/evals.json` as the default sample, but `--suite` may point outside the clean evaluated
+worktree and does not need to be committed. Source-location suites use the original worktree
 read-only; patch suites edit disposable detached worktrees and execute an external verifier after
-the agent exits. It intentionally has no MCP tool, no prepare command, and no non-interactive
-answer-file input. See [Repository evaluations](evals.md) for the suite and result contracts.
+the agent exits. Model and effort are required and never resolved from defaults. Eval intentionally
+has no MCP tool, no prepare command, and no non-interactive answer-file input. See
+[Repository evaluations](evals.md) for the suite and result contracts.
 
 Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.
 

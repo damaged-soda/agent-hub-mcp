@@ -1,6 +1,6 @@
 # Agent Hub
 
-Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus the bundled Codex Skill. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
+Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus versioned Codex Skill sources. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
 
 ## Quick Start
 
@@ -10,15 +10,17 @@ Prerequisites:
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
 - CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
 
-Install dependencies, the local CLI, and the Skill:
+Install dependencies and link the local CLI:
 
 ```sh
 npm install
 npm run install:local
 ```
 
-`npm run install:local` links `agenthub` and `agent-session` into the active npm prefix and installs the
-versioned Skill at `${CODEX_HOME:-~/.codex}/skills/agent-hub`.
+`npm run install:local` only links `agenthub` and `agent-session` into the active npm prefix. Skill
+sources live under `skills/` but are not copied into user-level client directories. Charter
+manifests own their repository grants, and `skills-sync` projects the corresponding repository-local
+discovery links.
 
 Run the test suite:
 
@@ -114,20 +116,25 @@ The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, K
 
 Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
 
-Run a repository-owned code-navigation or patch evaluation with one interactive command:
+Run an evaluator-selected code-navigation or patch suite against one clean commit with one
+interactive command:
 
 ```sh
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals.json \
+  --model gpt-5.6-sol --effort medium
 ```
 
-The evaluated clean worktree provides `.agenthub/evals.json` questions but no oracle. Schema v1
-collects the current commit's standard source location and performs exact grading in the read-only
-workspace. Schema v2 collects an external executable verifier, lets the agent edit a disposable
-detached worktree, and runs the verifier only after the agent exits. Both keep standards out of
-child prompts and artifacts, use fresh ephemeral sessions, deny `.git` and command network, and
-disable memory, session persistence, and subagents. Eval requires Codex CLI 0.151.0 or newer;
-providers without an equivalent whitelist fail with `unsupported_isolation`. See the
-[evaluation contract](docs/evals.md).
+The suite is evaluator input: repositories may provide `.agenthub/evals.json` as a default sample,
+while `--suite` may select an uncommitted file outside the evaluated workspace. Agent Hub snapshots
+and hashes its questions at startup; the evaluated worktree itself must remain clean and immutable.
+Schema v1 collects the current commit's standard source location and performs exact grading in the
+read-only workspace. Schema v2 collects an external executable verifier, lets the agent edit a
+disposable detached worktree, and runs the verifier only after the agent exits. Both keep standards
+and external suite paths out of child inputs, use fresh ephemeral sessions, deny `.git` and command
+network, and disable memory, session persistence, and subagents. Eval requires an explicit model
+and effort plus Codex CLI 0.151.0 or newer; providers without an equivalent whitelist fail with
+`unsupported_isolation`. See the [evaluation contract](docs/evals.md).
 
 For PR cross-review, use the persisted requester route instead of choosing an adapter ad hoc:
 
@@ -209,7 +216,7 @@ The optional streamable HTTP daemon exposes both run and Discussion tools:
 node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
 ```
 
-The HTTP transport is intended for local loopback compatibility only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. Prefer the CLI/Skill path when inheriting the caller's credential context matters.
+The HTTP transport is intended for local loopback compatibility only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. Prefer the CLI/Skills path when inheriting the caller's credential context matters.
 
 MCP clients should launch the server process, for example:
 

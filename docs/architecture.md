@@ -191,10 +191,12 @@ credential 或 provider 原始响应。目录为 `0700`、文件为 `0600`，更
 ### repository eval
 
 Eval 是 CLI-only 的前台监督控制面，不进入普通 MCP run schema，也不改变普通 run 的
-prompt 原样透传约束。`agenthub eval run` 从被测干净 worktree 读取
-`.agenthub/evals.json` 问题，在 TTY 中先收齐当前 commit 的人工标准答案，然后为每个 case
-创建一个普通 Agent Hub run。Eval supervisor 只把“问题 + 固定结构化输出契约”交给 run；
-标准答案只留在 supervisor 内存，完成后只保留 digest。
+prompt 原样透传约束。`agenthub eval run` 从评测者选择的 suite 读取问题；suite 可位于被测
+worktree 外且无需提交，supervisor 启动时一次性规范化并固定 digest。被测 worktree 自身仍须
+干净并由一个不可变 commit 定义。Eval 在 TTY 中先收齐当前 commit 的人工标准答案，然后为
+每个 case 创建一个普通 Agent Hub run。supervisor 只把“当前问题 + 固定结构化输出契约”交给
+run，不向 child 暴露 suite 路径；标准答案只留在 supervisor 内存，完成后只保留 digest。
+model 与 effort 必须由调用者显式指定，不读取 catalog 推荐值或环境默认值。
 
 每个 case 的普通 run 带内部 `execution_profile=workspace-readonly/v1`。该字段不在普通 CLI
 或 MCP 输入暴露，只由 Eval supervisor 构造；runner 把它交给 Codex adapter，后者使用

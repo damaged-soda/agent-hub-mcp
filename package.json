@@ -15,7 +15,6 @@
     "docs",
     "fixtures",
     "schemas",
-    "scripts/install-skill.js",
     "skills",
     "src"
   ],
@@ -28,8 +27,7 @@
   },
   "scripts": {
     "cli": "node src/cli.js",
-    "install:local": "npm link && npm run install:skill",
-    "install:skill": "node scripts/install-skill.js",
+    "install:local": "npm link",
     "start": "node src/server.js",
     "test": "vitest run",
     "selftest:mcp": "node scripts/mcp-client.js",

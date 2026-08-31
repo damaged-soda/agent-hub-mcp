@@ -2,13 +2,13 @@
 
 ## Collaboration Routing
 
-- When the user asks to collaborate with another agent, use the `agenthub` CLI through the bundled `agent-hub` Skill by default.
+- When the user asks to collaborate with another agent, use the `agenthub` CLI through the versioned `agent-hub` Skill by default.
 - For Claude Code collaboration, run `agenthub agents --cwd "$PWD"`, then `agenthub dispatch --agent claude-code …` and retain the run ID for `agenthub wait`.
 - Do not use Codex `multi_agent_v1` sub-agents unless the user explicitly asks for Codex sub-agents or `agenthub` is unavailable. The optional `agent_hub` MCP is a compatibility fallback, not the primary route.
 
 ## Project Shape
 
-This repository implements a daemon-free Agent Hub CLI and Skill, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, Kimi Code, and OpenCode), stores local artifacts, and coordinates durable structured discussions.
+This repository implements a daemon-free Agent Hub CLI and versioned Skill sources, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, Kimi Code, and OpenCode), stores local artifacts, and coordinates durable structured discussions.
 
 Key files:
 
@@ -50,6 +50,7 @@ Key files:
 | `src/env.js` | Environment allowlist and forwarding. |
 | `scripts/mcp-client.js` | Local MCP smoke-test client. |
 | `skills/agent-hub/` | Versioned Codex Skill for CLI collaboration workflows. |
+| `skills/eval-driven-refactor/` | Versioned Codex Skill for controlled before/after refactor evaluation. |
 
 ## Commands
 
@@ -66,7 +67,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 ## Behavioral Rules
 
 - Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
-- Eval is the only other prompt-construction surface: it may combine a repository-owned question with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree.
+- Eval is the only other prompt-construction surface: it may combine an evaluator-supplied question snapshot with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, expose an external suite path to the child, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree. Eval requires an explicit model and effort; it never selects either from defaults.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.
@@ -120,7 +121,7 @@ is not rejected: the agent runs namespace-less（charter's `gh` wrapper 点名 t
 
 | Document | Use when |
 |---|---|
-| `README.md` | Installing, smoke testing, or wiring the CLI/Skill and optional MCP server. |
+| `README.md` | Installing, smoke testing, or wiring the CLI/Skills and optional MCP server. |
 | `docs/integration-guide.md` | Implementing a client call flow or understanding request/response shapes. |
 | `docs/operator-runbook.md` | Operating, configuring, or troubleshooting local runs. |
 | `docs/architecture.md` | Changing lifecycle, storage, adapter, or process-group behavior. |

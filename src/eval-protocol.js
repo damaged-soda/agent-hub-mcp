@@ -24,9 +24,6 @@ export async function loadEvalSuite(cwd, suitePath = undefined) {
   const workspace = await realDirectory(cwd, "eval cwd");
   const candidate = path.resolve(workspace, suitePath ?? EVAL_SUITE_RELATIVE_PATH);
   const suiteFile = await realFile(candidate, "eval suite");
-  if (!isInside(suiteFile, workspace)) {
-    throw evalError("invalid_eval_suite", "Eval suite must be inside the evaluated workspace");
-  }
 
   let document;
   try {

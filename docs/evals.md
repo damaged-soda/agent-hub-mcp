@@ -1,14 +1,21 @@
 # Repository evaluations
 
-Agent Hub evaluations run one repository-owned question suite against one immutable commit. A
+Agent Hub evaluations run one evaluator-selected question suite against one immutable commit. A
 suite either asks fresh coding-agent sessions to locate production code or to implement a change
-inside disposable worktrees. Agent Hub runs and grades one suite; it does not compare commits,
-rank runs, or maintain a long-term benchmark. A consumer such as Cockpit may ingest the resulting
-facts and choose its own comparison cohorts.
+inside disposable worktrees. The suite is evaluator input, not part of the subject: Agent Hub
+snapshots and hashes it at command startup, while the evaluated worktree must remain clean and
+committed. Agent Hub runs and grades one suite; it does not compare commits, rank runs, or maintain
+a long-term benchmark. A consumer such as Cockpit may ingest the resulting facts and choose its own
+comparison cohorts.
 
-## Repository-owned questions
+The versioned `eval-driven-refactor` Skill provides an opinionated workflow for designing controlled
+before/after cases and interpreting paired results without changing this single-run boundary. The
+target repository may provide sample questions, while runtime suites, comparisons, and conclusions
+remain evaluator-owned.
 
-The default suite path is `.agenthub/evals.json` in the evaluated Git worktree:
+## Evaluator-owned questions
+
+Repositories may version `.agenthub/evals.json` as the default sample suite:
 
 ```json
 {
@@ -24,10 +31,13 @@ The default suite path is `.agenthub/evals.json` in the evaluated Git worktree:
 }
 ```
 
-Suites contain questions only. Oracle fields, expected paths, immutable source comments, and
-grader scripts are rejected. The suite and evaluated worktree must be clean and committed before
-the run starts. `--suite` may select another JSON file, but that file must still resolve inside the
-evaluated worktree. The machine-readable suite contracts are
+Suites contain questions only. Oracle fields, expected paths, immutable source comments, and grader
+scripts are rejected. The evaluated worktree must be clean and committed, but the runtime suite
+does not need to be. `--suite` may select an absolute file anywhere readable by the foreground
+evaluator; a relative path resolves from the evaluated worktree root. External suite paths are not
+added to the child agent's readable capabilities. The normalized suite is held in supervisor memory,
+so edits after command startup do not change the accepted questions or digests. The machine-readable
+suite contracts are
 [`schemas/agent-eval-suite-v1.schema.json`](../schemas/agent-eval-suite-v1.schema.json) and
 [`schemas/agent-eval-suite-v2.schema.json`](../schemas/agent-eval-suite-v2.schema.json).
 
@@ -83,10 +93,14 @@ both kinds are needed.
 Run from the repository root:
 
 ```sh
-agenthub eval run --agent codex --cwd "$PWD"
+agenthub eval run --agent codex --cwd "$PWD" \
+  --model gpt-5.6-sol \
+  --effort medium
 ```
 
-Optional flags select the suite, model, effort, or per-case timeout:
+Model and effort are required. Eval validates both against the live Codex catalog and never chooses
+a recommended model, model default, or environment fallback. Optional flags select an external
+suite or per-case timeout:
 
 ```sh
 agenthub eval run \
@@ -102,6 +116,7 @@ The command writes questions and standard prompts to stderr, reads all human sta
 interactive terminal, and prints one final JSON result to stdout. It collects every standard before
 starting the first agent case. Location suites ask for `path`, `symbol`, and `definition_line`;
 patch suites ask for an executable verifier path. There is no prepare command and no answer file.
+Missing model or effort fails before the first standard prompt.
 
 The standards remain in the foreground Eval supervisor's memory. They are never included in
 the agent prompt, argv, child environment, ordinary run request, or eval result. Only a canonical
@@ -165,6 +180,12 @@ Every completed eval command stores one private `0600` JSON result under
 - elapsed time, usage, turn/tool counts, and high-confidence observed file-read counts;
 - for patch suites, observed write counts, bounded change statistics, patch digest, and verifier
   exit status.
+
+The suite `relative_path` is recorded relative to the evaluated worktree root and may contain `..`
+for evaluator-owned external input. The result never stores suite question text. Controlled
+cross-commit comparisons should require matching suite and question digests; if the evaluator
+modifies or extrapolates questions between runs, the consumer should treat them as exploratory new
+cases rather than paired efficiency measurements.
 
 The eval result does not contain question text, standard answers/verifiers, parsed agent answers,
 patch bodies, or verifier output. The backing ordinary run keeps the ordinary provider-native

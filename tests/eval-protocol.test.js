@@ -61,6 +61,32 @@ describe("eval protocol", () => {
     await expect(loadEvalSuite(root)).rejects.toMatchObject({ code: "invalid_eval_suite" });
   });
 
+  it("loads and snapshots an evaluator-owned suite outside the subject workspace", async () => {
+    const evaluatorRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-evaluator-suite-"));
+    const suitePath = path.join(evaluatorRoot, "custom.json");
+    try {
+      await fsp.writeFile(suitePath, `${JSON.stringify({
+        schema_version: 1,
+        suite_id: "evaluator-owned",
+        cases: [{
+          id: "locate-target",
+          prompt: "Find the evaluator-selected behavior.",
+          answer_schema: "source-location/v1",
+        }],
+      })}\n`);
+      const suite = await loadEvalSuite(root, suitePath);
+      const pinnedDigest = suite.digest;
+      expect(suite.relative_path).toBe(slashPath(path.relative(root, suitePath)));
+      expect(suite.cases[0].prompt).toBe("Find the evaluator-selected behavior.");
+
+      await fsp.writeFile(suitePath, "{}\n");
+      expect(suite.digest).toBe(pinnedDigest);
+      expect(suite.cases[0].prompt).toBe("Find the evaluator-selected behavior.");
+    } finally {
+      await fsp.rm(evaluatorRoot, { recursive: true, force: true });
+    }
+  });
+
   it("validates a repository-relative standard answer and exact output", async () => {
     const expected = await normalizeExpectedSourceLocation({
       path: "src/app.js",
@@ -179,4 +205,8 @@ async function writeSuite(root, overrides = {}) {
 
 function git(cwd, ...args) {
   return execFileAsync("git", args, { cwd });
+}
+
+function slashPath(value) {
+  return value.split(path.sep).join("/");
 }

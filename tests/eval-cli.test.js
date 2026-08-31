@@ -82,13 +82,16 @@ process.exitCode = await main(process.argv.slice(2), io);
   });
 
   it("collects answers once, runs an isolated case, and persists only digests", async () => {
+    const evaluatorSuite = path.join(root, "evaluator-suite.json");
+    await fsp.copyFile(path.join(workspace, ".agenthub", "evals.json"), evaluatorSuite);
     const result = await invokeEval([
       "src/app.js",
       "locateTarget",
       "1",
-    ]);
+    ], "codex", evaluatorSuite);
 
     expect(result.status).toBe("completed");
+    expect(result.suite.relative_path).toBe("../evaluator-suite.json");
     expect(result.agent).toMatchObject({
       agent_id: "codex",
       version: "codex-cli 0.151.0",
@@ -131,6 +134,9 @@ process.exitCode = await main(process.argv.slice(2), io);
       path.join(runDir, result.cases[0].agent_run_ref.run_id, "command.json"),
       "utf8",
     ));
+    expect(command.argv).toContain("gpt-test");
+    expect(command.argv).toContain('model_reasoning_effort="medium"');
+    expect(JSON.stringify(command.argv)).not.toContain(evaluatorSuite);
     expect(command.argv).toContain("--ephemeral");
     expect(command.argv).not.toContain("--sandbox");
     expect(command.argv).toContain('default_permissions="agenthub-eval"');
@@ -286,20 +292,41 @@ process.exitCode = await main(process.argv.slice(2), io);
     });
   });
 
-  async function invokeEval(answers, agent = "codex") {
+  it("requires model and effort before collecting standards", async () => {
+    const missingModel = await invokeRawFailure([
+      "eval", "run", "--agent", "codex", "--effort", "medium", "--cwd", workspace,
+    ]);
+    expect(missingModel).toEqual({
+      error: { code: "invalid_cli_usage", message: "--model is required" },
+    });
+    const missingEffort = await invokeRawFailure([
+      "eval", "run", "--agent", "codex", "--model", "gpt-test", "--cwd", workspace,
+    ]);
+    expect(missingEffort).toEqual({
+      error: { code: "invalid_cli_usage", message: "--effort is required" },
+    });
+  });
+
+  async function invokeEval(answers, agent = "codex", suite = undefined) {
+    const args = [
+      env.AGENT_HUB_TEST_HELPER,
+      "eval",
+      "run",
+      "--agent",
+      agent,
+      "--model",
+      "gpt-test",
+      "--effort",
+      "medium",
+      "--cwd",
+      workspace,
+      "--timeout-ms",
+      "10000",
+    ];
+    if (suite !== undefined) args.push("--suite", suite);
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
-      [
-        env.AGENT_HUB_TEST_HELPER,
-        "eval",
-        "run",
-        "--agent",
-        agent,
-        "--cwd",
-        workspace,
-        "--timeout-ms",
-        "10000",
-      ],
+      args,
       {
         cwd: path.dirname(CLI_PATH),
         env: { ...env, AGENT_HUB_TEST_ANSWERS: JSON.stringify(answers) },
@@ -311,10 +338,17 @@ process.exitCode = await main(process.argv.slice(2), io);
   }
 
   async function invokeEvalFailure(answers, agent) {
+    return invokeRawFailure([
+      "eval", "run", "--agent", agent,
+      "--model", "gpt-test", "--effort", "medium", "--cwd", workspace,
+    ], answers);
+  }
+
+  async function invokeRawFailure(args, answers = []) {
     try {
       await execFileAsync(
         process.execPath,
-        [env.AGENT_HUB_TEST_HELPER, "eval", "run", "--agent", agent, "--cwd", workspace],
+        [env.AGENT_HUB_TEST_HELPER, ...args],
         {
           cwd: path.dirname(CLI_PATH),
           env: { ...env, AGENT_HUB_TEST_ANSWERS: JSON.stringify(answers) },
