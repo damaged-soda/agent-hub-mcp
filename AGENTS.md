@@ -2,13 +2,13 @@
 
 ## Collaboration Routing
 
-- When the user asks to collaborate with another agent, use the `agenthub` CLI through the bundled `agent-hub` Skill by default.
+- When the user asks to collaborate with another agent, use the `agenthub` CLI through the versioned `agent-hub` Skill by default.
 - For Claude Code collaboration, run `agenthub agents --cwd "$PWD"`, then `agenthub dispatch --agent claude-code …` and retain the run ID for `agenthub wait`.
 - Do not use Codex `multi_agent_v1` sub-agents unless the user explicitly asks for Codex sub-agents or `agenthub` is unavailable. The optional `agent_hub` MCP is a compatibility fallback, not the primary route.
 
 ## Project Shape
 
-This repository implements a daemon-free Agent Hub CLI and bundled Skills, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, Kimi Code, and OpenCode), stores local artifacts, and coordinates durable structured discussions.
+This repository implements a daemon-free Agent Hub CLI and versioned Skill sources, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, Kimi Code, and OpenCode), stores local artifacts, and coordinates durable structured discussions.
 
 Key files:
 

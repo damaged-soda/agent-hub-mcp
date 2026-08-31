@@ -4,11 +4,14 @@ The primary integration is the `agenthub` CLI. It launches from the caller's cur
 
 ## CLI Registration
 
-Install the local package and bundled Codex Skills:
+Install and link the local CLI package:
 
 ```sh
 npm run install:local
 ```
+
+This command does not install Skills. Charter manifests and `skills-sync` own repository-level Skill
+discovery separately from npm package installation.
 
 All successful CLI commands print the direct structured result as JSON. The normal long-running flow is:
 

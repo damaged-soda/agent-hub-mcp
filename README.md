@@ -1,6 +1,6 @@
 # Agent Hub
 
-Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus bundled Codex Skills. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
+Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus versioned Codex Skill sources. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
 
 ## Quick Start
 
@@ -10,16 +10,17 @@ Prerequisites:
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
 - CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
 
-Install dependencies, the local CLI, and the bundled Skills:
+Install dependencies and link the local CLI:
 
 ```sh
 npm install
 npm run install:local
 ```
 
-`npm run install:local` links `agenthub` and `agent-session` into the active npm prefix and installs
-the versioned `agent-hub` and `eval-driven-refactor` Skills under
-`${CODEX_HOME:-~/.codex}/skills/`.
+`npm run install:local` only links `agenthub` and `agent-session` into the active npm prefix. Skill
+sources live under `skills/` but are not copied into user-level client directories. Charter
+manifests own their repository grants, and `skills-sync` projects the corresponding repository-local
+discovery links.
 
 Run the test suite:
 

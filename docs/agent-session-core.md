@@ -123,7 +123,7 @@ Consequences:
 identity and metadata without eagerly reading transcript bodies. An event reference additionally
 returns bounded `inspect` projections for the exact target, the paired tool call/result when
 available, and the effective context at that event. Resolution never persists a reference registry
-or body cache. The bundled Skill must pass the opaque reference to this command rather than
+or body cache. The versioned `agent-hub` Skill must pass the opaque reference to this command rather than
 reimplement URI parsing.
 
 When one provider/session id has multiple native source files, readers hash every candidate. Exact
