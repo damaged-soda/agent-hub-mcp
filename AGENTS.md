@@ -23,6 +23,7 @@ Key files:
 | `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
 | `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/opencode-adapter.js` | OpenCode argv/session/result/model-catalog mapping. |
+| `src/review-routing.js` | Requester-specific review routes, live model validation, and dispatch. |
 | `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
 | `src/agent-session-core.js` | Provider-neutral session identity, provenance, and pure live-event projections. |
 | `src/agent-session-references.js` | Versioned stable native-event URI formatting, identity, and parsing. |
@@ -46,6 +47,8 @@ Key files:
 | `src/discussion-materials.js` | Frozen material bundles, file validation, hashing, and handoff data. |
 | `src/discussion-prompts.js` | Versioned turn and format-repair prompts. |
 | `src/discussion-render.js` | Deterministic DecisionRecord Markdown rendering. |
+| `src/review-prompts.js` | Versioned reviewer-control prompt construction. |
+| `src/review-context.js` | Routed review provenance, depth marker, and nested-dispatch guard. |
 | `src/security.js` | `cwd` and `add_dirs` validation. |
 | `src/env.js` | Environment allowlist and forwarding. |
 | `scripts/mcp-client.js` | Local MCP smoke-test client. |
@@ -66,8 +69,8 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 
 ## Behavioral Rules
 
-- Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
-- Eval is the only other prompt-construction surface: it may combine an evaluator-supplied question snapshot with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, expose an external suite path to the child, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree. Eval requires an explicit model and effort; it never selects either from defaults.
+- Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Review dispatch uses the versioned reviewer-control prompt in `src/review-prompts.js`; Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
+- Eval may combine an evaluator-supplied question snapshot with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, expose an external suite path to the child, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree. Eval requires an explicit model and effort; it never selects either from defaults.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.

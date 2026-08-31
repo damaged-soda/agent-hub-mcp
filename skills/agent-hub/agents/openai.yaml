@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Hub CLI"
   short_description: "Dispatch and coordinate local coding agents"
-  default_prompt: "Use $agent-hub to review the current change through the configured requester route."
+  default_prompt: "Use $agent-hub to initiate a review of the current change through the configured requester route."

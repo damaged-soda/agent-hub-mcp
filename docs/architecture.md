@@ -9,7 +9,7 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 核心目标：
 
 - CLI/MCP 入口保持薄封装，只负责 CLI 启动、状态记录、查询、等待和取消。
-- 普通 run 的用户输入原样传给目标 CLI；Discussion turn 使用独立的版本化 coordinator prompt。
+- 普通 run 的用户输入原样传给目标 CLI；review dispatch 和 Discussion turn 使用各自独立的版本化 prompt。
 - 每次执行都有独立 run 目录，状态和结果保存在本机专用目录。
 - run 终态后默认保留 7 天。
 - 多轮对话复用 CLI 自身的 session/resume 能力。
@@ -38,7 +38,7 @@ adapter metadata。Adapter 只把这些字段映射成目标 CLI 的 argv、stdi
 普通 run 的 Prompt 处理规则：
 
 - `prompt` 字符串按调用方提供的内容传给 CLI。
-- Agent Hub 不在 prompt 前后拼接任何文本。
+- Agent Hub 不在普通 run 的 prompt 前后拼接任何文本。
 - Agent Hub 不通过 prompt 要求目标 agent 写 result file。
 - Agent Hub 将 prompt 原文写入 `input.txt`，runner 再把 `input.txt` 内容通过 stdin
   传给 CLI。例外：kimi `-p` 只接受 argv prompt（不读 stdin），kimi adapter 从
@@ -158,8 +158,9 @@ Adapter 出现在列表中的条件：
   响应或持久化 artifact。
 
 探测并行执行，按 `cwd` + 配置根 / base URL 缓存 30 秒，单个命令通常限时 5 秒（OpenCode 10 秒）、输出限
-8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，
-不会改变 adapter 自身的 `available` 状态。
+8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，并保留有界的
+命令诊断；不会改变 adapter 自身的 `available` 状态。Review 路由把这种状态与“成功探测但
+model 不存在”分开报告。
 
 ### review routing
 
@@ -171,15 +172,19 @@ PR review 是 CLI-only 的窄控制面，不扩张普通 dispatch 或 MCP schema
   保留上一份目录并退避 60 秒，状态通过顶层 `catalog_cache` 显式报告；
 - `review set` 只接受三个已知 requester、不同于 requester 的在线 reviewer，以及 reviewer
   当前 live 目录内的精确 model ID；写回采用进程锁和原子 rename，并用现场目录回填缓存；
-- `review dispatch` 在每次派发前重新读取并用 live 目录校验有效路由，再把 model 作为统一
-  metadata 调 `dispatch_to_agent`，响应仍是普通 run ref；现场目录同时回填缓存。
+- `review dispatch` 在每次派发前重新读取并用 live 目录校验有效路由，再使用版本化
+  reviewer-control prompt 和内部 review context 调 `dispatch_to_agent`，响应仍是普通 run ref；
+  现场目录同时回填缓存。reviewer 进程继承 review depth 标记，任何嵌套 review dispatch 在
+  目录探测前直接拒绝。Runner 注入 `AGENT_HUB_REVIEW_DEPTH`，但 `command.json` 只记录
+  环境键名，不记录环境值。
 
 内建默认值保持原有交叉审习惯：Codex → Claude Code `default`；Claude Code、Kimi Code →
 Codex `gpt-5.6-sol`。OpenCode 可作为 reviewer，但在机器级指令发现链接入前不作为
 requester。文件只存与默认值不同的覆盖，位于
 `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`（可由
 `AGENT_HUB_REVIEW_CONFIG` 覆盖）；它是用户偏好状态，不是 run artifact。配置损坏、reviewer
-下线或 model 从目录消失均 fail loud，不自动回退，也不允许 self-review。Cockpit 只能经
+下线、模型目录探测失败或 model 从目录消失均 fail loud，不自动回退，也不允许 self-review。
+Cockpit 只能经
 `review status/set` 消费这份单写者状态。
 
 目录缓存默认位于 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog/`，可由
@@ -444,22 +449,25 @@ runs/
 
 ### request.json
 
-保存原始 MCP 请求字段：
+保存 run 请求字段：
 
 - `agent_id`
 - `cwd`
 - `prompt`
 - `metadata`
 - `cli_session_ref`
+- `review_context`（review dispatch only）
 - `created_at`
 
-完整 prompt 同时保存到 `input.txt`；stdin 驱动的 CLI 从 `input.txt` 读取，kimi adapter
-从 `request.json` 的 `prompt` 字段拼 `-p` argv。
+普通 run 的 prompt 原样保存；review run 的 `prompt` 是版本化 reviewer-control prompt，
+其中包含原始 review request。完整有效 prompt 同时保存到 `input.txt`；stdin 驱动的 CLI 从
+`input.txt` 读取，kimi adapter 从 `request.json` 的 `prompt` 字段拼 `-p` argv。
 
 ### input.txt
 
-保存调用方传入的原始 prompt。Runner 把该文件内容通过 stdin 传给 CLI（kimi 不读
-stdin，该文件对它只作存档）。
+保存传给目标 CLI 的有效 prompt。普通 run 中它是调用方传入的原始 prompt；review run 中它
+是包含原始 review request 的版本化 reviewer-control prompt。Runner 把该文件内容通过 stdin
+传给 CLI（kimi 不读 stdin，该文件对它只作存档）。
 
 ### command.json
 
@@ -736,6 +744,8 @@ server/transport，但共享同一个 manager。MCP stdio 只保留普通 run to
 | `discussion-protocol.js` | dispatch 输入、五种结构化输出、大小和引用校验、capability 解析。 |
 | `discussion-store.js` | `discussions/<id>` 事件优先持久化、投影、lease、恢复和 TTL。 |
 | `discussion-materials.js` | inline/file 材料冻结、普通文件校验、hash 和 Git provenance。 |
+| `review-prompts.js` | 版本化 reviewer-control prompt，声明已选 reviewer 和禁止嵌套 review。 |
+| `review-context.js` | review provenance、depth marker 和嵌套 dispatch 防护。 |
 | `discussion-prompts.js` | 版本化 coordinator prompt 和固定 JSON output contract。 |
 | `discussion-render.js` | 从权威 DecisionRecord 确定性渲染 `decision.md`。 |
 

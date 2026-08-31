@@ -8,6 +8,7 @@ import {
   reviewStatus,
   setReviewRoute,
 } from "../src/review-routing.js";
+import { REVIEW_DEPTH_ENV } from "../src/review-context.js";
 
 describe("review routing", () => {
   let root;
@@ -67,12 +68,25 @@ describe("review routing", () => {
     await expect(dispatchReview({
       requester: "codex", cwd: root, prompt: "Review the PR",
     }, internal({ dispatch }))).resolves.toEqual({ status: "accepted" });
-    expect(dispatch).toHaveBeenCalledWith({
-      agent_id: "kimi-code",
-      cwd: root,
-      prompt: "Review the PR",
-      metadata: { model: "kimi-code/k3" },
-    });
+    expect(dispatch).toHaveBeenCalledWith(
+      {
+        agent_id: "kimi-code",
+        cwd: root,
+        prompt: expect.stringContaining("Review the PR"),
+        metadata: { model: "kimi-code/k3" },
+      },
+      {
+        review_context: {
+          version: 1,
+          requester: "codex",
+          reviewer: "kimi-code",
+          depth: 1,
+        },
+      },
+    );
+    expect(dispatch.mock.calls[0][0].prompt).toContain(
+      "Do not invoke `agenthub review dispatch`",
+    );
     const saved = JSON.parse(await fsp.readFile(configPath, "utf8"));
     expect(saved.routes.codex).toEqual({ reviewer: "kimi-code", model: "kimi-code/k3" });
   });
@@ -117,6 +131,37 @@ describe("review routing", () => {
     await expect(dispatchReview({
       requester: "codex", cwd: root, prompt: "Review",
     }, internal())).rejects.toMatchObject({ code: "review_route_invalid" });
+  });
+
+  it("reports model discovery failure separately from a missing model", async () => {
+    catalog.agents.find((agent) => agent.agent_id === "codex").model_discovery = {
+      status: "unavailable",
+      source: "codex-models",
+      reason: "sandbox denied provider state directory",
+    };
+    const status = await reviewStatus({}, internal());
+    expect(status.routes.find((route) => route.requester === "claude-code")).toMatchObject({
+      available: false,
+      error: "model-discovery-unavailable",
+      error_detail: "sandbox denied provider state directory",
+    });
+    await expect(dispatchReview({
+      requester: "claude-code", cwd: root, prompt: "Review",
+    }, internal())).rejects.toMatchObject({
+      code: "review_model_discovery_failed",
+      message: expect.stringContaining("sandbox denied provider state directory"),
+    });
+  });
+
+  it("rejects nested review dispatch before discovering agents", async () => {
+    const listAgents = vi.fn(async () => catalog);
+    await expect(dispatchReview({
+      requester: "codex", cwd: root, prompt: "Review",
+    }, internal({
+      env: { [REVIEW_DEPTH_ENV]: "1" },
+      listAgents,
+    }))).rejects.toMatchObject({ code: "nested_review_forbidden" });
+    expect(listAgents).not.toHaveBeenCalled();
   });
 
   it("caches status across processes while set and dispatch keep live validation", async () => {

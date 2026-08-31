@@ -119,7 +119,8 @@ agenthub wait RUN_ID
 ```
 
 Review dispatch supplies the configured model as unified metadata and otherwise preserves the
-ordinary detached-run contract. It does not prepend or rewrite the review prompt.
+ordinary detached-run contract. It wraps the original request in the versioned reviewer-control
+prompt, records review provenance, and rejects nested review dispatch from the selected reviewer.
 
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
 origin and mount the complete surface below a path, restart it with
@@ -292,6 +293,8 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `codex` appears under `unavailable_agents` | `codex --version` failed. | Fix PATH or Codex CLI installation. |
 | `kimi-code` appears under `unavailable_agents` | `kimi --version` failed. | Fix PATH or Kimi Code CLI installation. |
 | `opencode` appears under `unavailable_agents` | Version probing failed or `opencode run` lacks one of the required non-interactive flags. | Install/update OpenCode and run `opencode auth login`. |
+| `review status` reports `model-discovery-unavailable` | A provider CLI could not produce its model catalog, often because its state/log directory is outside the caller's sandbox. | Inspect `error_detail`, then run `agenthub agents --cwd "$PWD"` in a context where the provider's state directory is writable. |
+| `nested_review_forbidden` | The current process is already an Agent Hub-selected reviewer. | Review directly in the current session; do not invoke `agenthub review dispatch` again. |
 | `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`, or an OpenCode JSON `error` event: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |

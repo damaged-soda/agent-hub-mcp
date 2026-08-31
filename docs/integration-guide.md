@@ -195,7 +195,7 @@ Dispatches a run and waits until it reaches a terminal state or the timeout expi
 Important request rules:
 
 - `agent_id` must be `claude-code`, `codex`, `kimi-code`, or `opencode`.
-- `prompt` is passed to the agent CLI without wrapper text (via stdin, or as the `-p` argv value for kimi).
+- For ordinary runs, `prompt` is passed to the agent CLI without wrapper text (via stdin, or as the `-p` argv value for kimi). Review dispatch is a separate prompt-construction surface and adds its versioned reviewer-control wrapper.
 - `cwd` must be an existing absolute directory.
 - `timeout_ms` defaults to `30000` and is capped at `3600000`.
 - `poll_interval_ms` defaults to `1000`.

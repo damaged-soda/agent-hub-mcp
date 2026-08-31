@@ -21,6 +21,7 @@ import {
 } from "./fs-store.js";
 import { getAdapter } from "./adapters.js";
 import { buildAgentEnv } from "./env.js";
+import { reviewContextEnv } from "./review-context.js";
 
 // agent 经 zsh -c 出生：zsh 对任何调用都读 ~/.zshenv（除非 -f / ZDOTDIR 改向），charter 的
 // glue 在那里按 cwd 绑定；exec 让 pid / 进程组 / 信号 / 退出码 / stdin 都是 agent 本体的。
@@ -72,6 +73,7 @@ async function main() {
   const agentEnv = {
     ...buildAgentEnv(process.env),
     NS_REBIND: "1",
+    ...(request.review_context ? reviewContextEnv(request.review_context) : {}),
     ...command.env,
   };
   await atomicWriteJson(path.join(runDir, "command.json"), {
