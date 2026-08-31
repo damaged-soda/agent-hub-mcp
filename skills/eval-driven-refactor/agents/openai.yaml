@@ -1,0 +1,4 @@
+interface:
+  display_name: "Eval-Driven Refactor"
+  short_description: "Use controlled agent evals to guide refactors"
+  default_prompt: "Use $eval-driven-refactor to design and run a controlled before-and-after refactor evaluation."

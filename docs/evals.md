@@ -6,6 +6,10 @@ inside disposable worktrees. Agent Hub runs and grades one suite; it does not co
 rank runs, or maintain a long-term benchmark. A consumer such as Cockpit may ingest the resulting
 facts and choose its own comparison cohorts.
 
+The bundled `eval-driven-refactor` Skill provides an opinionated workflow for designing controlled
+before/after cases and interpreting paired results without changing this single-run boundary. The
+target repository still owns its questions, while comparisons and conclusions remain caller-owned.
+
 ## Repository-owned questions
 
 The default suite path is `.agenthub/evals.json` in the evaluated Git worktree:

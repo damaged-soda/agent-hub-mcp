@@ -4,7 +4,7 @@ The primary integration is the `agenthub` CLI. It launches from the caller's cur
 
 ## CLI Registration
 
-Install the local package and bundled Codex Skill:
+Install the local package and bundled Codex Skills:
 
 ```sh
 npm run install:local

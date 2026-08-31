@@ -1,6 +1,6 @@
 # Agent Hub
 
-Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus the bundled Codex Skill. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
+Agent Hub runs local agent CLIs and durable multi-agent discussions without requiring a resident daemon. Its primary interface is the `agenthub` CLI plus bundled Codex Skills. It ships four adapters — Claude Code (`claude-code`), Codex CLI (`codex`), Kimi Code (`kimi-code`), and OpenCode (`opencode`) — and owns run state, session lineage, logs, waiting, cancellation, and local artifacts. An MCP server remains available as an optional compatibility surface.
 
 ## Quick Start
 
@@ -10,15 +10,16 @@ Prerequisites:
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
 - CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
 
-Install dependencies, the local CLI, and the Skill:
+Install dependencies, the local CLI, and the bundled Skills:
 
 ```sh
 npm install
 npm run install:local
 ```
 
-`npm run install:local` links `agenthub` and `agent-session` into the active npm prefix and installs the
-versioned Skill at `${CODEX_HOME:-~/.codex}/skills/agent-hub`.
+`npm run install:local` links `agenthub` and `agent-session` into the active npm prefix and installs
+the versioned `agent-hub` and `eval-driven-refactor` Skills under
+`${CODEX_HOME:-~/.codex}/skills/`.
 
 Run the test suite:
 
@@ -209,7 +210,7 @@ The optional streamable HTTP daemon exposes both run and Discussion tools:
 node src/server.js --transport streamable-http --host 127.0.0.1 --port 8700 --path /mcp
 ```
 
-The HTTP transport is intended for local loopback compatibility only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. Prefer the CLI/Skill path when inheriting the caller's credential context matters.
+The HTTP transport is intended for local loopback compatibility only; the server rejects non-loopback hosts and does not implement remote authentication. Requests without an `Origin` header are accepted for native MCP clients; browser-originated requests are rejected unless the exact origin is listed in `AGENT_HUB_HTTP_ALLOWED_ORIGINS`. Prefer the CLI/Skills path when inheriting the caller's credential context matters.
 
 MCP clients should launch the server process, for example:
 

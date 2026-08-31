@@ -1,6 +1,6 @@
 # Agent Hub Operator Runbook
 
-This runbook covers the daemon-free CLI/Skill path and the optional MCP server.
+This runbook covers the daemon-free CLI/Skills path and the optional MCP server.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ It also returns the selectable model catalog for each adapter. Use
 
 | Command | Purpose |
 |---|---|
-| `npm run install:local` | Link the `agenthub` CLI and install the bundled Codex Skill. |
+| `npm run install:local` | Link the `agenthub` CLI and install the bundled Codex Skills. |
 | `agent-session list …` / `agent-session inspect …` | Read provider-native sessions without mutating them. |
 | `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local session API for Cockpit. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |

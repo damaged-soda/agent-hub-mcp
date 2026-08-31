@@ -8,7 +8,7 @@
 
 ## Project Shape
 
-This repository implements a daemon-free Agent Hub CLI and Skill, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, Kimi Code, and OpenCode), stores local artifacts, and coordinates durable structured discussions.
+This repository implements a daemon-free Agent Hub CLI and bundled Skills, plus optional MCP compatibility transports. It maps requests to non-interactive agent CLI runs (Claude Code, Codex, Kimi Code, and OpenCode), stores local artifacts, and coordinates durable structured discussions.
 
 Key files:
 
@@ -50,6 +50,7 @@ Key files:
 | `src/env.js` | Environment allowlist and forwarding. |
 | `scripts/mcp-client.js` | Local MCP smoke-test client. |
 | `skills/agent-hub/` | Versioned Codex Skill for CLI collaboration workflows. |
+| `skills/eval-driven-refactor/` | Versioned Codex Skill for controlled before/after refactor evaluation. |
 
 ## Commands
 
@@ -120,7 +121,7 @@ is not rejected: the agent runs namespace-less（charter's `gh` wrapper 点名 t
 
 | Document | Use when |
 |---|---|
-| `README.md` | Installing, smoke testing, or wiring the CLI/Skill and optional MCP server. |
+| `README.md` | Installing, smoke testing, or wiring the CLI/Skills and optional MCP server. |
 | `docs/integration-guide.md` | Implementing a client call flow or understanding request/response shapes. |
 | `docs/operator-runbook.md` | Operating, configuring, or troubleshooting local runs. |
 | `docs/architecture.md` | Changing lifecycle, storage, adapter, or process-group behavior. |
