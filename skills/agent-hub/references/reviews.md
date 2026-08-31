@@ -1,7 +1,7 @@
 # Pull request review
 
-When a PR or change review is governed by the machine review policy, do not choose the reviewer or
-model manually. Dispatch through the requester-specific route and retain the run ID:
+When initiating a PR or change review governed by the machine review policy, do not choose the
+reviewer or model manually. Dispatch through the requester-specific route and retain the run ID:
 
 ```sh
 agenthub review dispatch \
@@ -15,3 +15,6 @@ Use the current CLI's stable ID as `--requester`: `codex`, `claude-code`, or `ki
 change the route between reviews; `review dispatch` reads and validates it at dispatch time. If the
 configured reviewer or model is unavailable, report the failure instead of choosing a fallback.
 Use `review status --cwd "$PWD"` only when the effective route needs to be shown or diagnosed.
+
+When Agent Hub has already selected the current process as the reviewer, perform the review directly
+in the current session; do not invoke `agenthub review dispatch` again.

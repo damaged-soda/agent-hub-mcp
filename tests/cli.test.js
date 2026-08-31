@@ -219,6 +219,35 @@ describe("agenthub CLI", () => {
       "utf8",
     ));
     expect(command.argv).toContain("haiku");
+    expect(command.env_keys).toEqual(expect.arrayContaining([
+      "AGENT_HUB_REVIEW_DEPTH",
+    ]));
+    const request = JSON.parse(await fsp.readFile(
+      path.join(env.AGENT_HUB_RUN_DIR, accepted.run_ref.run_id, "request.json"),
+      "utf8",
+    ));
+    expect(request.review_context).toEqual({
+      version: 1,
+      requester: "codex",
+      reviewer: "claude-code",
+      depth: 1,
+    });
+    expect(request.prompt).toContain("AGENT_HUB_REVIEW_PROTOCOL_V1");
+    expect(request.prompt).toContain("review via route");
+
+    const contextAccepted = await runCli([
+      "review", "dispatch",
+      "--requester", "codex",
+      "--cwd", workspace,
+      "--prompt", "dump-review-context",
+    ], env);
+    const contextCompleted = await runCli(
+      ["wait", contextAccepted.run_ref.run_id, "--timeout-ms", "10000"],
+      env,
+    );
+    expect(JSON.parse(contextCompleted.content[0].text)).toEqual({
+      depth: "1",
+    });
   }, 15000);
 
   it("runs a durable discussion from a detached CLI worker", async () => {
@@ -527,6 +556,16 @@ process.stdin.on("end", async () => {
   }
   if (input.trim() === "dump-env2") {
     result = JSON.stringify({ NS: process.env.NS ?? null, DA_FLAG: process.env.DA_FLAG ?? null, DB_FLAG: process.env.DB_FLAG ?? null, NS_REBIND: process.env.NS_REBIND ?? null, PATH: process.env.PATH ?? "" });
+  }
+  if (input.includes("AGENT_HUB_REVIEW_PROTOCOL_V1")) {
+    if (input.includes("dump-review-context")) {
+      result = JSON.stringify({
+        depth: process.env.AGENT_HUB_REVIEW_DEPTH ?? null,
+      });
+    } else {
+      const marker = "[ORIGINAL REVIEW REQUEST]\\n";
+      result = "fake result: " + input.slice(input.lastIndexOf(marker) + marker.length).trim();
+    }
   }
   if (input.includes("AGENT_HUB_DISCUSSION_PROTOCOL_V1")) {
     const marker = "[OUTPUT CONTRACT]\\n";

@@ -51,6 +51,15 @@ describe("agent environment", () => {
     expect(env.OPENCODE_CONFIG_DIR).toBe("/tmp/opencode-config");
   });
 
+  it("keeps routed review context markers in descendant agent environments", () => {
+    const env = buildAgentEnv({
+      PATH: "/bin",
+      AGENT_HUB_REVIEW_DEPTH: "1",
+    });
+
+    expect(env).toMatchObject({ AGENT_HUB_REVIEW_DEPTH: "1" });
+  });
+
   it("omits namespace keys that were explicitly cleared from command metadata", () => {
     expect(currentEnvKeys({ PATH: "/bin", NS: undefined, CLAUDE_CONFIG_DIR: undefined })).toEqual([
       "PATH",

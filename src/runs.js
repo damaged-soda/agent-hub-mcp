@@ -29,6 +29,7 @@ import {
 import { allAdapters, getAdapter } from "./adapters.js";
 import { validateRequestPaths } from "./security.js";
 import { buildAgentEnv } from "./env.js";
+import { normalizeReviewContext } from "./review-context.js";
 import {
   DEFAULT_RUN_AGENT_WAIT_MS,
   DEFAULT_WAIT_AGENT_RUN_MS,
@@ -141,6 +142,7 @@ export async function dispatchToAgent(input, internal = {}) {
     input,
     expected_session_generation: internal.expected_session_generation ?? null,
     session_claim_id: internal.session_claim_id ?? null,
+    review_context: internal.review_context ?? null,
   });
   return withIdempotencyLock(idempotencyKey, async () => {
     const indexPath = idempotencyRecordPath(idempotencyKey);
@@ -209,6 +211,9 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
     adapter.agentId,
     paths.cwd,
   );
+  const reviewContext = internal.review_context === undefined
+    ? null
+    : normalizeReviewContext(internal.review_context);
   const resolvedMetadata = {
     ...metadata,
     [adapter.metadataKey]: {
@@ -252,6 +257,7 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
     retain_until: internalRetention?.retainUntil,
     retained_by_discussion: internalRetention ? [internalRetention.discussionId] : undefined,
     execution_profile: executionProfile ? { kind: executionProfile.kind } : undefined,
+    review_context: reviewContext ?? undefined,
   };
   try {
     await writeState(runDir, state);
@@ -267,6 +273,7 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
       effective_cli_session_ref: effectiveCliSessionRef,
       session_generation: sessionRecord?.generation,
       execution_profile: executionProfile,
+      review_context: reviewContext ?? undefined,
       created_at: createdAt,
     });
     await atomicWriteFile(path.join(runDir, "input.txt"), input.prompt);

@@ -8,6 +8,11 @@ import {
 } from "./agent-catalog-cache.js";
 import { atomicWriteJson, nowIso, readJsonIfExists, withStateLock } from "./fs-store.js";
 import { dispatchToAgent, listAgents } from "./runs.js";
+import {
+  assertReviewDispatchAllowed,
+  createReviewContext,
+} from "./review-context.js";
+import { buildReviewPrompt } from "./review-prompts.js";
 import { validateRequestPaths } from "./security.js";
 
 const REVIEW_CONFIG_VERSION = 1;
@@ -77,6 +82,7 @@ export async function setReviewRoute(input, internal = {}) {
 }
 
 export async function dispatchReview(input, internal = {}) {
+  assertReviewDispatchAllowed(internal.env ?? process.env);
   const requester = requiredString(input?.requester, "requester");
   assertRequester(requester);
   const prompt = requiredString(input?.prompt, "prompt");
@@ -89,12 +95,23 @@ export async function dispatchReview(input, internal = {}) {
   const route = effectiveRoute(requester, config);
   assertAvailableRoute(route.reviewer, route.model, catalog);
   await cacheLiveCatalog(cwd, catalog, internal);
-  return (internal.dispatch ?? dispatchToAgent)({
-    agent_id: route.reviewer,
-    cwd: input.cwd,
-    prompt,
-    metadata: { model: route.model },
+  const reviewContext = createReviewContext({
+    requester,
+    reviewer: route.reviewer,
   });
+  return (internal.dispatch ?? dispatchToAgent)(
+    {
+      agent_id: route.reviewer,
+      cwd: input.cwd,
+      prompt: buildReviewPrompt({
+        requester,
+        reviewer: route.reviewer,
+        prompt,
+      }),
+      metadata: { model: route.model },
+    },
+    { review_context: reviewContext },
+  );
 }
 
 async function readReviewConfig(configPath) {
@@ -132,8 +149,15 @@ function buildStatus(config, catalog, cache = null) {
     const route = effectiveRoute(requester, config);
     const agent = available.get(route.reviewer);
     const model = agent?.models?.find((item) => item.id === route.model);
-    const error = !agent ? "reviewer-unavailable" : !model ? "model-unavailable" : null;
-    return {
+    const discoveryUnavailable = agent?.model_discovery?.status === "unavailable";
+    const error = !agent
+      ? "reviewer-unavailable"
+      : discoveryUnavailable
+        ? "model-discovery-unavailable"
+        : !model
+          ? "model-unavailable"
+          : null;
+    const status = {
       requester,
       reviewer: route.reviewer,
       model: route.model,
@@ -142,6 +166,10 @@ function buildStatus(config, catalog, cache = null) {
       available: error === null,
       error,
     };
+    if (discoveryUnavailable && typeof agent.model_discovery.reason === "string") {
+      status.error_detail = agent.model_discovery.reason;
+    }
+    return status;
   });
   const status = {
     api_version: REVIEW_CONFIG_VERSION,
@@ -191,6 +219,15 @@ function effectiveRoute(requester, config) {
 function assertAvailableRoute(reviewer, model, catalog) {
   const agent = (catalog.agents ?? []).find((item) => item.agent_id === reviewer);
   if (!agent) throw reviewRouteError(`reviewer is unavailable: ${reviewer}`);
+  if (agent.model_discovery?.status === "unavailable") {
+    const reason = agent.model_discovery.reason;
+    throw reviewRouteError(
+      `model discovery is unavailable for ${reviewer}${
+        typeof reason === "string" && reason.trim() ? `: ${reason.trim()}` : ""
+      }`,
+      "review_model_discovery_failed",
+    );
+  }
   if (!(agent.models ?? []).some((item) => item.id === model)) {
     throw reviewRouteError(`model is unavailable for ${reviewer}: ${model}`);
   }
@@ -227,8 +264,8 @@ function reviewConfigError(message) {
   return error;
 }
 
-function reviewRouteError(message) {
+function reviewRouteError(message, code = "review_route_invalid") {
   const error = new Error(message);
-  error.code = "review_route_invalid";
+  error.code = code;
   return error;
 }

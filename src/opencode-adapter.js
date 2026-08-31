@@ -348,7 +348,19 @@ function unavailableModelCatalog(reason) {
 
 function commandFailureReason(result) {
   if (result.error?.message) return result.error.message;
+  const stderr = compactDiagnostic(result.stderr);
+  if (stderr) return stderr;
   return `OpenCode model discovery exited with code ${result.code}`;
+}
+
+function compactDiagnostic(value) {
+  const normalized = stripAnsi(String(value ?? ""))
+    .replace(/[\t\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length > TAIL_LIMIT
+    ? `${normalized.slice(0, TAIL_LIMIT - 1)}…`
+    : normalized;
 }
 
 function assertOpenCodeSessionId(value) {

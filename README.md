@@ -151,8 +151,10 @@ self-review, and atomically stores overrides in
 `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. With no override, Codex uses
 Claude Code's `default` model (currently resolved by Claude Code to Opus 5); Claude Code and Kimi
 Code use Codex `gpt-5.6-sol`. `review dispatch` revalidates the configured route and fails
-instead of silently falling back when either the reviewer or model is unavailable. Its response is
-the ordinary detached run response, so waiting and inspection remain unchanged.
+instead of silently falling back when either the reviewer or model is unavailable. It wraps the
+request in the versioned reviewer-control prompt so the selected reviewer performs the review
+directly and does not dispatch another review; the original request remains embedded verbatim.
+Its response is the ordinary detached run response, so waiting and inspection remain unchanged.
 
 `review status` keeps its normalized Agent/model catalog in a private cross-process cache under
 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. A catalog is fresh for five minutes;

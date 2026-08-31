@@ -1,7 +1,11 @@
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenCodeCommand,
   createOpenCodeSessionRef,
+  getOpenCodeModelCatalog,
   interpretOpenCodeExit,
   missingOpenCodeRunFlags,
   openCodeSessionRefFromEvent,
@@ -71,6 +75,33 @@ describe("opencode model catalog", () => {
         display_name: "zai-coding-plan/glm-5.3",
       },
     ]);
+  });
+
+  it("preserves bounded stderr when model discovery fails", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-opencode-catalog-"));
+    const bin = path.join(root, "bin");
+    await fsp.mkdir(bin);
+    await fsp.writeFile(
+      path.join(bin, "opencode"),
+      "#!/bin/sh\nprintf '%s\\n' 'Unknown: FileSystem.open (/sandbox/opencode.log)' >&2\nexit 1\n",
+      { mode: 0o755 },
+    );
+
+    try {
+      await expect(getOpenCodeModelCatalog({
+        cwd: root,
+        env: { HOME: root, PATH: bin },
+      })).resolves.toEqual({
+        models: [],
+        model_discovery: {
+          status: "unavailable",
+          source: "opencode-models",
+          reason: "Unknown: FileSystem.open (/sandbox/opencode.log)",
+        },
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
   });
 });
 
