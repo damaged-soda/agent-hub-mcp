@@ -81,7 +81,11 @@ when sessions do not appear. This integration is verified against OpenCode 1.18.
 reported through `source_errors` on aggregate lists and remains a hard error for
 `--provider opencode`.
 
-## PR Review Routing
+## Post-PR Review Routing
+
+The routed review workflow is a policy step after the current process creates or updates a PR, or an
+explicit user-requested Agent Hub operation. Reviewing an existing PR or diff is direct work. When a
+user names another agent, use ordinary dispatch to that agent; the selected agent reviews directly.
 
 Each initiating CLI has one effective reviewer/model pair. Inspect all routes and the effective model
 catalog from a representative workspace:
@@ -110,7 +114,8 @@ requester. OpenCode remains selectable as a reviewer; it is not a requester unti
 instruction discovery chain covers it. Selecting the built-in default pair removes that requester's stored override. Corrupt
 configuration, missing reviewers, and removed models remain explicit errors.
 
-Agents dispatch through the route and keep the returned run ID:
+After one of the routed-review conditions above, agents dispatch through the route and keep the returned
+run ID:
 
 ```sh
 agenthub review dispatch --requester codex --cwd "$PWD" \

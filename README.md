@@ -136,7 +136,10 @@ network, and disable memory, session persistence, and subagents. Eval requires a
 and effort plus Codex CLI 0.151.0 or newer; providers without an equivalent whitelist fail with
 `unsupported_isolation`. See the [evaluation contract](docs/evals.md).
 
-For PR cross-review, use the persisted requester route instead of choosing an adapter ad hoc:
+For the machine-routed cross-review immediately after this process creates or updates a PR, use the
+persisted requester route instead of choosing an adapter ad hoc. A standalone review is performed by
+the current process; if the user names another agent, use ordinary dispatch to that agent. Invoke this
+routed workflow at other times only when the user explicitly asks for Agent Hub routing:
 
 ```sh
 agenthub review status --cwd "$PWD"
@@ -155,6 +158,8 @@ instead of silently falling back when either the reviewer or model is unavailabl
 request in the versioned reviewer-control prompt so the selected reviewer performs the review
 directly and does not dispatch another review; the original request remains embedded verbatim.
 Its response is the ordinary detached run response, so waiting and inspection remain unchanged.
+This routed command is not a default for a review request merely because a PR, diff, or change is
+mentioned.
 
 `review status` keeps its normalized Agent/model catalog in a private cross-process cache under
 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. A catalog is fresh for five minutes;
