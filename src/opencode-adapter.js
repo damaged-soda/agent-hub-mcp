@@ -21,10 +21,13 @@ const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_OPENCODE_EFFORT";
 const MODEL_DISCOVERY_SOURCE = "opencode-models";
 const MODEL_DISCOVERY_TIMEOUT_MS = 10000;
 const MODEL_CATALOG_CACHE_MS = 30000;
+const MODEL_DISCOVERY_RETRY_DELAYS_MS = Object.freeze([100, 250, 500]);
 const SESSION_ID_PATTERN = /^ses_[0-9A-Za-z]{8,128}$/;
 const MODEL_ID_PATTERN = /^[0-9A-Za-z][0-9A-Za-z._:@+-]*(?:\/[0-9A-Za-z][0-9A-Za-z._:@+-]*)+$/;
 const REQUIRED_RUN_FLAGS = ["--format", "--session", "--model", "--variant", "--auto"];
 const TAIL_LIMIT = 4000;
+const TRANSIENT_DATABASE_LOCK_PATTERN =
+  /\b(?:database|table)\s+is\s+locked\b|\bSQLITE_BUSY(?:_TIMEOUT)?\b/i;
 
 let availabilityCache = null;
 const modelCatalogCache = new Map();
@@ -295,11 +298,7 @@ export async function getOpenCodeModelCatalog({ cwd = process.cwd(), env = proce
   if (cached && Date.now() - cached.checkedAtMs < MODEL_CATALOG_CACHE_MS) {
     return cached.value;
   }
-  const result = await runCommand("opencode", ["models"], {
-    cwd,
-    env,
-    timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
-  });
+  const result = await runOpenCodeModelsWithRetry({ cwd, env });
   let value;
   if (result.error || result.code !== 0) {
     value = unavailableModelCatalog(commandFailureReason(result));
@@ -312,6 +311,28 @@ export async function getOpenCodeModelCatalog({ cwd = process.cwd(), env = proce
   }
   modelCatalogCache.set(cacheKey, { checkedAtMs: Date.now(), value });
   return value;
+}
+
+async function runOpenCodeModelsWithRetry({ cwd, env }) {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await runCommand("opencode", ["models"], {
+      cwd,
+      env,
+      timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+    });
+    const retryDelayMs = MODEL_DISCOVERY_RETRY_DELAYS_MS[attempt];
+    if (!isTransientDatabaseLock(result) || retryDelayMs === undefined) {
+      return result;
+    }
+    await sleep(retryDelayMs);
+  }
+}
+
+function isTransientDatabaseLock(result) {
+  if (!result || (!result.error && result.code === 0)) return false;
+  return [result?.error?.message, result?.stdout, result?.stderr]
+    .filter((value) => typeof value === "string")
+    .some((value) => TRANSIENT_DATABASE_LOCK_PATTERN.test(value));
 }
 
 export function parseOpenCodeModelCatalog(stdout) {
@@ -361,6 +382,10 @@ function compactDiagnostic(value) {
   return normalized.length > TAIL_LIMIT
     ? `${normalized.slice(0, TAIL_LIMIT - 1)}…`
     : normalized;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function assertOpenCodeSessionId(value) {
