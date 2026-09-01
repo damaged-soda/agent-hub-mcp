@@ -77,20 +77,73 @@ describe("opencode model catalog", () => {
     ]);
   });
 
-  it("preserves bounded stderr when model discovery fails", async () => {
+  it("retries transient database locks before returning a healthy catalog", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-opencode-catalog-"));
     const bin = path.join(root, "bin");
+    const attemptsPath = path.join(root, "attempts");
     await fsp.mkdir(bin);
     await fsp.writeFile(
       path.join(bin, "opencode"),
-      "#!/bin/sh\nprintf '%s\\n' 'Unknown: FileSystem.open (/sandbox/opencode.log)' >&2\nexit 1\n",
+      [
+        "#!/bin/sh",
+        'attempts=0',
+        'if [ -f "$OPENCODE_TEST_ATTEMPTS" ]; then attempts=$(cat "$OPENCODE_TEST_ATTEMPTS"); fi',
+        'attempts=$((attempts + 1))',
+        'printf "%s" "$attempts" > "$OPENCODE_TEST_ATTEMPTS"',
+        'if [ "$attempts" -lt 4 ]; then',
+        '  printf "%s\\n" "Unexpected error: database is locked" >&2',
+        "  exit 1",
+        "fi",
+        'printf "%s\\n" "provider/model"',
+      ].join("\n"),
       { mode: 0o755 },
     );
 
     try {
       await expect(getOpenCodeModelCatalog({
         cwd: root,
-        env: { HOME: root, PATH: bin },
+        env: {
+          HOME: root,
+          PATH: `${bin}${path.delimiter}/bin${path.delimiter}/usr/bin`,
+          OPENCODE_TEST_ATTEMPTS: attemptsPath,
+        },
+      })).resolves.toEqual({
+        models: [{ id: "provider/model", display_name: "provider/model" }],
+        model_discovery: { status: "available", source: "opencode-models" },
+      });
+      await expect(fsp.readFile(attemptsPath, "utf8")).resolves.toBe("4");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves bounded stderr after exhausting transient database lock retries", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-opencode-catalog-"));
+    const bin = path.join(root, "bin");
+    const attemptsPath = path.join(root, "attempts");
+    await fsp.mkdir(bin);
+    await fsp.writeFile(
+      path.join(bin, "opencode"),
+      [
+        "#!/bin/sh",
+        'attempts=0',
+        'if [ -f "$OPENCODE_TEST_ATTEMPTS" ]; then attempts=$(cat "$OPENCODE_TEST_ATTEMPTS"); fi',
+        'attempts=$((attempts + 1))',
+        'printf "%s" "$attempts" > "$OPENCODE_TEST_ATTEMPTS"',
+        'printf "%s\\n" "Unknown: FileSystem.open (/sandbox/opencode.log)" >&2',
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    try {
+      await expect(getOpenCodeModelCatalog({
+        cwd: root,
+        env: {
+          HOME: root,
+          PATH: `${bin}${path.delimiter}/bin${path.delimiter}/usr/bin`,
+          OPENCODE_TEST_ATTEMPTS: attemptsPath,
+        },
       })).resolves.toEqual({
         models: [],
         model_discovery: {
@@ -99,6 +152,7 @@ describe("opencode model catalog", () => {
           reason: "Unknown: FileSystem.open (/sandbox/opencode.log)",
         },
       });
+      await expect(fsp.readFile(attemptsPath, "utf8")).resolves.toBe("1");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }
