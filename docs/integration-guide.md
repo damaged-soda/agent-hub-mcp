@@ -392,7 +392,7 @@ Effort is deliberately not unified: each CLI has its own evolving value vocabula
 
 With the default `permission: "auto"`, all adapters can edit the workspace, run commands, and reach the network. `full` bypasses the CLI's guardrails — only use it in externally sandboxed environments.
 
-Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt` on stderr, OpenCode JSON `error` event); the native detail stays in `error.message` and `result.txt`. `cli_exit_nonzero` and `stdout_parse_failed` remain adapter-independent.
+Model-side failures are reported with the unified error code `agent_error` regardless of adapter (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt` on stderr, OpenCode JSON `error` event); the native detail stays in `error.message` and `result.txt`. `cli_exit_nonzero` and `stdout_parse_failed` remain adapter-independent. Claude's session-store preflight failures use `session_store_unwritable`, `session_resume_unavailable`, or `session_persistence_disabled`; a successful Claude exit without a persisted native transcript uses `session_persistence_failed` and retains the result artifacts without a resumable session ref.
 
 ## Claude Metadata
 
@@ -454,7 +454,14 @@ initial scope, so running snapshots still rely on stderr/log artifacts until ter
 
 For a new session, pass `cli_session_ref: null`.
 
-- `claude-code`: Agent Hub creates a UUID and passes it as `--session-id`; the dispatch response already contains the `cli_session_ref`.
+- `claude-code`: Agent Hub creates a UUID and passes it as `--session-id`; before returning
+  `accepted`, it verifies that Claude's native session store is writable. After a successful
+  CLI exit, the runner also verifies that the transcript was persisted. A failed preflight uses
+  `session_store_unwritable`, `session_resume_unavailable`, or
+  `session_persistence_disabled` and does not start the agent;
+  a successful CLI run without a native transcript ends as
+  `session_persistence_failed` with `cli_session_ref: null`, while its result artifacts remain
+  available. The dispatch response contains the `cli_session_ref` only after the preflight passes.
 - `codex`: Codex assigns the thread id itself, so the dispatch response has `cli_session_ref: null`. The id appears on running/terminal snapshots once Codex reports it (usually within the first second).
 - `kimi-code`: Kimi assigns the session id itself and reports it in the final `session.resume_hint` event, so the dispatch response has `cli_session_ref: null` and the id appears on the terminal snapshot. A cancelled kimi run has no resumable session ref.
 - `opencode`: OpenCode assigns a `ses_*` id and includes it on every JSON event. The dispatch response has `cli_session_ref: null`; the runner records the ref from the first event, so a cancelled run can retain it.

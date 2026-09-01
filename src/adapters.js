@@ -6,6 +6,8 @@ import {
   getClaudeAvailability,
   interpretClaudeExit,
   listClaudeAgent,
+  preflightClaudeSession,
+  verifyClaudeSession,
 } from "./claude-adapter.js";
 import {
   CODEX_AGENT_ID,
@@ -49,6 +51,8 @@ const ADAPTERS = new Map([
       createSessionRef: createClaudeSessionRef,
       buildCommand: buildClaudeCommand,
       interpretExit: interpretClaudeExit,
+      preflightSession: preflightClaudeSession,
+      verifySession: verifyClaudeSession,
       sessionRefFromEvent: null,
       discussionCapabilities: CLAUDE_DISCUSSION_CAPABILITIES,
     },

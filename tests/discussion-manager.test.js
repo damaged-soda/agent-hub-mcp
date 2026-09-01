@@ -129,6 +129,27 @@ describe("discussion manager lifecycle", () => {
     await manager.shutdown();
   });
 
+  it("retries a follow-up with a new session when native resume is unavailable", async () => {
+    const fake = createFakeRunApi({ hold: false, resume_failure_once: true });
+    const manager = createManager(fake.api);
+    await manager.start();
+    const parent = await manager.dispatch(newRequest(workspace));
+    expect((await manager.wait({ discussion_ref: parent.discussion_ref })).status).toBe("completed");
+
+    const child = await manager.dispatch({
+      kind: "follow_up",
+      parent_discussion_ref: parent.discussion_ref,
+      question: "what changes?",
+      materials: [],
+    });
+    const completed = await manager.wait({ discussion_ref: child.discussion_ref });
+
+    expect(completed.status).toBe("completed");
+    expect(fake.dispatched.some((item) => item.input.cli_session_ref)).toBe(true);
+    expect(fake.dispatched.some((item) => !item.input.cli_session_ref)).toBe(true);
+    await manager.shutdown();
+  });
+
   it("repairs a torn event tail during query without requiring a daemon restart", async () => {
     const fake = createFakeRunApi({ hold: true });
     const manager = createManager(fake.api);
@@ -348,10 +369,17 @@ function createFakeRunApi(options) {
   let sequence = 0;
   const fake = {
     hold: options.hold,
+    resume_failed: false,
     dispatched,
     cancelled,
     api: {
       dispatch: async (input, internal) => {
+        if (options.resume_failure_once && input.cli_session_ref && !fake.resume_failed) {
+          fake.resume_failed = true;
+          const error = new Error("Claude session transcript was not found");
+          error.code = "session_resume_unavailable";
+          throw error;
+        }
         sequence += 1;
         const runRef = { run_id: `fake-run-${sequence}` };
         const cliSessionRef = input.cli_session_ref ?? {

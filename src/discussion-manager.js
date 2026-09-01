@@ -636,22 +636,32 @@ export class DiscussionManager {
           throw codedError("discussion_lease_lost", "Discussion controller has no active lease");
         }
         await assertDiscussionLease(id, dispatchLease);
-        accepted = await this.runApi.dispatch(
-          {
-            agent_id: member.agent_id,
-            prompt,
-            cwd: state.cwd,
-            cli_session_ref: attemptState.session_ref ?? null,
-            metadata: member.configuration.effective_metadata,
-          },
-          {
-            idempotency_key: attemptState.idempotency_key,
-            expected_session_generation: attemptState.session_generation,
-            session_claim_id: claimId,
-            retain_until: state.deadline_at,
-            retained_by_discussion: id,
-          },
-        );
+        try {
+          accepted = await this.runApi.dispatch(
+            {
+              agent_id: member.agent_id,
+              prompt,
+              cwd: state.cwd,
+              cli_session_ref: attemptState.session_ref ?? null,
+              metadata: member.configuration.effective_metadata,
+            },
+            {
+              idempotency_key: attemptState.idempotency_key,
+              expected_session_generation: attemptState.session_generation,
+              session_claim_id: claimId,
+              retain_until: state.deadline_at,
+              retained_by_discussion: id,
+            },
+          );
+        } catch (error) {
+          if (attempt === 1 && sessionRef && isSessionResumeFailure(error)) {
+            await this.finishAttempt(id, attemptKey, null, "failed", publicError(error));
+            repairError = null;
+            retryWithNewSession = true;
+            continue;
+          }
+          throw error;
+        }
         runRef = accepted.run_ref;
         await this.runApi.retain(runRef, id, state.deadline_at);
         await this.commit(
@@ -1410,8 +1420,9 @@ function rethrowControllerExit(error) {
   }
 }
 
-function isSessionResumeFailure(snapshot) {
-  return snapshot?.error?.code === "session_resume_failed";
+function isSessionResumeFailure(value) {
+  const code = value?.error?.code ?? value?.code;
+  return code === "session_resume_failed" || code === "session_resume_unavailable";
 }
 
 function assertDispatchAllowed(state) {
@@ -1446,6 +1457,7 @@ function turnResult(state, memberId, kind) {
 }
 
 function removeRunRef(refs = [], target) {
+  if (!target?.run_id) return refs;
   return refs.filter((ref) => ref.run_id !== target.run_id);
 }
 
