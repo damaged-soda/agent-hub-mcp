@@ -1,6 +1,10 @@
 # Dispatch and continue runs
 
-PR and change reviews use [reviews.md](reviews.md), not this workflow.
+Use ordinary dispatch when the user explicitly selects another agent, including asking that agent
+to review code. The selected agent performs the request directly in its session; do not turn that
+review into `agenthub review dispatch`. If the review request is addressed to the current process,
+perform it directly without dispatching another agent. The post-PR machine-routed workflow and
+explicit Agent Hub routed cross-review are documented in [reviews.md](reviews.md).
 
 ## Dispatch work
 

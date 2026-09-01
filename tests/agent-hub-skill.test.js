@@ -6,9 +6,13 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skillRoot = path.join(repoRoot, "skills", "agent-hub");
 
+function readSkillFile(name) {
+  return fs.readFileSync(path.join(skillRoot, name), "utf8");
+}
+
 describe("Agent Hub Skill bundle", () => {
   it("keeps every routed Markdown reference available", () => {
-    const content = fs.readFileSync(path.join(skillRoot, "SKILL.md"), "utf8");
+    const content = readSkillFile("SKILL.md");
     const references = [...content.matchAll(/\]\((references\/[^)]+\.md)\)/g)]
       .map((match) => match[1]);
 
@@ -16,5 +20,27 @@ describe("Agent Hub Skill bundle", () => {
     for (const reference of references) {
       expect(fs.statSync(path.join(skillRoot, reference)).isFile()).toBe(true);
     }
+  });
+
+  it("scopes routed review to PR policy or explicit Agent Hub intent", () => {
+    const content = readSkillFile("SKILL.md");
+    const interfaceContent = readSkillFile("agents/openai.yaml");
+    const reviews = readSkillFile("references/reviews.md");
+    const runs = readSkillFile("references/runs.md");
+
+    expect(content).toContain("only for the post-PR machine-policy step");
+    expect(content).toContain("explicit user request to use Agent Hub's configured review route");
+    expect(content).toMatch(/Do not infer this route merely\s+from words such as PR, change, diff, or review/);
+    expect(content).not.toContain("PR and change reviews always use `agenthub review dispatch`");
+    expect(content).not.toContain("including asking another agent to inspect current changes");
+
+    expect(interfaceContent).toContain("explicitly requested dispatch");
+    expect(interfaceContent).toContain("immediately after creating or updating a PR");
+    expect(interfaceContent).not.toContain("initiate a review of the current change");
+
+    expect(reviews).toContain("A request to review a diff, change, or existing PR is not by itself a trigger");
+    expect(reviews).toMatch(/If the user names a\s+reviewer, use ordinary `agenthub dispatch --agent \.\.\.`/);
+    expect(runs).toContain("The selected agent performs the request directly in its session");
+    expect(runs).toMatch(/If the review request is addressed to the current process,\s+perform it directly/);
   });
 });
