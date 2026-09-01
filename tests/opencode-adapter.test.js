@@ -117,7 +117,44 @@ describe("opencode model catalog", () => {
     }
   });
 
-  it("preserves bounded stderr after exhausting transient database lock retries", async () => {
+  it("does not retry a successful command with a lock warning", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-opencode-catalog-"));
+    const bin = path.join(root, "bin");
+    const attemptsPath = path.join(root, "attempts");
+    await fsp.mkdir(bin);
+    await fsp.writeFile(
+      path.join(bin, "opencode"),
+      [
+        "#!/bin/sh",
+        'attempts=0',
+        'if [ -f "$OPENCODE_TEST_ATTEMPTS" ]; then attempts=$(cat "$OPENCODE_TEST_ATTEMPTS"); fi',
+        'attempts=$((attempts + 1))',
+        'printf "%s" "$attempts" > "$OPENCODE_TEST_ATTEMPTS"',
+        'printf "%s\\n" "SQLITE_BUSY warning" >&2',
+        'printf "%s\\n" "provider/model"',
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    try {
+      await expect(getOpenCodeModelCatalog({
+        cwd: root,
+        env: {
+          HOME: root,
+          PATH: `${bin}${path.delimiter}/bin${path.delimiter}/usr/bin`,
+          OPENCODE_TEST_ATTEMPTS: attemptsPath,
+        },
+      })).resolves.toEqual({
+        models: [{ id: "provider/model", display_name: "provider/model" }],
+        model_discovery: { status: "available", source: "opencode-models" },
+      });
+      await expect(fsp.readFile(attemptsPath, "utf8")).resolves.toBe("1");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails fast on non-transient errors without retrying", async () => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-opencode-catalog-"));
     const bin = path.join(root, "bin");
     const attemptsPath = path.join(root, "attempts");
@@ -153,6 +190,47 @@ describe("opencode model catalog", () => {
         },
       });
       await expect(fsp.readFile(attemptsPath, "utf8")).resolves.toBe("1");
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves bounded stderr after exhausting transient database lock retries", async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-opencode-catalog-"));
+    const bin = path.join(root, "bin");
+    const attemptsPath = path.join(root, "attempts");
+    await fsp.mkdir(bin);
+    await fsp.writeFile(
+      path.join(bin, "opencode"),
+      [
+        "#!/bin/sh",
+        'attempts=0',
+        'if [ -f "$OPENCODE_TEST_ATTEMPTS" ]; then attempts=$(cat "$OPENCODE_TEST_ATTEMPTS"); fi',
+        'attempts=$((attempts + 1))',
+        'printf "%s" "$attempts" > "$OPENCODE_TEST_ATTEMPTS"',
+        'printf "%s\\n" "Unexpected error: database is locked" >&2',
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    try {
+      await expect(getOpenCodeModelCatalog({
+        cwd: root,
+        env: {
+          HOME: root,
+          PATH: `${bin}${path.delimiter}/bin${path.delimiter}/usr/bin`,
+          OPENCODE_TEST_ATTEMPTS: attemptsPath,
+        },
+      })).resolves.toEqual({
+        models: [],
+        model_discovery: {
+          status: "unavailable",
+          source: "opencode-models",
+          reason: "Unexpected error: database is locked",
+        },
+      });
+      await expect(fsp.readFile(attemptsPath, "utf8")).resolves.toBe("4");
     } finally {
       await fsp.rm(root, { recursive: true, force: true });
     }

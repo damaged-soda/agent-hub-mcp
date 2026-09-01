@@ -329,6 +329,7 @@ async function runOpenCodeModelsWithRetry({ cwd, env }) {
 }
 
 function isTransientDatabaseLock(result) {
+  if (!result || (!result.error && result.code === 0)) return false;
   return [result?.error?.message, result?.stdout, result?.stderr]
     .filter((value) => typeof value === "string")
     .some((value) => TRANSIENT_DATABASE_LOCK_PATTERN.test(value));
