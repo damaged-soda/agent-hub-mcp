@@ -1,10 +1,7 @@
 # Agent Instructions
 
-## Collaboration Routing
+## Review Routing
 
-- When the user asks to collaborate with another agent, use the `agenthub` CLI through the versioned `agent-hub` Skill by default.
-- For Claude Code collaboration, run `agenthub agents --cwd "$PWD"`, then `agenthub dispatch --agent claude-code …` and retain the run ID for `agenthub wait`.
-- Do not use Codex `multi_agent_v1` sub-agents unless the user explicitly asks for Codex sub-agents or `agenthub` is unavailable. The optional `agent_hub` MCP is a compatibility fallback, not the primary route.
 - A code-review request addressed to the current process is direct work; do not invoke `agenthub review dispatch` merely because the task mentions a PR, diff, change, or review. Use `agenthub review dispatch` automatically only after this process creates or updates a PR under the machine policy, or when the user explicitly requests Agent Hub's routed cross-review. If the user names another reviewer, ordinary dispatch is the transport and the selected reviewer reviews directly.
 
 ## Project Shape
