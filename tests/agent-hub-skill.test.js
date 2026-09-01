@@ -43,4 +43,23 @@ describe("Agent Hub Skill bundle", () => {
     expect(runs).toContain("The selected agent performs the request directly in its session");
     expect(runs).toMatch(/If the review request is addressed to the current process,\s+perform it directly/);
   });
+
+  it("keeps Agent Hub supplementary to native subagent orchestration", () => {
+    const content = readSkillFile("SKILL.md");
+    const interfaceContent = readSkillFile("agents/openai.yaml");
+    const runs = readSkillFile("references/runs.md");
+    const projectInstructions = fs.readFileSync(path.join(repoRoot, "AGENTS.md"), "utf8");
+
+    expect(content).toContain("Use only when the user explicitly requests Agent Hub");
+    expect(content).toContain("supplementary cross-provider perspective");
+    expect(content).toContain("outside this Skill's scope");
+    expect(content).not.toContain("Use when Codex needs to coordinate another coding agent");
+
+    expect(interfaceContent).toContain("Supplementary cross-provider agent dispatch");
+    expect(runs).toContain("explicitly requests Agent Hub or selects a named external");
+    expect(runs).toContain("unspecified-agent requests are outside this workflow");
+
+    expect(projectInstructions).not.toContain("use the `agenthub` CLI through the versioned `agent-hub` Skill by default");
+    expect(projectInstructions).not.toContain("Do not use Codex `multi_agent_v1` sub-agents");
+  });
 });

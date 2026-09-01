@@ -1,8 +1,10 @@
 # Dispatch and continue runs
 
-Use ordinary dispatch when the user explicitly selects another agent, including asking that agent
-to review code. The selected agent performs the request directly in its session; do not turn that
-review into `agenthub review dispatch`. If the review request is addressed to the current process,
+Use ordinary dispatch when the user explicitly requests Agent Hub or selects a named external
+coding-agent CLI or provider, including asking that agent to review code. Generic subagent,
+delegation, parallelization, and unspecified-agent requests are outside this workflow.
+The selected agent performs the request directly in its session; do not turn that review into
+`agenthub review dispatch`. If the review request is addressed to the current process,
 perform it directly without dispatching another agent. The post-PR machine-routed workflow and
 explicit Agent Hub routed cross-review are documented in [reviews.md](reviews.md).
 

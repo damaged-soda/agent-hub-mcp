@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Hub CLI"
-  short_description: "Dispatch and coordinate local coding agents"
+  short_description: "Supplementary cross-provider agent dispatch"
   default_prompt: "Use $agent-hub for an explicitly requested dispatch, or for the machine-routed cross-review immediately after creating or updating a PR."

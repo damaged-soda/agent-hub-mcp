@@ -1,12 +1,17 @@
 ---
 name: agent-hub
-description: Dispatch and coordinate local Claude Code, Codex, Kimi Code, and OpenCode processes through the daemon-free agenthub CLI, run isolated repository coding-agent evaluations, and resolve copied agenthub:// session or event references. Use when Codex needs to coordinate another coding agent, run an evaluation, inspect a session, resolve an Agent Hub reference, or participate in a durable structured discussion. For code review, use the routed workflow only after this process creates or updates a PR under policy, or when the user explicitly requests Agent Hub routing; a review performed by the current process stays in the current session.
+description: Dispatch explicitly selected local Claude Code, Codex, Kimi Code, and OpenCode CLI processes through the daemon-free agenthub CLI; run Agent Hub evaluations, session inspection, reference resolution, routed review, and durable Discussion workflows. Use only when the user explicitly requests Agent Hub, selects a named external coding-agent CLI or provider, invokes an Agent Hub-specific workflow, or the post-PR policy requires routed cross-review. Agent Hub is a supplementary cross-provider perspective, not a replacement for a host's native subagent or multi-agent mechanism; generic subagent, delegation, parallelization, and unspecified-agent requests are outside this Skill's scope.
 ---
 
 # Agent Hub
 
-Use `agenthub` as the stable interface. Commands run in the caller's current login and Keychain
-context; do not start the HTTP daemon for ordinary collaboration.
+Agent Hub is a supplementary cross-provider transport, not a replacement for the host's native
+subagent or multi-agent mechanism. Ordinary dispatch requires explicit Agent Hub intent or a named
+external coding-agent CLI or provider. Generic subagent, delegation, parallelization, and
+unspecified-agent requests are outside this Skill's scope.
+
+For in-scope workflows, use `agenthub` as the stable interface. Commands run in the caller's current
+login and Keychain context; do not start the HTTP daemon for ordinary collaboration.
 
 ## Route the task
 
@@ -15,7 +20,8 @@ Read only the reference for the requested workflow:
 - A post-PR machine-routed cross-review, immediately after this process successfully creates or
   updates a PR, or an explicit request to use Agent Hub's configured review route:
   [references/reviews.md](references/reviews.md).
-- Ordinary dispatch to a user-selected agent, implementation, investigation, continuation, or
+- Ordinary dispatch explicitly requested through Agent Hub or addressed to a named external
+  coding-agent CLI or provider, including implementation, investigation, continuation, or
   structured run input. A review prompt addressed to the current process is direct work:
   [references/runs.md](references/runs.md).
 - A single repository navigation or patch evaluation:
