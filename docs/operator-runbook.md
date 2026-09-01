@@ -81,6 +81,30 @@ when sessions do not appear. This integration is verified against OpenCode 1.18.
 reported through `source_errors` on aggregate lists and remains a hard error for
 `--provider opencode`.
 
+### Claude native session persistence
+
+Agent Hub's Claude adapter requires a resumable native transcript. Before dispatch it probes
+`projects/`, `session-env/`, and `sessions/` under Claude's native config root; after a successful
+CLI exit it verifies that the session transcript exists. A Codex `workspace-write` profile should
+grant only these state directories (plus optional directories used by Claude's checkpoints and
+task tools), not the entire `~/.claude` tree:
+
+```toml
+[permissions.auto-network.filesystem]
+"/Users/leavan/.claude/projects" = "write"
+"/Users/leavan/.claude/session-env" = "write"
+"/Users/leavan/.claude/sessions" = "write"
+"/Users/leavan/.claude/file-history" = "write"
+"/Users/leavan/.claude/tasks" = "write"
+"/Users/leavan/.claude/shell-snapshots" = "write"
+"/Users/leavan/.claude/plans" = "write"
+```
+
+If the preflight fails, `dispatch` returns `session_store_unwritable` (or
+`session_persistence_disabled`) without starting Claude. If Claude exits successfully but its
+transcript is missing, the run is marked `session_persistence_failed`; Agent Hub preserves the
+result artifacts but removes the resumable `cli_session_ref`.
+
 ## Post-PR Review Routing
 
 The routed review workflow is a policy step after the current process creates or updates a PR, or an

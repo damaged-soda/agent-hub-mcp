@@ -223,12 +223,24 @@ async function dispatchToAgentWithRunId(input, internal, runId) {
   };
   const effectiveCliSessionRef = adapter.createSessionRef(input.cli_session_ref);
   let sessionRecord = null;
-  if (effectiveCliSessionRef?.native_session_id) {
-    sessionRecord = await acquireSessionLease(effectiveCliSessionRef, {
-      run_id: runId,
-      expected_generation: internal.expected_session_generation,
-      claim_id: internal.session_claim_id,
-    });
+  try {
+    if (effectiveCliSessionRef?.native_session_id) {
+      sessionRecord = await acquireSessionLease(effectiveCliSessionRef, {
+        run_id: runId,
+        expected_generation: internal.expected_session_generation,
+        claim_id: internal.session_claim_id,
+      });
+    }
+    if (typeof adapter.preflightSession === "function") {
+      await adapter.preflightSession({
+        cwd: paths.cwd,
+        cliSessionRef: effectiveCliSessionRef,
+        env: process.env,
+      });
+    }
+  } catch (error) {
+    await releaseSessionRun(effectiveCliSessionRef, runId).catch(() => undefined);
+    throw error;
   }
   let runDir;
   try {

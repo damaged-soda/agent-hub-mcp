@@ -36,6 +36,8 @@ describe("MCP flow", () => {
     await fsp.mkdir(workspaceDir, { recursive: true });
     await fsp.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
     await fsp.writeFile(path.join(workspaceDir, "README.md"), "# Fixture\n");
+    const claudeConfigDir = path.join(tempDir, "claude");
+    await fsp.mkdir(claudeConfigDir, { recursive: true });
     await writeFakeClaude(path.join(binDir, "claude"));
     await writeFakeCodex(path.join(binDir, "codex"));
     await writeFakeKimi(path.join(binDir, "kimi"));
@@ -45,6 +47,7 @@ describe("MCP flow", () => {
       PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
       AGENT_HUB_RUN_DIR: runDir,
       AGENT_HUB_CWD_ALLOWLIST: workspaceDir,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
   });
 
@@ -140,9 +143,39 @@ describe("MCP flow", () => {
     expect(command.argv).toContain("auto");
     expect(command.argv).toContain(await fsp.realpath(path.join(workspaceDir, "subdir")));
     expect(command.env_keys).toContain("PATH");
+    expect(command.env_keys).toContain("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE");
     expect(result.structuredContent.artifacts.map((artifact) => artifact.path)).toContain(
       "events.jsonl",
     );
+  });
+
+  it("fails a successful Claude run when its native transcript is missing", async () => {
+    const result = await callAgentHubTool(
+      "run_agent",
+      {
+        agent_id: "claude-code",
+        prompt: "do not persist",
+        cwd: workspaceDir,
+        cli_session_ref: null,
+        metadata: {},
+        timeout_ms: 5000,
+        poll_interval_ms: 50,
+      },
+      {
+        env: {
+          ...env,
+          FAKE_CLAUDE_SKIP_TRANSCRIPT: "1",
+          AGENT_HUB_FORWARD_ENV: "FAKE_CLAUDE_SKIP_TRANSCRIPT",
+        },
+      },
+    );
+
+    expect(result.structuredContent.status).toBe("failed");
+    expect(result.structuredContent.error).toMatchObject({
+      code: "session_persistence_failed",
+    });
+    expect(result.structuredContent.cli_session_ref).toBeNull();
+    expect(result.content[0].text).toBe("fake result: do not persist");
   });
 
   it("runs list_agents over MCP streamable HTTP", async () => {
@@ -589,6 +622,13 @@ describe("MCP flow", () => {
 
   it("passes cli_session_ref through to Claude as --resume", async () => {
     const sessionId = "550e8400-e29b-41d4-a716-446655440000";
+    const transcriptDir = path.join(env.CLAUDE_CONFIG_DIR, "projects", "-agenthub-test");
+    await fsp.mkdir(transcriptDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(transcriptDir, `${sessionId}.jsonl`),
+      JSON.stringify({ type: "system", session_id: sessionId }) + "\n",
+      { mode: 0o600 },
+    );
     const result = await callAgentHubTool(
       "run_agent",
       {
@@ -1347,6 +1387,8 @@ async function writeFakeClaude(target) {
   await fsp.writeFile(
     target,
     `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("2.1.193 (Claude Code)\\n");
@@ -1366,6 +1408,14 @@ process.stdin.on("end", () => {
     sessionIndex >= 0 ? args[sessionIndex + 1] :
     resumeIndex >= 0 ? args[resumeIndex + 1] :
     "550e8400-e29b-41d4-a716-446655440000";
+  if (process.env.FAKE_CLAUDE_SKIP_TRANSCRIPT !== "1") {
+    const transcriptDir = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", "-agenthub-test");
+    fs.mkdirSync(transcriptDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(transcriptDir, sessionId + ".jsonl"),
+      JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\\n",
+    );
+  }
   const writeJson = (value) => {
     process.stdout.write(JSON.stringify(value));
     if (streamJson) {

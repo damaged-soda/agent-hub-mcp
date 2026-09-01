@@ -7,6 +7,10 @@ import {
   runCommand,
   runVersionCommand,
 } from "./adapter-utils.js";
+import {
+  preflightClaudeSessionPersistence,
+  verifyClaudeSessionPersistence,
+} from "./session-persistence.js";
 
 export const CLAUDE_AGENT_ID = "claude-code";
 export const CLAUDE_DISCUSSION_CAPABILITIES = Object.freeze({
@@ -177,7 +181,27 @@ export function buildClaudeCommand({ request, effectiveCliSessionRef, env = proc
     args: argv.slice(1),
     argv,
     output_format: outputFormat,
+    env: {
+      // Agent Hub promises a resumable native session. This also overrides
+      // Claude's nested-session heuristic when dispatch is launched by Claude.
+      CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1",
+    },
   };
+}
+
+export async function preflightClaudeSession({ cliSessionRef, env = process.env } = {}) {
+  return preflightClaudeSessionPersistence({
+    env,
+    nativeSessionId: cliSessionRef?.native_session_id,
+    resumed: cliSessionRef?.resumed === true,
+  });
+}
+
+export async function verifyClaudeSession({ cliSessionRef, env = process.env } = {}) {
+  return verifyClaudeSessionPersistence({
+    env,
+    nativeSessionId: cliSessionRef?.native_session_id,
+  });
 }
 
 export function parseClaudeJson(stdout) {

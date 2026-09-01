@@ -343,6 +343,28 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     return;
   }
 
+  if (typeof adapter.verifySession === "function") {
+    try {
+      await adapter.verifySession({
+        cwd: request.cwd,
+        cliSessionRef: outcome.cliSessionRef,
+        env: agentEnv,
+      });
+    } catch (error) {
+      await failRun(runDir, {
+        code: error?.code ?? "session_persistence_failed",
+        message: error instanceof Error ? error.message : String(error),
+        retryable: error?.retryable,
+        result_text: outcome.resultText,
+        result_json: outcome.resultJson,
+        cli_session_ref: null,
+        exit_code: code,
+        signal,
+      });
+      return;
+    }
+  }
+
   const precompletedState = await readState(runDir).catch(() => null);
   const sessionRecord = await completeSessionRun(
     outcome.cliSessionRef,
@@ -400,8 +422,8 @@ async function failRun(runDir, error) {
       result_path: "result.txt",
       result_json_path: "result.json",
     };
-    if (error.cli_session_ref) {
-      next.cli_session_ref = error.cli_session_ref;
+    if (Object.hasOwn(error, "cli_session_ref")) {
+      next.cli_session_ref = publicCliSessionRef(error.cli_session_ref);
     }
     await writeState(runDir, next);
   });
@@ -467,6 +489,9 @@ function inferRetryable(code, message) {
     "stdin_write_failed",
     "log_write_failed",
     "session_resume_failed",
+    "session_store_unwritable",
+    "session_persistence_failed",
+    "session_resume_unavailable",
   ]).has(code);
 }
 

@@ -21,6 +21,8 @@ describe("agenthub CLI", () => {
     await fsp.mkdir(workspace, { recursive: true });
     await fsp.mkdir(bin, { recursive: true });
     await writeFakeClaude(path.join(bin, "claude"));
+    const claudeConfigDir = path.join(root, "claude");
+    await fsp.mkdir(claudeConfigDir, { recursive: true });
     env = {
       ...process.env,
       PATH: `${bin}${path.delimiter}${process.env.PATH}`,
@@ -29,6 +31,7 @@ describe("agenthub CLI", () => {
       AGENT_HUB_REVIEW_CONFIG: path.join(root, "config", "review-routing.json"),
       AGENT_HUB_CATALOG_CACHE_DIR: path.join(root, "catalog-cache"),
       AGENT_HUB_CWD_ALLOWLIST: workspace,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
   });
 
@@ -521,6 +524,8 @@ async function writeFakeClaude(target) {
   await fsp.writeFile(
     target,
     `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   process.stdout.write("2.1.193 (Claude Code)\\n");
@@ -548,6 +553,14 @@ process.stdin.on("end", async () => {
   const sessionIndex = args.indexOf("--session-id");
   const resumeIndex = args.indexOf("--resume");
   const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : args[resumeIndex + 1];
+  if (process.env.FAKE_CLAUDE_SKIP_TRANSCRIPT !== "1") {
+    const transcriptDir = path.join(process.env.CLAUDE_CONFIG_DIR, "projects", "-agenthub-test");
+    fs.mkdirSync(transcriptDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(transcriptDir, sessionId + ".jsonl"),
+      JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }) + "\\n",
+    );
+  }
   const write = (value) => process.stdout.write(JSON.stringify(value) + (streamJson ? "\\n" : ""));
   if (streamJson) write({ type: "system", subtype: "init", session_id: sessionId });
   let result = "fake result: " + input;

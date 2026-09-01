@@ -561,6 +561,10 @@ claude -p --input-format text --output-format stream-json --verbose
 
 - prompt 通过 stdin 传入，内容来自 `input.txt`。
 - 新会话时 Agent Hub 生成 UUID，并传入 `--session-id <uuid>`。
+- Claude dispatch 在返回 `accepted` 前会对原生 session store 做实际写入探测；终态成功前
+  再确认对应 transcript 已落盘。探测失败使用 `session_store_unwritable`，CLI 成功但
+  transcript 缺失使用 `session_persistence_failed`；不存在的 continuation transcript 使用
+  `session_resume_unavailable`。这几类失败都会清除对外暴露的 `cli_session_ref`。
 - continuation 时传入 `--resume <native_session_id>`。
 - `metadata.claude.model`（或统一的 `metadata.model`）映射到 `--model`；未提供时回退到服务端环境变量 `AGENT_HUB_CLAUDE_MODEL`，都未设置时不传 `--model`（此时 Claude CLI 使用本地保存的默认模型）。
 - `metadata.claude.effort` 映射到 `--effort`；未提供时回退到服务端环境变量
@@ -572,10 +576,16 @@ claude -p --input-format text --output-format stream-json --verbose
   `metadata.permission`（映射：`read-only` → `plan`，`auto` → `auto`，`full` →
   `bypassPermissions`）。
 - 两者都未设置时，Agent Hub 默认传入 `--permission-mode auto`。
+- Agent Hub 同时设置 `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`，确保从另一个 Claude
+  会话启动时不会被 Claude 的嵌套会话判定排除。
 
 `dispatch_to_agent` 返回的 `cli_session_ref.native_session_id` 是本次传给 Claude 的
 session UUID。Runner 完成后，终态 `cli_session_ref.native_session_id` 使用 Claude
 result event 或 JSON 的 `session_id` 字段。
+
+Claude 的可恢复 session 依赖其原生配置根（`CLAUDE_CONFIG_DIR`，默认 `~/.claude`）下的
+`projects/`、`session-env/` 和 `sessions/` 状态目录。Agent Hub 不会自动扩大宿主沙箱；
+调用方必须给这些目录写权限，或让 Claude 使用一个可写的 `CLAUDE_CONFIG_DIR`。
 
 Claude stdout 处理规则：
 
