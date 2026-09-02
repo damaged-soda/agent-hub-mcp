@@ -190,7 +190,13 @@ The runner forwards a small default environment allowlist for Claude, Codex, Kim
 AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE agenthub dispatch …
 ```
 
-`command.json` records only selected environment key names after redacting sensitive-looking keys; it does not record environment values.
+`command.json` records only selected environment key names after redacting sensitive-looking keys;
+it does not record environment values. Internal execution profiles may pin an absolute agent
+executable and hand the runner a validated post-birth environment overlay, including a PATH prefix
+(for example, an Eval runtime command directory) and private temp paths. The birth shell applies the
+overlay only after namespace rebinding and unsets every handoff key before the agent CLI starts. The
+declared capability directories remain in the internal request/profile metadata, but composed PATH
+and environment values are never persisted.
 
 ## Run Storage
 

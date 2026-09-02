@@ -176,6 +176,9 @@ Agent Hub does not resolve namespaces. It forwards the caller's session-axis sta
 （`NS`、`NS_UNDO`、`PATH`…）, sets `NS_REBIND=1`, and starts the agent CLI through
 `zsh -c 'exec …'` at the run `cwd`, so `~/.zshenv`（charter's glue）unloads the inherited
 domain and binds by `cwd`——exactly as a command typed in a terminal there would.
+Internal Eval profiles additionally pin the Codex executable resolved by that cwd-bound shell and
+restore validated runtime PATH/temp overlays after that rebind; ordinary dispatches keep the
+behavior above unchanged.
 
 ## Structured Discussions
 

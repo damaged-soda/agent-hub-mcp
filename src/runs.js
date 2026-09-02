@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import {
   ACTIVE_STATUSES,
@@ -112,6 +113,7 @@ async function normalizeExecutionProfile(value, agentId, cwd) {
     throw new Error("execution_profile.runtime_read_paths must be a non-empty array");
   }
   const runtimeReadPaths = [];
+  const runtimeReadDirectories = [];
   for (const [index, item] of value.runtime_read_paths.entries()) {
     if (typeof item !== "string" || !path.isAbsolute(item)) {
       throw new Error(`execution_profile.runtime_read_paths[${index}] must be absolute`);
@@ -123,13 +125,154 @@ async function normalizeExecutionProfile(value, agentId, cwd) {
       throw new Error(`execution_profile.runtime_read_paths[${index}] must be a file or directory`);
     }
     runtimeReadPaths.push(lexical, real);
+    if (stat.isDirectory()) runtimeReadDirectories.push(lexical, real);
+  }
+  if (typeof value.agent_executable !== "string" || !path.isAbsolute(value.agent_executable)) {
+    throw new Error("execution_profile.agent_executable must be absolute");
+  }
+  const agentExecutableLexical = path.resolve(value.agent_executable);
+  let agentExecutable;
+  let agentExecutableStat;
+  try {
+    agentExecutable = await fsp.realpath(agentExecutableLexical);
+    agentExecutableStat = await fsp.stat(agentExecutable);
+    await fsp.access(agentExecutable, fsConstants.X_OK);
+  } catch {
+    throw new Error("execution_profile.agent_executable must be an executable file");
+  }
+  if (!agentExecutableStat.isFile()) {
+    throw new Error("execution_profile.agent_executable must be an executable file");
+  }
+  const shebang = await readShebang(agentExecutable);
+  let agentInterpreter = null;
+  if (shebang) {
+    const [interpreter, ...interpreterArgs] = shebang;
+    if (!path.isAbsolute(interpreter)) {
+      throw new Error("execution_profile.agent_executable has an invalid shebang interpreter");
+    }
+    if (path.basename(interpreter) === "env" && (
+      interpreterArgs.length !== 1 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(interpreterArgs[0])
+    )) {
+      throw new Error(
+        "execution_profile.agent_executable has an unsupported env shebang",
+      );
+    }
+    if (path.basename(interpreter) === "env") {
+      if (typeof value.agent_interpreter !== "string" || !path.isAbsolute(value.agent_interpreter)) {
+        throw new Error(
+          "execution_profile.agent_executable env shebang requires an absolute agent_interpreter",
+        );
+      }
+      const lexical = path.resolve(value.agent_interpreter);
+      try {
+        agentInterpreter = await fsp.realpath(lexical);
+        if (!(await fsp.stat(agentInterpreter)).isFile()) throw new Error("not a file");
+        await fsp.access(agentInterpreter, fsConstants.X_OK);
+      } catch {
+        throw new Error("execution_profile.agent_interpreter must be an executable file");
+      }
+      if (lexical !== agentInterpreter) {
+        throw new Error("execution_profile.agent_interpreter must be canonical");
+      }
+      const nestedShebang = await readShebang(agentInterpreter);
+      if (nestedShebang && path.basename(nestedShebang[0]) === "env") {
+        throw new Error("execution_profile.agent_interpreter must not use an env shebang");
+      }
+      for (const candidate of [agentInterpreter]) {
+        if (isInside(candidate, cwd) || isInside(cwd, candidate)) {
+          throw new Error("execution_profile.agent_interpreter must be separate from cwd");
+        }
+        if (isInside(candidate, scratchPath) || isInside(scratchPath, candidate)) {
+          throw new Error("execution_profile.agent_interpreter must be separate from scratch_path");
+        }
+        const covered = runtimeReadPaths.includes(candidate) ||
+          runtimeReadDirectories.some((root) => isInside(candidate, root));
+        if (!covered) {
+          throw new Error(
+            "execution_profile.agent_interpreter must be covered by runtime_read_paths",
+          );
+        }
+      }
+    } else if (value.agent_interpreter !== undefined && value.agent_interpreter !== null) {
+      throw new Error(
+        "execution_profile.agent_interpreter requires an agent executable env shebang",
+      );
+    }
+  } else if (value.agent_interpreter !== undefined && value.agent_interpreter !== null) {
+    throw new Error(
+      "execution_profile.agent_interpreter requires an agent executable env shebang",
+    );
+  }
+  for (const candidate of new Set([agentExecutableLexical, agentExecutable])) {
+    if (isInside(candidate, cwd) || isInside(cwd, candidate)) {
+      throw new Error("execution_profile.agent_executable must be separate from cwd");
+    }
+    if (isInside(candidate, scratchPath) || isInside(scratchPath, candidate)) {
+      throw new Error("execution_profile.agent_executable must be separate from scratch_path");
+    }
+    const covered = runtimeReadPaths.includes(candidate) ||
+      runtimeReadDirectories.some((root) => isInside(candidate, root));
+    if (!covered) {
+      throw new Error("execution_profile.agent_executable must be covered by runtime_read_paths");
+    }
+  }
+  const rawPathPrepend = value.path_prepend ?? [];
+  if (!Array.isArray(rawPathPrepend)) {
+    throw new Error("execution_profile.path_prepend must be an array");
+  }
+  const pathPrepend = [];
+  const seenPathPrepend = new Set();
+  for (const [index, item] of rawPathPrepend.entries()) {
+    const label = `execution_profile.path_prepend[${index}]`;
+    if (typeof item !== "string" || !path.isAbsolute(item)) {
+      throw new Error(`${label} must be absolute`);
+    }
+    if (item.includes(path.delimiter)) {
+      throw new Error(`${label} must not contain the PATH delimiter`);
+    }
+    const lexical = path.resolve(item);
+    const real = await fsp.realpath(lexical);
+    const stat = await fsp.stat(real);
+    if (!stat.isDirectory()) throw new Error(`${label} must be a directory`);
+    for (const candidate of new Set([lexical, real])) {
+      if (isInside(candidate, cwd) || isInside(cwd, candidate)) {
+        throw new Error(`${label} must be separate from cwd`);
+      }
+      if (isInside(candidate, scratchPath) || isInside(scratchPath, candidate)) {
+        throw new Error(`${label} must be separate from scratch_path`);
+      }
+      if (!runtimeReadDirectories.some((root) => isInside(candidate, root))) {
+        throw new Error(`${label} must be covered by runtime_read_paths`);
+      }
+    }
+    if (seenPathPrepend.has(lexical) || seenPathPrepend.has(real)) continue;
+    pathPrepend.push(real);
+    seenPathPrepend.add(lexical);
+    seenPathPrepend.add(real);
   }
   return {
     kind: value.kind,
     scratch_path: scratchPath,
     output_schema_path: outputSchemaPath,
     runtime_read_paths: Array.from(new Set(runtimeReadPaths)).sort(),
+    agent_executable: agentExecutable,
+    agent_interpreter: agentInterpreter,
+    path_prepend: pathPrepend,
   };
+}
+
+async function readShebang(file) {
+  const handle = await fsp.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(512);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead < 2 || buffer[0] !== 0x23 || buffer[1] !== 0x21) return null;
+    const line = buffer.subarray(2, bytesRead).toString("utf8").split(/\r?\n/, 1)[0].trim();
+    return line ? line.split(/\s+/) : null;
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function dispatchToAgent(input, internal = {}) {
@@ -186,9 +329,14 @@ export async function dispatchToAgent(input, internal = {}) {
 
 async function dispatchToAgentWithRunId(input, internal, runId) {
   const adapter = getAdapter(input?.agent_id);
-  const availability = await adapter.getAvailability();
-  if (!availability.available) {
-    throw new Error(`${adapter.displayName} CLI is not available: ${availability.reason}`);
+  // Eval has already resolved, version-checked, and pinned its CLI through the
+  // cwd-bound birth shell. Re-running a bare availability probe here could use
+  // the caller domain's PATH instead of the pinned target executable.
+  if (!internal.execution_profile) {
+    const availability = await adapter.getAvailability();
+    if (!availability.available) {
+      throw new Error(`${adapter.displayName} CLI is not available: ${availability.reason}`);
+    }
   }
 
   if (typeof input.prompt !== "string") {

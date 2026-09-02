@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { questionUntilClosed } from "../src/cli.js";
 
@@ -12,15 +13,18 @@ const CLI_PATH = path.resolve("src/cli.js");
 describe("agenthub CLI", () => {
   let root;
   let workspace;
+  let bin;
   let env;
+  let internalDispatchHelper;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-cli-test-"));
     workspace = path.join(root, "workspace");
-    const bin = path.join(root, "bin");
+    bin = path.join(root, "bin");
     await fsp.mkdir(workspace, { recursive: true });
     await fsp.mkdir(bin, { recursive: true });
     await writeFakeClaude(path.join(bin, "claude"));
+    await writeFakeCodex(path.join(bin, "codex"));
     const claudeConfigDir = path.join(root, "claude");
     await fsp.mkdir(claudeConfigDir, { recursive: true });
     env = {
@@ -33,6 +37,31 @@ describe("agenthub CLI", () => {
       AGENT_HUB_CWD_ALLOWLIST: workspace,
       CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
+    internalDispatchHelper = path.join(root, "internal-dispatch.mjs");
+    await fsp.writeFile(
+      internalDispatchHelper,
+      `import { dispatchToAgent, waitAgentRun } from ${JSON.stringify(
+        pathToFileURL(path.resolve("src/runs.js")).href,
+      )};
+const payload = JSON.parse(process.env.AGENT_HUB_TEST_INTERNAL_DISPATCH);
+try {
+  const accepted = await dispatchToAgent(payload.input, {
+    execution_profile: payload.execution_profile,
+  });
+  const snapshot = payload.wait === false ? null : await waitAgentRun({
+    run_ref: accepted.run_ref,
+    timeout_ms: 10000,
+    poll_interval_ms: 25,
+  });
+  process.stdout.write(JSON.stringify({ accepted, snapshot }));
+} catch (error) {
+  process.stdout.write(JSON.stringify({
+    error: { code: error?.code ?? null, message: error?.message ?? String(error) },
+  }));
+}
+`,
+      { mode: 0o600 },
+    );
   });
 
   afterEach(async () => {
@@ -96,6 +125,304 @@ describe("agenthub CLI", () => {
     expect(command.launcher.slice(0, 3)).toEqual(["/bin/zsh", "-c", 'exec "$0" "$@"']);
     expect(command.launcher.slice(3)).toEqual(command.argv);
   });
+
+  it("prepends execution-profile runtime paths after zsh birth without leaking the handoff value", async () => {
+    const runtimeA = path.join(root, "runtime-a");
+    const runtimeB = path.join(root, "runtime-b");
+    const scratch = path.join(root, "scratch");
+    const schema = path.join(scratch, "schema.json");
+    const postZshBin = path.join(root, "post-zsh-bin");
+    const postZshTmp = path.join(root, "post-zsh-tmp");
+    const zdot = path.join(root, "path-zdot");
+    const nodeExecutable = await fsp.realpath(process.execPath);
+    await Promise.all([
+      fsp.mkdir(runtimeA),
+      fsp.mkdir(runtimeB),
+      fsp.mkdir(scratch),
+      fsp.mkdir(postZshBin),
+      fsp.mkdir(zdot),
+    ]);
+    await fsp.writeFile(schema, "{}\n", { mode: 0o600 });
+    await fsp.writeFile(path.join(runtimeA, "codex"), "#!/bin/sh\nexit 99\n", { mode: 0o755 });
+    await fsp.chmod(path.join(runtimeA, "codex"), 0o755);
+    await fsp.writeFile(path.join(runtimeA, "node"), "#!/bin/sh\nexit 98\n", { mode: 0o755 });
+    await fsp.chmod(path.join(runtimeA, "node"), 0o755);
+    const zshPath = [
+      postZshBin,
+      path.dirname(process.execPath),
+      bin,
+      "/usr/bin",
+      "/bin",
+    ].join(path.delimiter);
+    await fsp.writeFile(
+      path.join(zdot, ".zshenv"),
+      `export PATH=${JSON.stringify(zshPath)}\n` +
+        `export TMPDIR=${JSON.stringify(postZshTmp)} TMP=${JSON.stringify(postZshTmp)} TEMP=${JSON.stringify(postZshTmp)}\n` +
+        'export PATH_AFTER_ZSH="$PATH" TMP_AFTER_ZSH="$TMPDIR"\n',
+    );
+
+    const dispatched = await runInternalDispatch(
+      internalDispatchHelper,
+      {
+        input: {
+          agent_id: "codex",
+          cwd: workspace,
+          prompt: "dump-path-handoff",
+          metadata: {},
+        },
+        execution_profile: {
+          kind: "workspace-write/v1",
+          scratch_path: scratch,
+          output_schema_path: schema,
+          agent_executable: path.join(bin, "codex"),
+          agent_interpreter: nodeExecutable,
+          runtime_read_paths: [bin, path.dirname(nodeExecutable), runtimeA, runtimeB],
+          path_prepend: [runtimeA, runtimeA, runtimeB],
+        },
+      },
+      {
+        ...env,
+        ZDOTDIR: zdot,
+        AGENT_HUB_FORWARD_ENV:
+          "ZDOTDIR,AGENT_HUB_INTERNAL_PATH_PREPEND,AGENT_HUB_INTERNAL_POST_BIRTH_0",
+        AGENT_HUB_INTERNAL_PATH_PREPEND: path.join(root, "caller-spoofed-prefix"),
+        AGENT_HUB_INTERNAL_POST_BIRTH_0: "caller-spoofed-value",
+      },
+    );
+
+    expect(dispatched.error).toBeUndefined();
+    expect(dispatched.snapshot.status).toBe("completed");
+    const seen = JSON.parse(dispatched.snapshot.content[0].text);
+    const realScratch = await fsp.realpath(scratch);
+    const realRuntimeA = await fsp.realpath(runtimeA);
+    const realRuntimeB = await fsp.realpath(runtimeB);
+    expect(seen.path_after_zsh).toBe(zshPath);
+    expect(seen.tmp_after_zsh).toBe(postZshTmp);
+    expect(seen.tmpdir).toBe(realScratch);
+    expect(seen.tmp).toBe(realScratch);
+    expect(seen.temp).toBe(realScratch);
+    expect(seen.path.split(path.delimiter)).toEqual([
+      realRuntimeA,
+      realRuntimeB,
+      ...zshPath.split(path.delimiter),
+    ]);
+    expect(seen.internal_path_prepend).toBeNull();
+    expect(seen.internal_keys).toEqual([]);
+
+    const runPath = path.join(env.AGENT_HUB_RUN_DIR, dispatched.accepted.run_ref.run_id);
+    const command = JSON.parse(await fsp.readFile(path.join(runPath, "command.json"), "utf8"));
+    const request = JSON.parse(await fsp.readFile(path.join(runPath, "request.json"), "utf8"));
+    const joinedPrefix = [realRuntimeA, realRuntimeB].join(path.delimiter);
+    expect(command.env_keys).toContain("AGENT_HUB_INTERNAL_PATH_PREPEND");
+    expect(command.env_keys).toEqual(expect.arrayContaining([
+      "AGENT_HUB_INTERNAL_POST_BIRTH_0",
+      "AGENT_HUB_INTERNAL_POST_BIRTH_1",
+      "AGENT_HUB_INTERNAL_POST_BIRTH_2",
+    ]));
+    expect(command.launcher[2]).toContain("AGENT_HUB_INTERNAL_PATH_PREPEND");
+    expect(command.launcher[4]).toBe(nodeExecutable);
+    expect(command.launcher[2].indexOf('__agent_hub_interpreter="$1"')).toBeLessThan(
+      command.launcher[2].indexOf("export PATH="),
+    );
+    expect(JSON.stringify(command)).not.toContain(joinedPrefix);
+    expect(request.execution_profile.path_prepend).toEqual([realRuntimeA, realRuntimeB]);
+  }, 15000);
+
+  it("rejects unsafe execution-profile PATH prefixes before creating a run", async () => {
+    const runtime = path.join(root, "runtime-safe");
+    const uncovered = path.join(root, "runtime-uncovered");
+    const scratch = path.join(root, "profile-scratch");
+    const scratchBin = path.join(scratch, "bin");
+    const workspaceBin = path.join(workspace, "bin");
+    const workspaceParent = path.dirname(workspace);
+    const scratchParent = path.join(root, "isolated-scratch-parent");
+    const nestedScratch = path.join(scratchParent, "scratch");
+    const nestedSchema = path.join(nestedScratch, "schema.json");
+    const runtimeFile = path.join(root, "runtime-file");
+    const schema = path.join(scratch, "schema.json");
+    const nodeExecutable = await fsp.realpath(process.execPath);
+    const nodeBin = path.dirname(nodeExecutable);
+    await Promise.all([
+      fsp.mkdir(runtime),
+      fsp.mkdir(uncovered),
+      fsp.mkdir(scratchBin, { recursive: true }),
+      fsp.mkdir(workspaceBin),
+      fsp.mkdir(nestedScratch, { recursive: true }),
+    ]);
+    await fsp.writeFile(runtimeFile, "not a directory\n");
+    await fsp.writeFile(schema, "{}\n", { mode: 0o600 });
+    await fsp.writeFile(nestedSchema, "{}\n", { mode: 0o600 });
+    const baseProfile = {
+      kind: "workspace-write/v1",
+      scratch_path: scratch,
+      output_schema_path: schema,
+      agent_executable: path.join(bin, "codex"),
+      agent_interpreter: nodeExecutable,
+      runtime_read_paths: [bin, nodeBin, runtime],
+    };
+    const invalidProfiles = [
+      {
+        profile: { ...baseProfile, path_prepend: runtime },
+        message: "execution_profile.path_prepend must be an array",
+      },
+      {
+        profile: { ...baseProfile, path_prepend: ["relative/runtime"] },
+        message: "execution_profile.path_prepend[0] must be absolute",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          runtime_read_paths: [bin, nodeBin, runtimeFile],
+          path_prepend: [runtimeFile],
+        },
+        message: "execution_profile.path_prepend[0] must be a directory",
+      },
+      {
+        profile: { ...baseProfile, path_prepend: [uncovered] },
+        message: "execution_profile.path_prepend[0] must be covered by runtime_read_paths",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          runtime_read_paths: [bin, nodeBin, workspaceBin],
+          path_prepend: [workspaceBin],
+        },
+        message: "execution_profile.path_prepend[0] must be separate from cwd",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          runtime_read_paths: [bin, nodeBin, scratchBin],
+          path_prepend: [scratchBin],
+        },
+        message: "execution_profile.path_prepend[0] must be separate from scratch_path",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          runtime_read_paths: [bin, nodeBin, workspaceParent],
+          path_prepend: [workspaceParent],
+        },
+        message: "execution_profile.path_prepend[0] must be separate from cwd",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          scratch_path: nestedScratch,
+          output_schema_path: nestedSchema,
+          runtime_read_paths: [bin, nodeBin, scratchParent],
+          path_prepend: [scratchParent],
+        },
+        message: "execution_profile.path_prepend[0] must be separate from scratch_path",
+      },
+    ];
+
+    for (const { profile, message } of invalidProfiles) {
+      const dispatched = await runInternalDispatch(
+        internalDispatchHelper,
+        {
+          input: {
+            agent_id: "codex",
+            cwd: workspace,
+            prompt: "must not run",
+            metadata: {},
+          },
+          execution_profile: profile,
+          wait: false,
+        },
+        env,
+      );
+      expect(dispatched.error?.message).toBe(message);
+    }
+    await expect(fsp.readdir(env.AGENT_HUB_RUN_DIR)).resolves.toEqual([]);
+  }, 15000);
+
+  it("pins execution-profile agent commands to a covered executable outside writable roots", async () => {
+    const scratch = path.join(root, "agent-executable-scratch");
+    const schema = path.join(scratch, "schema.json");
+    const uncovered = path.join(root, "uncovered-codex");
+    const blocked = path.join(root, "blocked-codex");
+    const envShebang = path.join(root, "env-shebang-codex");
+    const workspaceExecutable = path.join(workspace, "workspace-codex");
+    const scratchExecutable = path.join(scratch, "scratch-codex");
+    await fsp.mkdir(scratch, { recursive: true });
+    await fsp.writeFile(schema, "{}\n", { mode: 0o600 });
+    for (const executable of [uncovered, workspaceExecutable, scratchExecutable]) {
+      await fsp.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      await fsp.chmod(executable, 0o755);
+    }
+    await fsp.writeFile(envShebang, "#!/usr/bin/env -S node\nprocess.exit(0);\n", { mode: 0o755 });
+    await fsp.chmod(envShebang, 0o755);
+    await fsp.writeFile(blocked, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+    const baseProfile = {
+      kind: "workspace-write/v1",
+      scratch_path: scratch,
+      output_schema_path: schema,
+      runtime_read_paths: [bin],
+      path_prepend: [],
+    };
+    const invalidProfiles = [
+      {
+        profile: baseProfile,
+        message: "execution_profile.agent_executable must be absolute",
+      },
+      {
+        profile: { ...baseProfile, agent_executable: "codex" },
+        message: "execution_profile.agent_executable must be absolute",
+      },
+      {
+        profile: { ...baseProfile, agent_executable: path.join(root, "missing-codex") },
+        message: "execution_profile.agent_executable must be an executable file",
+      },
+      {
+        profile: { ...baseProfile, agent_executable: blocked },
+        message: "execution_profile.agent_executable must be an executable file",
+      },
+      {
+        profile: { ...baseProfile, agent_executable: envShebang },
+        message: "execution_profile.agent_executable has an unsupported env shebang",
+      },
+      {
+        profile: { ...baseProfile, agent_executable: uncovered },
+        message: "execution_profile.agent_executable must be covered by runtime_read_paths",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          agent_executable: workspaceExecutable,
+          runtime_read_paths: [workspace],
+        },
+        message: "execution_profile.agent_executable must be separate from cwd",
+      },
+      {
+        profile: {
+          ...baseProfile,
+          agent_executable: scratchExecutable,
+          runtime_read_paths: [scratch],
+        },
+        message: "execution_profile.agent_executable must be separate from scratch_path",
+      },
+    ];
+
+    for (const { profile, message } of invalidProfiles) {
+      const dispatched = await runInternalDispatch(
+        internalDispatchHelper,
+        {
+          input: {
+            agent_id: "codex",
+            cwd: workspace,
+            prompt: "must not run",
+            metadata: {},
+          },
+          execution_profile: profile,
+          wait: false,
+        },
+        env,
+      );
+      expect(dispatched.error?.message).toBe(message);
+    }
+    await expect(fsp.readdir(env.AGENT_HUB_RUN_DIR)).resolves.toEqual([]);
+  }, 15000);
 
   // 真实契约：用 charter 的 ns-resolve 当 glue（本机 ~/ns/.charter，或 AGENT_HUB_TEST_NS_RESOLVE 指定；
   // 不支持 NS_REBIND 的旧版或缺位时跳过）。假 HOME 下造两个域，调用方带着 A 域派发到 B 域仓：
@@ -492,7 +819,28 @@ async function runCliFailure(args, childEnv, timeoutMs = 15000) {
 }
 
 async function invokeCli(args, childEnv, timeoutMs) {
-  const child = spawn(process.execPath, [CLI_PATH, ...args], {
+  return invokeProcess(process.execPath, [CLI_PATH, ...args], childEnv, timeoutMs, "CLI");
+}
+
+async function runInternalDispatch(helper, payload, childEnv, timeoutMs = 15000) {
+  const { code, out, err } = await invokeProcess(
+    process.execPath,
+    [helper],
+    {
+      ...childEnv,
+      AGENT_HUB_TEST_INTERNAL_DISPATCH: JSON.stringify(payload),
+    },
+    timeoutMs,
+    "internal dispatch",
+  );
+  if (code !== 0) {
+    throw new Error(`Internal dispatch exited ${code}\nstdout:\n${out}\nstderr:\n${err}`);
+  }
+  return JSON.parse(out);
+}
+
+async function invokeProcess(command, args, childEnv, timeoutMs, label) {
+  const child = spawn(command, args, {
     cwd: path.dirname(path.dirname(CLI_PATH)),
     env: childEnv,
     stdio: ["ignore", "pipe", "pipe"],
@@ -504,7 +852,7 @@ async function invokeCli(args, childEnv, timeoutMs) {
   const code = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`CLI timed out: ${args.join(" ")}`));
+      reject(new Error(`${label} timed out: ${args.join(" ")}`));
     }, timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timer);
@@ -591,6 +939,44 @@ process.stdin.on("end", async () => {
   } else {
     write({ result, session_id: sessionId, is_error: false });
   }
+});
+`,
+    { mode: 0o755 },
+  );
+  await fsp.chmod(target, 0o755);
+}
+
+async function writeFakeCodex(target) {
+  await fsp.writeFile(
+    target,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  process.stdout.write("codex-cli 0.151.0\\n");
+  process.exit(0);
+}
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const result = input.trim() === "dump-path-handoff"
+    ? JSON.stringify({
+        path: process.env.PATH ?? "",
+        path_after_zsh: process.env.PATH_AFTER_ZSH ?? null,
+        tmp_after_zsh: process.env.TMP_AFTER_ZSH ?? null,
+        tmpdir: process.env.TMPDIR ?? null,
+        tmp: process.env.TMP ?? null,
+        temp: process.env.TEMP ?? null,
+        internal_path_prepend: process.env.AGENT_HUB_INTERNAL_PATH_PREPEND ?? null,
+        internal_keys: Object.keys(process.env).filter((key) => key.startsWith("AGENT_HUB_INTERNAL_")),
+      })
+    : "fake codex result: " + input;
+  const events = [
+    { type: "thread.started", thread_id: "019f38ae-357d-7db3-89fb-670f88316240" },
+    { type: "turn.started" },
+    { type: "item.completed", item: { id: "message-1", type: "agent_message", text: result } },
+    { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+  ];
+  process.stdout.write(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n");
 });
 `,
     { mode: 0o755 },

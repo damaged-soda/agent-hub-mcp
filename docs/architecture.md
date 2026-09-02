@@ -22,6 +22,11 @@ server 复用同一核心 API。两种入口都把请求映射成本机 agent CL
 `/bin/zsh -c 'exec …'` 把 agent CLI 起在 run 的 cwd——`~/.zshenv` 的 glue 先卸掉继承的
 域再按 cwd 绑定（charter 汇聚段），hub 对域一无所知。dispatch 进程随后退出；runner、run store 和跨进程锁保证后续 `query`、`wait`、`cancel`
 命令可以由全新的 CLI 进程继续。容器根（Claude/Codex/Kimi/OpenCode）为机器级单根。
+内部 execution profile 可额外声明已固定的 agent executable、`PATH` 前置目录与环境覆盖；
+runner 只在上述 cwd 重绑完成后应用 PATH/TMP 覆盖，并在 `exec` 绝对 agent executable 前删除
+携带值的内部环境键。若该 executable 使用简单的 `/usr/bin/env INTERPRETER` shebang，runner
+也会在 PATH 覆盖前固定 interpreter 的绝对路径。普通 dispatch 不声明这些字段，其环境语义不变；command metadata 只记录
+内部环境键名和 execution profile 已声明的 capability 目录，不记录组合后的环境值。
 
 Discussion 使用同样原则，但其五阶段 coordinator 需要持续推进。因此
 `agenthub discussion dispatch` 启动一个 detached Discussion worker；query/wait/cancel
@@ -218,7 +223,12 @@ suite schema v1 只接受 `source-location/v1` 并做
 人工提供的外置 self-contained executable verifier 在 agent 退出后才由前台 supervisor
 复制到 Eval 私有状态根下、从未授予 agent 的新目录并执行，原路径、正文与输出均不进入
 agent run；输出只 drain 不持久化，也不以大小影响评分。patch eval 另把前台探测到的 system Python
-runtime root 只读开放给 agent，使仓库测试不必扩大到用户目录；patch 正文不进入 eval result，
+runtime root 只读开放给 agent，并在 disposable root 中构造只读 command overlay，于 cwd
+重绑后前置到 child PATH；Codex tool child 只继承保留该 PATH 的 core 环境，不继承 provider
+凭据或 namespace 记账变量。supervisor 用同一个已固定 Codex executable、空临时 CODEX_HOME，
+在 model turn 前以相同 permission profile 做 sandbox
+preflight，使仓库测试既不必扩大到用户目录，也不会把 runtime 修复成本计入 agent 指标；
+patch 正文不进入 eval result，
 普通 run 仍按既有 TTL 保留 provider-native tool transcript。Agent Hub 持有一次 eval 的执行与
 判分事实，不做跨 commit 比较；完整契约见 [evals.md](evals.md)。
 
