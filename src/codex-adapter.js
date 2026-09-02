@@ -13,6 +13,7 @@ export const CODEX_EVAL_MIN_VERSION = Object.freeze([0, 151, 0]);
 export const CODEX_READONLY_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
 export const CODEX_PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v1";
 export const CODEX_EVAL_EXECUTION_PROFILE = CODEX_READONLY_EVAL_EXECUTION_PROFILE;
+export const CODEX_EVAL_PERMISSION_PROFILE_NAME = "agenthub-eval";
 const CODEX_EVAL_EXECUTION_PROFILES = new Set([
   CODEX_READONLY_EVAL_EXECUTION_PROFILE,
   CODEX_PATCH_EVAL_EXECUTION_PROFILE,
@@ -139,8 +140,15 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
   if (evalProfile && resumed) {
     throw new Error("Eval execution profile cannot resume a Codex session");
   }
+  const evalPathPrepend = evalProfile ? normalizedEvalPathPrepend(evalProfile.path_prepend) : null;
+  const evalAgentExecutable = evalProfile
+    ? normalizedEvalAgentExecutable(evalProfile.agent_executable)
+    : null;
+  const evalAgentInterpreter = evalProfile
+    ? normalizedEvalAgentInterpreter(evalProfile.agent_interpreter)
+    : null;
 
-  const argv = ["codex", "exec"];
+  const argv = [evalAgentExecutable ?? "codex", "exec"];
   if (resumed) {
     argv.push("resume", effectiveCliSessionRef.native_session_id);
   }
@@ -242,6 +250,17 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     args: argv.slice(1),
     argv,
     output_format: "jsonl",
+    ...(evalAgentInterpreter ? { path_interpreter: evalAgentInterpreter } : {}),
+    ...(evalPathPrepend ? { path_prepend: evalPathPrepend } : {}),
+    ...(evalProfile
+      ? {
+          post_birth_env: {
+            TMPDIR: path.resolve(evalProfile.scratch_path),
+            TMP: path.resolve(evalProfile.scratch_path),
+            TEMP: path.resolve(evalProfile.scratch_path),
+          },
+        }
+      : {}),
     env: evalProfile
       ? {
           TMPDIR: path.resolve(evalProfile.scratch_path),
@@ -261,6 +280,37 @@ function appendEvalProfileArgs(argv, profile) {
   if (!isInside(outputSchemaPath, scratchPath)) {
     throw new Error("execution_profile.output_schema_path must be inside scratch_path");
   }
+  argv.push(
+    "--ephemeral",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--strict-config",
+    "--disable",
+    "memories",
+    "--disable",
+    "external_agent_memory_import",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "multi_agent_v2",
+    "--output-schema",
+    outputSchemaPath,
+    "-c",
+    `default_permissions=${JSON.stringify(CODEX_EVAL_PERMISSION_PROFILE_NAME)}`,
+    "-c",
+    'approval_policy="never"',
+    ...codexEvalPermissionArgs(profile),
+  );
+}
+
+// Shared by normal Eval execution and its no-model `codex sandbox` preflight.
+// The caller owns command-specific flags and selecting the named profile; this
+// returns only the environment/permission config that must remain identical.
+export function codexEvalPermissionArgs(profile) {
+  if (!CODEX_EVAL_EXECUTION_PROFILES.has(profile?.kind)) {
+    throw new Error(`Unsupported Codex execution profile: ${profile?.kind}`);
+  }
+  const scratchPath = absoluteProfilePath(profile.scratch_path, "execution_profile.scratch_path");
   if (!Array.isArray(profile.runtime_read_paths) || profile.runtime_read_paths.length === 0) {
     throw new Error("execution_profile.runtime_read_paths must be a non-empty array");
   }
@@ -282,28 +332,50 @@ function appendEvalProfileArgs(argv, profile) {
     `${JSON.stringify(scratchPath)} = "write" }`,
     "network = { enabled = false } }",
   ].join(", ");
-  argv.push(
-    "--ephemeral",
-    "--ignore-user-config",
-    "--ignore-rules",
-    "--strict-config",
-    "--disable",
-    "memories",
-    "--disable",
-    "external_agent_memory_import",
-    "--disable",
-    "multi_agent",
-    "--disable",
-    "multi_agent_v2",
-    "--output-schema",
-    outputSchemaPath,
+  return [
     "-c",
-    'default_permissions="agenthub-eval"',
+    'shell_environment_policy.inherit="core"',
     "-c",
-    'approval_policy="never"',
+    "allow_login_shell=false",
     "-c",
-    `permissions.agenthub-eval=${permissionProfile}`,
+    `permissions.${CODEX_EVAL_PERMISSION_PROFILE_NAME}=${permissionProfile}`,
+  ];
+}
+
+function normalizedEvalPathPrepend(value) {
+  if (!Array.isArray(value)) {
+    throw new Error("execution_profile.path_prepend must be an array");
+  }
+  return value.map((item, index) => {
+    const normalized = absoluteProfilePath(item, `execution_profile.path_prepend[${index}]`);
+    if (normalized !== item) {
+      throw new Error(`execution_profile.path_prepend[${index}] must be normalized`);
+    }
+    return normalized;
+  });
+}
+
+function normalizedEvalAgentExecutable(value) {
+  const normalized = absoluteProfilePath(
+    value,
+    "execution_profile.agent_executable",
   );
+  if (normalized !== value) {
+    throw new Error("execution_profile.agent_executable must be normalized");
+  }
+  return normalized;
+}
+
+function normalizedEvalAgentInterpreter(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = absoluteProfilePath(
+    value,
+    "execution_profile.agent_interpreter",
+  );
+  if (normalized !== value) {
+    throw new Error("execution_profile.agent_interpreter must be normalized");
+  }
+  return normalized;
 }
 
 function absoluteProfilePath(value, key) {

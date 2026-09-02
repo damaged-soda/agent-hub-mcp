@@ -130,6 +130,9 @@ The `workspace-readonly/v1` profile is fail-closed:
 - Each case starts a new non-resumed, ephemeral Codex session.
 - Codex user configuration and exec rules are ignored for the case.
 - Codex memories, external memory import, and subagents are disabled.
+- Shell commands inherit Codex's `core` environment subset, including the PATH finalized when the
+  Codex process is born but excluding provider credentials and namespace bookkeeping. Login-shell
+  requests are disabled so login-only startup files cannot replace that environment mid-case.
 - Codex permission profiles expose only `:minimal` runtime paths, the resolved Codex executable
   directories (including its standalone runtime root), and the current workspace as read-only data.
 - `.git` is denied inside the workspace, so linked worktree pointers and repository history are not
@@ -149,12 +152,30 @@ Patch suites use the companion `workspace-write/v1` profile. It keeps every rest
 changes the current workspace capability from read to write. The writable workspace is a new
 detached worktree at the evaluated commit, never the worktree passed through `--cwd`. `.git`
 remains denied, command network remains disabled, and temp files are redirected into the private
-per-case scratch directory. To let repository tests use the same system Python as the foreground
+per-case scratch directory after namespace rebinding, even when shell startup changes `TMPDIR`,
+`TMP`, or `TEMP`. To let repository tests use the same system Python as the foreground
 evaluator, Agent Hub detects `python3` before collecting standards and grants its executable,
 prefix, and enclosing macOS Command Line Tools root read-only; no Python user site, package cache,
-or home directory is added. Disposable worktree creation overrides `core.hooksPath` with a private
-empty directory, so repository checkout hooks cannot publish the temporary path or mutate external
-state. Agent Hub records the patch before verifier execution and removes the worktree afterward.
+or home directory is added. Detection uses Python's isolated/no-site mode, canonicalizes the system
+executable, and rejects candidates or reported roots that overlap the immutable subject worktree.
+For each case it also creates an agent-read-only runtime command directory outside both writable
+roots. The runner prepends that directory only after its cwd-based
+namespace rebind, so an ordinary `python3` command resolves to the detected interpreter without
+replacing the rest of the child `PATH`. Before dispatching a model turn, the supervisor executes the
+same command through `codex sandbox` with the final permission profile; failure records
+`runtime_preflight_failed` without starting an agent run. The evaluator first resolves and pins the
+Codex executable—and any simple `/usr/bin/env INTERPRETER` shebang target—through the same cwd-bound zsh
+birth used by the formal run; preflight uses those pinned executables
+and an empty temporary `CODEX_HOME`, so user config cannot make its policy differ from the formal
+`--ignore-user-config` run. When the cwd-bound shell exposes a real `CODEX_HOME`, a second fail-closed
+preflight also uses it so local and authentication-backed managed requirements can reject the case;
+this policy gate may be stricter than the formal run when user config adds restrictions. Private
+handoff variables are consumed before Codex starts and are not exposed to the agent; metadata retains
+the already-declared runtime capability directory, but never the composed child `PATH` value.
+Disposable worktree creation overrides `core.hooksPath` with a private empty directory, so repository
+checkout hooks cannot publish the temporary path or mutate external state. Agent Hub records the
+patch before verifier execution and removes the worktree afterward.
+
 Patch metric collection is best-effort telemetry: an oversized or otherwise unprojectable patch is
 reported as `patch.status = "unavailable"` but does not skip or override verifier grading. Worktree
 cleanup always attempts both Git deregistration and filesystem removal; a cleanup failure is

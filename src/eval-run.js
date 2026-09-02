@@ -9,12 +9,26 @@ import {
   waitAgentRun,
 } from "./runs.js";
 import { runCommand } from "./adapter-utils.js";
-import { getAdapter } from "./adapters.js";
+import {
+  BIRTH_SHELL,
+  buildBirthLaunch,
+  pathResolvedShebangName,
+} from "./birth-command.js";
 import {
   CODEX_AGENT_ID,
+  CODEX_EVAL_PERMISSION_PROFILE_NAME,
   CODEX_EVAL_MIN_VERSION,
+  codexEvalPermissionArgs,
+  parseCodexModelCatalog,
+  parseCodexVersion,
   supportsCodexEvalVersion,
 } from "./codex-adapter.js";
+import { buildAgentEnv } from "./env.js";
+import {
+  PYTHON_RUNTIME_PROBE_ARGS,
+  createRuntimeCommandBin,
+  detectPythonRuntime,
+} from "./eval-runtime.js";
 import { projectLiveStream } from "./agent-session-core.js";
 import { readTextIfExists, runDirFor } from "./fs-store.js";
 import {
@@ -65,6 +79,8 @@ const WORKSPACE_PATCH_OUTPUT_SCHEMA = Object.freeze({
 });
 const MAX_PATCH_BYTES = 16 * 1024 * 1024;
 const MAX_CHANGED_FILES = 1000;
+const PATCH_RUNTIME_PREFLIGHT_TIMEOUT_MS = 15000;
+const CODEX_DISCOVERY_TIMEOUT_MS = 5000;
 
 export async function runEval(input, io, internal = {}) {
   const explicitModel = explicitEvalSetting(input.model, "model");
@@ -166,7 +182,7 @@ export async function runEval(input, io, internal = {}) {
         "workspace",
         "minimal-runtime",
         "agent-runtime",
-        ...(patchEval && agent.patch_runtime_detected ? ["detected-patch-runtime"] : []),
+        ...(patchEval && agent.patch_runtime_ready ? ["detected-patch-runtime"] : []),
         "private-per-case-scratch",
       ],
       data_write: patchEval
@@ -201,28 +217,52 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
       `Eval ${executionProfile} currently supports only ${CODEX_AGENT_ID}`,
     );
   }
-  const adapter = getAdapter(input.agent_id);
-  const availability = await adapter.getAvailability();
-  if (!availability.available) {
+  const birthContext = await resolveCodexBirthContext(cwd, env);
+  const versionResult = await runCodexInBirthContext(
+    birthContext.executable,
+    birthContext.interpreter,
+    ["--version"],
+    cwd,
+    env,
+  );
+  const version = (versionResult.stdout || versionResult.stderr).trim();
+  if (versionResult.error || versionResult.code !== 0 || !parseCodexVersion(version)) {
+    const reason = versionResult.error?.message ||
+      versionResult.stderr.trim() ||
+      versionResult.stdout.trim() ||
+      `exit ${versionResult.code}`;
     throw evalError(
       "agent_unavailable",
-      `${adapter.displayName} CLI is not available: ${availability.reason}`,
+      `Codex CLI is not available in the evaluated cwd: ${reason}`,
     );
   }
-  if (!supportsCodexEvalVersion(availability.version)) {
+  if (!supportsCodexEvalVersion(version)) {
     throw evalError(
       "unsupported_isolation",
       `Codex Eval requires codex-cli ${CODEX_EVAL_MIN_VERSION.join(".")} or newer`,
     );
   }
-  const described = await adapter.listAgent({ cwd, env });
-  if (described.model_discovery?.status !== "available" || described.models.length === 0) {
+  const modelResult = await runCodexInBirthContext(
+    birthContext.executable,
+    birthContext.interpreter,
+    ["debug", "models"],
+    cwd,
+    env,
+  );
+  let models;
+  try {
+    if (modelResult.error || modelResult.code !== 0) throw new Error(
+      modelResult.error?.message || modelResult.stderr.trim() || `exit ${modelResult.code}`,
+    );
+    models = parseCodexModelCatalog(modelResult.stdout);
+    if (models.length === 0) throw new Error("empty catalog");
+  } catch (error) {
     throw evalError(
       "eval_model_unavailable",
-      `Codex model discovery is unavailable: ${described.model_discovery?.reason ?? "empty catalog"}`,
+      `Codex model discovery is unavailable: ${error.message}`,
     );
   }
-  const model = described.models.find((item) => item.id === input.model);
+  const model = models.find((item) => item.id === input.model);
   if (!model) {
     throw evalError("eval_model_unavailable", `Codex model is not available: ${input.model}`);
   }
@@ -240,15 +280,22 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
   }
   const runtime = await codexRuntimeReadPaths(
     env,
+    birthContext.executable,
+    birthContext.interpreter,
     executionProfile === PATCH_EVAL_EXECUTION_PROFILE,
+    cwd,
   );
   return {
     agent_id: input.agent_id,
-    version: availability.version,
+    version,
     model: model.id,
     effort,
+    agent_executable: runtime.agent_executable,
+    agent_interpreter: runtime.agent_interpreter,
+    agent_code_home: birthContext.code_home,
     runtime_read_paths: runtime.paths,
-    patch_runtime_detected: runtime.patch_runtime_detected,
+    patch_runtime: runtime.patch_runtime,
+    patch_runtime_ready: false,
   };
 }
 
@@ -259,89 +306,178 @@ function explicitEvalSetting(value, name) {
   return value.trim();
 }
 
-async function codexRuntimeReadPaths(env, includePatchRuntime = false) {
-  const codeHome = path.resolve(env.CODEX_HOME ?? path.join(env.HOME ?? os.homedir(), ".codex"));
-  const candidates = [
-    ...String(env.PATH ?? "")
-      .split(path.delimiter)
-      .filter(Boolean)
-      .map((entry) => path.resolve(entry, "codex")),
-    path.join(env.HOME ?? os.homedir(), ".local", "bin", "codex"),
-    path.join(codeHome, "bin", "codex"),
-    path.join(codeHome, "packages", "standalone", "current", "bin", "codex"),
-  ];
-  const paths = new Set();
-  for (const candidate of candidates) {
-    try {
-      await fsp.access(candidate, fsConstants.X_OK);
-      const lexical = path.resolve(candidate);
-      const real = await fsp.realpath(candidate);
-      paths.add(path.dirname(lexical));
-      paths.add(path.dirname(real));
-      const standaloneRoot = ancestorNamed(real, "standalone");
-      if (standaloneRoot) paths.add(standaloneRoot);
-    } catch {
-      // Only existing executable candidates become runtime capabilities.
+async function resolveCodexBirthContext(cwd, env) {
+  const result = await runCommand(BIRTH_SHELL, [
+    "-c",
+    'resolved="${commands[codex]:-}"; [[ "$resolved" = /* && -x "$resolved" ]] || exit 127; ' +
+      'print -r -- "$resolved"; print -r -- "${CODEX_HOME:-$HOME/.codex}"',
+  ], {
+    cwd,
+    env: birthEnvironment(env),
+    timeoutMs: CODEX_DISCOVERY_TIMEOUT_MS,
+    maxOutputBytes: 64 * 1024,
+  });
+  if (result.error || result.code !== 0) {
+    const detail = result.error?.message || result.stderr.trim() || `exit ${result.code}`;
+    throw evalError("agent_unavailable", `Codex CLI could not be resolved at the evaluated cwd: ${detail}`);
+  }
+  const lines = result.stdout.replace(/\r\n/g, "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length !== 2 || !path.isAbsolute(lines[0])) {
+    throw evalError(
+      "agent_unavailable",
+      "Codex CLI resolution at the evaluated cwd returned invalid output",
+    );
+  }
+  const executable = await validateBirthExecutable(lines[0], cwd, "Codex CLI");
+  let interpreterName;
+  try {
+    interpreterName = pathResolvedShebangName(executable);
+  } catch {
+    throw evalError("agent_unavailable", "Resolved Codex CLI has an unsupported env shebang");
+  }
+  const interpreter = interpreterName
+    ? await resolveNamedBirthExecutable(interpreterName, cwd, env)
+    : null;
+  if (!path.isAbsolute(lines[1])) {
+    throw evalError(
+      "agent_unavailable",
+      "Codex home resolved at the evaluated cwd must be absolute",
+    );
+  }
+  const codeHome = path.resolve(lines[1]);
+  return { executable, interpreter, code_home: codeHome };
+}
+
+async function resolveNamedBirthExecutable(name, cwd, env) {
+  const result = await runCommand(BIRTH_SHELL, [
+    "-c",
+    'resolved="${commands[$0]:-}"; [[ "$resolved" = /* && -x "$resolved" ]] || exit 127; ' +
+      'print -r -- "$resolved"',
+    name,
+  ], {
+    cwd,
+    env: birthEnvironment(env),
+    timeoutMs: CODEX_DISCOVERY_TIMEOUT_MS,
+    maxOutputBytes: 64 * 1024,
+  });
+  if (result.error || result.code !== 0) {
+    throw evalError(
+      "agent_unavailable",
+      `Codex CLI interpreter ${name} could not be resolved at the evaluated cwd`,
+    );
+  }
+  const lines = result.stdout.trimEnd().split(/\r?\n/);
+  if (lines.length !== 1 || !path.isAbsolute(lines[0])) {
+    throw evalError("agent_unavailable", `Codex CLI interpreter ${name} resolved invalid output`);
+  }
+  const interpreter = await validateBirthExecutable(lines[0], cwd, `Codex CLI interpreter ${name}`);
+  try {
+    if (pathResolvedShebangName(interpreter)) {
+      throw new Error("nested env shebang");
     }
+  } catch {
+    throw evalError(
+      "agent_unavailable",
+      `Codex CLI interpreter ${name} must not use an env shebang`,
+    );
   }
-  if (paths.size === 0) {
-    throw evalError("unsupported_isolation", "Codex executable path could not be resolved");
+  return interpreter;
+}
+
+async function validateBirthExecutable(value, cwd, label) {
+  const lexical = path.resolve(value);
+  let real;
+  let realCwd;
+  try {
+    real = await fsp.realpath(lexical);
+    realCwd = await fsp.realpath(cwd);
+    await fsp.access(real, fsConstants.X_OK);
+    if (!(await fsp.stat(real)).isFile()) throw new Error("not a file");
+  } catch {
+    throw evalError("agent_unavailable", `${label} is not an executable file`);
   }
-  const patchRuntimePaths = includePatchRuntime ? await pythonRuntimeReadPaths(env) : [];
-  for (const item of patchRuntimePaths) paths.add(item);
+  if ([lexical, real].some((item) =>
+    pathIsInside(item, realCwd) || pathIsInside(realCwd, item),
+  )) {
+    throw evalError("unsupported_isolation", `${label} overlaps the evaluated workspace`);
+  }
+  return real;
+}
+
+function runCodexInBirthContext(executable, interpreter, args, cwd, env) {
+  const birth = buildBirthLaunch(
+    { command: executable, args },
+    birthEnvironment(env),
+    { path_interpreter: interpreter },
+  );
+  return runCommand(birth.launcher[0], birth.launcher.slice(1), {
+    cwd,
+    env: birth.env,
+    timeoutMs: CODEX_DISCOVERY_TIMEOUT_MS,
+    maxOutputBytes: 4 * 1024 * 1024,
+  });
+}
+
+function birthEnvironment(env) {
   return {
-    paths: Array.from(paths).sort(),
-    patch_runtime_detected: patchRuntimePaths.length > 0,
+    ...buildAgentEnv(env),
+    NS_REBIND: "1",
   };
 }
 
-async function pythonRuntimeReadPaths(env) {
-  const candidates = [
-    ...String(env.PATH ?? "")
-      .split(path.delimiter)
-      .filter(Boolean)
-      .map((entry) => path.resolve(entry, "python3")),
-    "/usr/bin/python3",
-  ];
-  for (const candidate of Array.from(new Set(candidates))) {
-    try {
-      await fsp.access(candidate, fsConstants.X_OK);
-    } catch {
-      continue;
-    }
-    const result = await runCommand(candidate, [
-      "-c",
-      "import json,sys; print(json.dumps([sys.executable,sys.prefix,sys.base_prefix]))",
-    ], {
-      env,
-      timeoutMs: 5000,
-      maxOutputBytes: 64 * 1024,
-    });
-    if (result.error || result.code !== 0) continue;
-    let reported;
-    try {
-      reported = JSON.parse(result.stdout);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(reported)) continue;
-    const paths = new Set();
-    const lexical = path.resolve(candidate);
-    const real = await fsp.realpath(candidate);
-    paths.add(path.dirname(lexical));
-    paths.add(path.dirname(real));
-    for (const item of reported) {
-      if (typeof item !== "string" || !path.isAbsolute(item)) continue;
-      const resolved = await fsp.realpath(item).catch(() => path.resolve(item));
-      const stat = await fsp.stat(resolved).catch(() => null);
-      if (stat?.isDirectory()) paths.add(resolved);
-      if (stat?.isFile()) paths.add(path.dirname(resolved));
-      const commandLineTools = ancestorNamed(resolved, "CommandLineTools");
-      if (commandLineTools) paths.add(commandLineTools);
-    }
-    return Array.from(paths);
+async function codexRuntimeReadPaths(
+  env,
+  selectedExecutable,
+  selectedInterpreter,
+  includePatchRuntime = false,
+  deniedRoot = null,
+) {
+  const paths = new Set();
+  let agentExecutable;
+  try {
+    await fsp.access(selectedExecutable, fsConstants.X_OK);
+    agentExecutable = await fsp.realpath(selectedExecutable);
+    if (!(await fsp.stat(agentExecutable)).isFile()) throw new Error("not a file");
+  } catch {
+    throw evalError("unsupported_isolation", "Codex executable path could not be resolved");
   }
-  return [];
+  if (
+    deniedRoot &&
+    (pathIsInside(agentExecutable, deniedRoot) || pathIsInside(deniedRoot, agentExecutable))
+  ) {
+    throw evalError("unsupported_isolation", "Codex executable overlaps the evaluated workspace");
+  }
+  paths.add(path.dirname(agentExecutable));
+  let agentInterpreter = null;
+  if (selectedInterpreter) {
+    try {
+      await fsp.access(selectedInterpreter, fsConstants.X_OK);
+      agentInterpreter = await fsp.realpath(selectedInterpreter);
+      if (!(await fsp.stat(agentInterpreter)).isFile()) throw new Error("not a file");
+    } catch {
+      throw evalError("unsupported_isolation", "Codex interpreter path could not be resolved");
+    }
+    if (
+      deniedRoot &&
+      (pathIsInside(agentInterpreter, deniedRoot) || pathIsInside(deniedRoot, agentInterpreter))
+    ) {
+      throw evalError("unsupported_isolation", "Codex interpreter overlaps the evaluated workspace");
+    }
+    paths.add(agentInterpreter);
+  }
+  const standaloneRoot = ancestorNamed(agentExecutable, "standalone");
+  if (standaloneRoot) paths.add(standaloneRoot);
+  const patchRuntime = includePatchRuntime
+    ? await detectPythonRuntime(env, { forbidden_roots: deniedRoot ? [deniedRoot] : [] })
+    : null;
+  for (const item of patchRuntime?.read_paths ?? []) paths.add(item);
+  return {
+    agent_executable: agentExecutable,
+    agent_interpreter: agentInterpreter,
+    paths: Array.from(paths).sort(),
+    patch_runtime: patchRuntime,
+  };
 }
 
 function ancestorNamed(value, name) {
@@ -413,7 +549,10 @@ async function runSourceLocationCase({ item, expected, cwd, agent, timeoutMs }) 
           kind: READONLY_EVAL_EXECUTION_PROFILE,
           scratch_path: scratchPath,
           output_schema_path: schemaPath,
+          agent_executable: agent.agent_executable,
+          agent_interpreter: agent.agent_interpreter,
           runtime_read_paths: agent.runtime_read_paths,
+          path_prepend: [],
         },
       },
     );
@@ -469,6 +608,7 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
   const scratchPath = path.join(disposable.root, "scratch");
   const schemaPath = path.join(scratchPath, "workspace-patch.schema.json");
   let accepted;
+  let runtimeBin = null;
   try {
     await fsp.mkdir(scratchPath, { mode: 0o700 });
     await fsp.writeFile(schemaPath, `${JSON.stringify(WORKSPACE_PATCH_OUTPUT_SCHEMA)}\n`, {
@@ -481,6 +621,55 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
         metrics: { telemetry_status: "not-run" },
       });
     }
+    if (agent.patch_runtime) {
+      try {
+        runtimeBin = await createRuntimeCommandBin(disposable.root, {
+          python3: agent.patch_runtime.executable,
+        });
+      } catch {
+        throw evalError(
+          "runtime_preflight_failed",
+          "Detected Python runtime could not be prepared for the isolated child",
+        );
+      }
+    }
+    const executionProfile = {
+      kind: PATCH_EVAL_EXECUTION_PROFILE,
+      scratch_path: scratchPath,
+      output_schema_path: schemaPath,
+      agent_executable: agent.agent_executable,
+      agent_interpreter: agent.agent_interpreter,
+      runtime_read_paths: Array.from(new Set([
+        ...agent.runtime_read_paths,
+        ...(runtimeBin ? [runtimeBin] : []),
+      ])).sort(),
+      path_prepend: runtimeBin ? [runtimeBin] : [],
+    };
+    if (agent.patch_runtime) {
+      try {
+        const preflightCodexHome = path.join(disposable.root, "preflight-codex-home");
+        await fsp.mkdir(preflightCodexHome, { mode: 0o700 });
+        await preflightPatchRuntime({
+          codexHome: preflightCodexHome,
+          cwd: disposable.workspace,
+          env,
+          executionProfile,
+          runtime: agent.patch_runtime,
+        });
+        if (agent.agent_code_home) {
+          await preflightPatchRuntime({
+            codexHome: agent.agent_code_home,
+            cwd: disposable.workspace,
+            env,
+            executionProfile,
+            runtime: agent.patch_runtime,
+          });
+        }
+      } catch {
+        throw runtimePreflightError();
+      }
+      agent.patch_runtime_ready = true;
+    }
     accepted = await dispatchToAgent(
       {
         agent_id: agent.agent_id,
@@ -492,12 +681,7 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
         },
       },
       {
-        execution_profile: {
-          kind: PATCH_EVAL_EXECUTION_PROFILE,
-          scratch_path: scratchPath,
-          output_schema_path: schemaPath,
-          runtime_read_paths: agent.runtime_read_paths,
-        },
+        execution_profile: executionProfile,
       },
     );
     const snapshot = await waitAgentRun({
@@ -545,6 +729,9 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       metrics,
     });
   } finally {
+    if (runtimeBin) {
+      await fsp.chmod(runtimeBin, 0o700).catch(() => undefined);
+    }
     try {
       await removeDisposableWorktree(subject.root, disposable);
     } catch (error) {
@@ -555,6 +742,92 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       })}\n`);
     }
   }
+}
+
+async function preflightPatchRuntime({ codexHome, cwd, env, executionProfile, runtime }) {
+  const command = {
+    command: executionProfile.agent_executable,
+    args: [
+      "sandbox",
+      "--include-managed-config",
+      "-P",
+      CODEX_EVAL_PERMISSION_PROFILE_NAME,
+      "-C",
+      cwd,
+      ...codexEvalPermissionArgs(executionProfile),
+      "--",
+      "/bin/sh",
+      "-c",
+      'exec python3 "$@"',
+      "agenthub-runtime-preflight",
+      ...PYTHON_RUNTIME_PROBE_ARGS,
+    ],
+  };
+  const birth = buildBirthLaunch(command, {
+    ...birthEnvironment(env),
+    TMPDIR: executionProfile.scratch_path,
+    TMP: executionProfile.scratch_path,
+    TEMP: executionProfile.scratch_path,
+  }, {
+    path_interpreter: executionProfile.agent_interpreter,
+    path_prepend: executionProfile.path_prepend,
+    post_birth_env: {
+      CODEX_HOME: codexHome,
+      TMPDIR: executionProfile.scratch_path,
+      TMP: executionProfile.scratch_path,
+      TEMP: executionProfile.scratch_path,
+    },
+  });
+  let result;
+  try {
+    result = await runCommand(birth.launcher[0], birth.launcher.slice(1), {
+      cwd,
+      env: birth.env,
+      timeoutMs: PATCH_RUNTIME_PREFLIGHT_TIMEOUT_MS,
+      maxOutputBytes: 64 * 1024,
+    });
+  } catch {
+    throw runtimePreflightError();
+  }
+  if (result.error || result.code !== 0) throw runtimePreflightError();
+  let reported;
+  try {
+    reported = JSON.parse(result.stdout.trim());
+  } catch {
+    throw runtimePreflightError();
+  }
+  if (
+    !Array.isArray(reported) ||
+    reported.length !== 3 ||
+    reported.some((item) => typeof item !== "string" || !path.isAbsolute(item))
+  ) {
+    throw runtimePreflightError();
+  }
+  const [actualExecutable, actualPrefix, actualBasePrefix] = await Promise.all(
+    reported.map((item) => fsp.realpath(item).catch(() => null)),
+  );
+  const [expectedExecutable, expectedPrefix, expectedBasePrefix] = await Promise.all([
+    runtime.executable,
+    runtime.identity.prefix,
+    runtime.identity.base_prefix,
+  ].map((item) => fsp.realpath(item).catch(() => null)));
+  if (
+    !actualExecutable ||
+    actualExecutable !== expectedExecutable ||
+    !actualPrefix ||
+    actualPrefix !== expectedPrefix ||
+    !actualBasePrefix ||
+    actualBasePrefix !== expectedBasePrefix
+  ) {
+    throw runtimePreflightError();
+  }
+}
+
+function runtimePreflightError() {
+  return evalError(
+    "runtime_preflight_failed",
+    "Detected Python runtime is unavailable in the isolated child profile",
+  );
 }
 
 async function patchEvalMetrics(runRef, snapshot, cwd) {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_EVAL_PERMISSION_PROFILE_NAME,
   buildCodexCommand,
+  codexEvalPermissionArgs,
   codexSessionRefFromEvent,
   createCodexSessionRef,
   interpretCodexExit,
@@ -143,7 +145,9 @@ describe("codex adapter", () => {
           kind: "workspace-readonly/v1",
           scratch_path: "/private/tmp/agenthub-eval-case-test",
           output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+          agent_executable: "/opt/homebrew/bin/codex",
           runtime_read_paths: ["/opt/homebrew/bin/codex"],
+          path_prepend: [],
         },
       },
       effectiveCliSessionRef: createCodexSessionRef(null),
@@ -158,6 +162,8 @@ describe("codex adapter", () => {
     expect(command.argv).not.toContain("--ask-for-approval");
     expect(command.argv).toContain('default_permissions="agenthub-eval"');
     expect(command.argv).toContain('approval_policy="never"');
+    expect(command.argv).toContain('shell_environment_policy.inherit="core"');
+    expect(command.argv).toContain("allow_login_shell=false");
     const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
     expect(profile).toContain('":minimal" = "read"');
     expect(profile).toContain('":workspace_roots" = { "." = "read"');
@@ -170,6 +176,9 @@ describe("codex adapter", () => {
       TMP: "/private/tmp/agenthub-eval-case-test",
       TEMP: "/private/tmp/agenthub-eval-case-test",
     });
+    expect(command.command).toBe("/opt/homebrew/bin/codex");
+    expect(command.post_birth_env).toEqual(command.env);
+    expect(command.path_prepend).toEqual([]);
   });
 
   it("builds a write-only-to-workspace patch eval profile", () => {
@@ -185,7 +194,9 @@ describe("codex adapter", () => {
           kind: "workspace-write/v1",
           scratch_path: "/private/tmp/agenthub-eval-patch-test",
           output_schema_path: "/private/tmp/agenthub-eval-patch-test/schema.json",
+          agent_executable: "/opt/homebrew/bin/codex",
           runtime_read_paths: ["/opt/homebrew/bin/codex"],
+          path_prepend: ["/private/tmp/agenthub-eval-runtime-bin"],
         },
       },
       effectiveCliSessionRef: createCodexSessionRef(null),
@@ -197,6 +208,55 @@ describe("codex adapter", () => {
     expect(profile).toContain('".git" = "deny"');
     expect(profile).toContain("network = { enabled = false }");
     expect(command.argv).toContain("--ephemeral");
+    expect(command.path_prepend).toEqual(["/private/tmp/agenthub-eval-runtime-bin"]);
+    expect(command.env).not.toHaveProperty("PATH");
+    expect(command.argv).not.toContain(
+      'shell_environment_policy.set.PATH="/private/tmp/agenthub-eval-runtime-bin"',
+    );
+  });
+
+  it("exposes reusable eval permission args without exec-only profile selection", () => {
+    const args = codexEvalPermissionArgs({
+      kind: "workspace-write/v1",
+      scratch_path: "/private/tmp/agenthub-eval-patch-test",
+      runtime_read_paths: ["/opt/homebrew/bin/codex", "/opt/homebrew/bin/python3"],
+      path_prepend: ["/private/tmp/agenthub-eval-runtime-bin"],
+    });
+
+    expect(CODEX_EVAL_PERMISSION_PROFILE_NAME).toBe("agenthub-eval");
+    expect(args).toContain('shell_environment_policy.inherit="core"');
+    expect(args).toContain("allow_login_shell=false");
+    expect(args).not.toContain("--ephemeral");
+    expect(args).not.toContain("--output-schema");
+    expect(args).not.toContain('default_permissions="agenthub-eval"');
+    expect(args).not.toContain('approval_policy="never"');
+    expect(args.join("\n")).not.toContain("agenthub-eval-runtime-bin");
+    const profile = args.find((item) => item.startsWith("permissions.agenthub-eval="));
+    expect(profile).toContain('":workspace_roots" = { "." = "write"');
+    expect(profile).toContain('"/opt/homebrew/bin/python3" = "read"');
+  });
+
+  it("passes a pinned eval shebang interpreter to the birth launcher", () => {
+    const command = buildCodexCommand({
+      request: {
+        metadata: {},
+        resolved_metadata: { codex: { add_dirs: [] } },
+        execution_profile: {
+          kind: "workspace-readonly/v1",
+          scratch_path: "/private/tmp/agenthub-eval-case-test",
+          output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+          agent_executable: "/opt/codex/bin/codex.js",
+          agent_interpreter: "/opt/node/bin/node",
+          runtime_read_paths: ["/opt/codex", "/opt/node/bin/node"],
+          path_prepend: [],
+        },
+      },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: {},
+    });
+
+    expect(command.command).toBe("/opt/codex/bin/codex.js");
+    expect(command.path_interpreter).toBe("/opt/node/bin/node");
   });
 
   it("rejects eval profile permission overrides and session resume", () => {
@@ -204,7 +264,9 @@ describe("codex adapter", () => {
       kind: "workspace-readonly/v1",
       scratch_path: "/private/tmp/agenthub-eval-case-test",
       output_schema_path: "/private/tmp/agenthub-eval-case-test/schema.json",
+      agent_executable: "/opt/homebrew/bin/codex",
       runtime_read_paths: ["/opt/homebrew/bin/codex"],
+      path_prepend: [],
     };
     expect(() => buildCodexCommand({
       request: {

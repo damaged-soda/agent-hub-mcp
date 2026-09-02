@@ -16,6 +16,7 @@ Key files:
 | `src/server.js` | Optional MCP stdio/HTTP compatibility server. |
 | `src/runs.js` | Tool behavior, run lifecycle, waiting, cancellation, snapshots. |
 | `src/runner.js` | Detached runner that launches the agent CLI and writes terminal results. |
+| `src/birth-command.js` | Shared cwd-bound zsh birth launcher and private post-birth environment handoff. |
 | `src/adapters.js` | Adapter registry keyed by `agent_id`. |
 | `src/claude-adapter.js` | Claude Code argv/session/result mapping. |
 | `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
@@ -33,6 +34,7 @@ Key files:
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/eval-run.js` | Interactive repository-eval supervisor, per-case execution, grading, and telemetry. |
+| `src/eval-runtime.js` | Eval runtime discovery, minimal read capabilities, and read-only command overlays. |
 | `src/eval-protocol.js` | Question-suite, source-location answer, Git snapshot, digest, and grader contracts. |
 | `src/eval-store.js` | Private TTL-bound eval-result storage; never stores plaintext standard answers. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |

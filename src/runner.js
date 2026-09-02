@@ -20,15 +20,10 @@ import {
   writeState,
 } from "./fs-store.js";
 import { getAdapter } from "./adapters.js";
+import { buildBirthLaunch } from "./birth-command.js";
 import { buildAgentEnv } from "./env.js";
 import { reviewContextEnv } from "./review-context.js";
 
-// agent 经 zsh -c 出生：zsh 对任何调用都读 ~/.zshenv（除非 -f / ZDOTDIR 改向），charter 的
-// glue 在那里按 cwd 绑定；exec 让 pid / 进程组 / 信号 / 退出码 / stdin 都是 agent 本体的。
-const BIRTH_SHELL = "/bin/zsh";
-function birthArgv(command) {
-  return [BIRTH_SHELL, "-c", 'exec "$0" "$@"', command.command, ...command.args];
-}
 import {
   acquireSessionLease,
   completeSessionRun,
@@ -64,23 +59,30 @@ async function main() {
     request,
     effectiveCliSessionRef: request.effective_cli_session_ref,
   });
+  const pathPrepend = normalizedCommandPathPrepend(command.path_prepend);
   if ((await readState(runDir).catch(() => null))?.status === "cancelled") {
     return;
   }
   // 环境按白名单透传（会话轴状态 NS / NS_UNDO / PATH 整体在内），并置 NS_REBIND=1：
   // agent 经 zsh 起在 run 的 cwd，~/.zshenv 的 glue 先卸掉继承的域再按 cwd 绑定——和
-  // 终端里敲命令同一条汇聚段，hub 不解析。command.env carries adapter-injected values.
-  const agentEnv = {
+  // 终端里敲命令同一条汇聚段，hub 不解析。command.env 是出生前覆盖；
+  // command.post_birth_env 则在汇聚完成后由下面的私有 handoff 恢复。
+  const baseAgentEnv = {
     ...buildAgentEnv(process.env),
     NS_REBIND: "1",
     ...(request.review_context ? reviewContextEnv(request.review_context) : {}),
     ...command.env,
   };
+  const { env: agentEnv, launcher } = buildBirthLaunch(command, baseAgentEnv, {
+    path_interpreter: command.path_interpreter,
+    path_prepend: pathPrepend,
+    post_birth_env: command.post_birth_env,
+  });
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,
     adapter_id: command.adapter_id,
     argv: command.argv,
-    launcher: birthArgv(command),   // 实际 spawn 的 argv（经 zsh 出生）；argv 是 adapter 视角
+    launcher,   // 实际 spawn 的 argv（经 zsh 出生）；argv 是 adapter 视角
     output_format: command.output_format,
     cwd: request.cwd,
     env_keys: currentEnvKeys(agentEnv),
@@ -88,10 +90,35 @@ async function main() {
     created_at: nowIso(),
   });
 
-  await runCommand(runDir, request, adapter, command, agentEnv);
+  await runCommand(runDir, request, adapter, command, agentEnv, launcher);
 }
 
-async function runCommand(runDir, request, adapter, command, agentEnv) {
+function normalizedCommandPathPrepend(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("command.path_prepend must be an array");
+  return value.map((item, index) => {
+    if (typeof item !== "string" || !path.isAbsolute(item)) {
+      throw new Error(`command.path_prepend[${index}] must be absolute`);
+    }
+    if (item.includes(path.delimiter)) {
+      throw new Error(`command.path_prepend[${index}] must not contain the PATH delimiter`);
+    }
+    const normalized = path.resolve(item);
+    let real;
+    try {
+      real = fs.realpathSync(normalized);
+      if (!fs.statSync(real).isDirectory()) throw new Error("not a directory");
+    } catch {
+      throw new Error(`command.path_prepend[${index}] must be an existing directory`);
+    }
+    if (real !== normalized) {
+      throw new Error(`command.path_prepend[${index}] changed after profile validation`);
+    }
+    return real;
+  });
+}
+
+async function runCommand(runDir, request, adapter, command, agentEnv, launcher) {
   const input = await fsp.readFile(path.join(runDir, "input.txt"));
   const stdoutLog = fs.createWriteStream(path.join(runDir, "stdout.log"), {
     flags: "a",
@@ -119,7 +146,6 @@ async function runCommand(runDir, request, adapter, command, agentEnv) {
     terminateChild(child, childPgid, killTimers);
   };
 
-  const launcher = birthArgv(command);
   const child = spawn(launcher[0], launcher.slice(1), {
     cwd: request.cwd,
     detached: true,
