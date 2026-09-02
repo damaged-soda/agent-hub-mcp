@@ -21,6 +21,10 @@ import {
 } from "./discussion-cli.js";
 import { dispatchReview, reviewStatus, setReviewRoute } from "./review-routing.js";
 import { runEval } from "./eval-run.js";
+import {
+  installPythonRuntimeCapsule,
+  pythonRuntimeCapsuleStatus,
+} from "./eval-runtime.js";
 
 const HELP = `agenthub — run local coding agents without a resident daemon
 
@@ -34,7 +38,9 @@ Usage:
   agenthub review status [--cwd DIR]
   agenthub review set --requester ID --reviewer ID --model ID [--cwd DIR]
   agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
-  agenthub eval run --agent ID --model ID --effort LEVEL [--cwd DIR] [--suite FILE] [--timeout-ms MS]
+  agenthub eval runtime install [--runtime ID]
+  agenthub eval runtime status [--runtime ID]
+  agenthub eval run --agent ID --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST] [--cwd DIR] [--suite FILE] [--timeout-ms MS]
   agenthub discussion dispatch (--json JSON | --json-file FILE)
   agenthub discussion list [--status STATUS[,STATUS]] [--since 7d] [--cwd DIR] [--limit N]
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
@@ -126,10 +132,11 @@ async function executeEval(args, io) {
   if (!command || command === "help" || command === "--help" || command === "-h") {
     return { usage: HELP };
   }
+  if (command === "runtime") return executeEvalRuntime(args);
   if (command !== "run") throw usageError(`Unknown eval command: ${command}`);
   const parsed = parseArgs(
     args,
-    new Set(["agent", "cwd", "suite", "model", "effort", "timeout-ms"]),
+    new Set(["agent", "cwd", "suite", "model", "effort", "runtime", "timeout-ms"]),
   );
   rejectPositionals(parsed);
   const input = {
@@ -139,12 +146,28 @@ async function executeEval(args, io) {
     cwd: path.resolve(parsed.options.cwd ?? process.cwd()),
   };
   if (parsed.options.suite !== undefined) input.suite_path = parsed.options.suite;
+  if (parsed.options.runtime !== undefined) input.runtime = parsed.options.runtime;
   setOptionalNumber(input, "timeout_ms", parsed.options["timeout-ms"], { positive: true });
   try {
     return await runEval(input, io);
   } finally {
     io.closeInput?.();
   }
+}
+
+async function executeEvalRuntime(args) {
+  const command = args.shift();
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    return { usage: HELP };
+  }
+  if (command !== "install" && command !== "status") {
+    throw usageError(`Unknown eval runtime command: ${command}`);
+  }
+  const parsed = parseArgs(args, new Set(["runtime"]));
+  rejectPositionals(parsed);
+  return command === "install"
+    ? installPythonRuntimeCapsule(parsed.options.runtime ?? "default", process.env)
+    : pythonRuntimeCapsuleStatus(parsed.options.runtime ?? "default", process.env);
 }
 
 async function executeReview(args, io) {

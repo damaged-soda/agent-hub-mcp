@@ -34,7 +34,8 @@ It also returns the selectable model catalog for each adapter. Use
 | `agent-session serve --host 127.0.0.1 --port 8765` | Run the no-store local session API for Cockpit. |
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
-| `agenthub eval run --agent codex --model ID --effort LEVEL --cwd "$PWD" --suite FILE` | Run one interactive suite against a clean repository commit. |
+| `agenthub eval runtime install/status [--runtime ID]` | Provision or inspect a pinned content-addressed Python capsule for patch Eval. |
+| `agenthub eval run --agent codex --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST] --cwd "$PWD" --suite FILE` | Run one interactive suite against a clean repository commit. |
 | `agenthub review status/set/dispatch …` | Inspect, change, and use the requester-specific PR review route. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
 | `agenthub discussion list --status failed --since 7d` | Find retained Discussions without resuming them. |
@@ -168,6 +169,7 @@ endpoint, and API remain below the same canonical prefix.
 | `AGENT_HUB_RUN_TTL_SECONDS` | `604800` | Retention for terminal runs. Must be a non-negative number. |
 | `AGENT_HUB_EVAL_DIR` | `${XDG_STATE_HOME:-~/.local/state}/agent-hub-mcp/evals` | Moves private eval-result JSON files. |
 | `AGENT_HUB_EVAL_TTL_SECONDS` | `AGENT_HUB_RUN_TTL_SECONDS` or `604800` | Retention for completed eval results. |
+| `AGENT_HUB_EVAL_RUNTIME_DIR` | `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/eval-runtimes` | Moves the content-addressed Eval runtime capsule store. |
 | `AGENT_HUB_DISCUSSION_DIR` | sibling `discussions` directory next to the run root | Moves Discussion state, events, materials, prompts, and decisions. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | `AGENT_HUB_RUN_TTL_SECONDS` or `604800` | Retention for terminal Discussions and their linked runs. |
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | unset | Comma-separated exact browser origins allowed to call the loopback daemon. Native MCP clients normally send no `Origin`; browser origins are rejected by default. |
@@ -270,20 +272,28 @@ Use the returned run ID with `agenthub wait RUN_ID`, or `agenthub query RUN_ID` 
 ## Eval Smoke Test
 
 Prepare a question-only suite anywhere readable by the foreground evaluator, verify the subject
-worktree is clean, then run:
+worktree is clean, provision the default capsule once, then run:
 
 ```sh
+agenthub eval runtime install --runtime default
+agenthub eval runtime status --runtime default
 AGENT_HUB_EVAL_DIR=/tmp/agent-hub-evals \
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
-  --model gpt-5.6-sol --effort medium
+  --model gpt-5.6-sol --effort medium \
+  --runtime default
 ```
 
 For a schema v1 suite, the CLI must ask for `path`, `symbol`, and `definition_line` before starting
 any case. Confirm the result reports `isolation.policy = "workspace-readonly/v1"`. For a schema v2
 suite, supply an executable verifier outside the evaluated repository and confirm the result reports
-`workspace-write/v1`, a patch digest, and verifier exit status while the original worktree remains
-clean. In both modes, the backing run's `command.json` must contain `--ephemeral` and a
+`schema_version = 3`, `workspace-write/v1`, the installed capsule's required `toolchain`
+content digest, `pinned-eval-toolchain` in `isolation.data_read`, a patch digest, and verifier exit
+status while the original worktree remains clean.
+Historical patch result schema v2 remains unchanged. A controlled baseline/candidate pair must report
+the same capsule digest. `eval run` must fail before prompting when the capsule is absent or invalid;
+it must never download, inspect host Python, or fall back to a host interpreter. In both modes, the
+backing run's `command.json` must contain `--ephemeral` and a
 `permissions.agenthub-eval` inline profile, and it must not contain `--sandbox`. A non-Codex
 provider or Codex older than 0.151.0 must fail with `unsupported_isolation`; do not work around
 that error with a broader permission mode. Omitting `--model` or `--effort` must fail before the
@@ -331,6 +341,9 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `review status` reports `model-discovery-unavailable` | A provider CLI could not produce its model catalog, often because its state/log directory is outside the caller's sandbox. | Inspect `error_detail`, then run `agenthub agents --cwd "$PWD"` in a context where the provider's state directory is writable. |
 | `nested_review_forbidden` | The current process is already an Agent Hub-selected reviewer. | Review directly in the current session; do not invoke `agenthub review dispatch` again. |
 | `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
+| `eval runtime status` reports `missing` / `runtime_capsule_missing` | The selected catalog runtime has not been installed in this capsule store. | Run `agenthub eval runtime install --runtime ID`, then inspect status again; do not point Eval at a host Python or widen its read profile. |
+| Eval rejects a capsule digest, platform, architecture, or contained path | The installed object or custom manifest is damaged, incompatible, or violates capsule containment. | Reinstall the pinned catalog ID or repair the separately provisioned custom capsule; `eval run` deliberately has no host fallback. |
+| A case reports `invalid` / `runtime_capsule_changed` | The foreground verifier or another same-user process changed the selected capsule after the case started. | Reinstall or replace the capsule, inspect the verifier, and rerun the entire comparison; later cases are intentionally left unrun. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`, or an OpenCode JSON `error` event: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |

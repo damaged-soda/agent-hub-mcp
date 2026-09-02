@@ -26,6 +26,8 @@ description: 使用 Agent Hub 为仓库结构重构设计、运行和解读受�
 重构结果反向调题。可以复制仓库样例并在评测者侧修改或类推，再把选定 suite 同时用于两侧。
 记录 baseline 与 candidate commit，以及必须保持一致的 agent、model、effort、timeout、评测集
 digest、CLI 版本和隔离策略。
+代码修改题还要预先选定同一个 Eval runtime capsule，并把两侧结果中的 `toolchain.content_digest`
+列为硬性控制变量。
 
 编写或修改用例时读取 [references/case-design.md](references/case-design.md)。定位题和代码修改题
 必须分属不同评测集，因为对应的 Agent Hub schema 不能混用。
@@ -36,14 +38,18 @@ digest、CLI 版本和隔离策略。
 配置运行同一评测集：
 
 ```sh
+agenthub eval runtime install --runtime default
+agenthub eval runtime status --runtime default
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
-  --model gpt-5.6-sol --effort medium
+  --model gpt-5.6-sol --effort medium \
+  --runtime default
 ```
 
 `--model` 和 `--effort` 必须显式传入；Agent Hub 不接受默认值。`--suite` 选择评测者本次固定的
-问题快照，`--timeout-ms` 只在实验预先指定时传入。两侧的 suite、model、effort 与 timeout 必须
-完全一致。分别为两个 commit 输入当时正确的标准答案：重构可能合理地移动权威路径、symbol 或
+问题快照，`--timeout-ms` 只在实验预先指定时传入。Patch Eval 的 runtime 必须在实验开始前显式
+provision；`eval run` 不会下载或回退宿主 Python。两侧的 suite、model、effort、timeout 与
+runtime content digest 必须完全一致。分别为两个 commit 输入当时正确的标准答案：重构可能合理地移动权威路径、symbol 或
 定义行，只要任务语义没有变化。代码修改题两侧必须使用语义相同的 verifier。
 
 评测者可以在一组成对运行开始前修改或类推样例问题。若两侧的 suite 或 question digest 不同，
@@ -53,8 +59,9 @@ agenthub eval run --agent codex --cwd "$PWD" \
 agent。当前环境若无法维持交互 PTY，就准备好成对 worktree 和命令，请人类在终端执行，不要从
 非交互工具 shell 强行调用 Eval。
 
-不要增加 prepare 阶段，不要恢复旧 agent 会话、启用 memory、暴露额外目录或放宽隔离。Agent
-Hub 的 eval profile 已用关闭 memory 与 subagent 的全新会话执行。worktree 不干净、评测集或
+不要增加答案或仓库 prepare 阶段；runtime provisioning 是独立的环境前置条件。不要恢复旧 agent
+会话、启用 memory、暴露额外目录或放宽隔离。Agent Hub 的 eval profile 已用关闭 memory 与
+subagent 的全新会话执行。worktree 不干净、评测集或
 配置不一致、隔离不受支持、标准答案或 verifier 语义不等价时，停止并点明两次运行不可比较。
 
 ## 解读结果，而不只看分数

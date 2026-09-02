@@ -222,12 +222,29 @@ suite schema v1 只接受 `source-location/v1` 并做
 该副本改为可写；worktree add 显式覆盖到私有空 `core.hooksPath`，不触发仓库 checkout hook；
 人工提供的外置 self-contained executable verifier 在 agent 退出后才由前台 supervisor
 复制到 Eval 私有状态根下、从未授予 agent 的新目录并执行，原路径、正文与输出均不进入
-agent run；输出只 drain 不持久化，也不以大小影响评分。patch eval 另把前台探测到的 system Python
-runtime root 只读开放给 agent，并在 disposable root 中构造只读 command overlay，于 cwd
-重绑后前置到 child PATH；Codex tool child 只继承保留该 PATH 的 core 环境，不继承 provider
-凭据或 namespace 记账变量。supervisor 用同一个已固定 Codex executable、空临时 CODEX_HOME，
-在 model turn 前以相同 permission profile 做 sandbox
-preflight，使仓库测试既不必扩大到用户目录，也不会把 runtime 修复成本计入 agent 指标；
+agent run；输出只 drain 不持久化，也不以大小影响评分。patch eval 在收集人工标准前解析一个
+显式 provision 的 `python-runtime-capsule/v1`：selector 可为内置 catalog ID 或评测者提供的
+绝对 manifest，默认 ID 也必须已经安装。内置 catalog 把平台绑定到
+[astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone) 的固定
+gzip URL 与 archive digest；只有独立的
+`eval runtime install` 会下载，`eval run` 不下载、不探测或复制宿主 Python，也不 fallback。
+runtime store 以绑定 manifest identity、command、source provenance 与 tree 的 capsule digest
+寻址，manifest 中的 root 和 command 只能用 capsule 内
+相对路径；catalog payload 在同父目录原子发布前递归去掉写位并以 sealed 状态完成 self-test，
+解析时复核 slot digest、pinned source、平台、架构、路径 containment 与 seal。
+
+supervisor 只把 capsule root 作为 runtime capability，并在 disposable root 中构造只读 command
+overlay，于 cwd 重绑后前置到 child PATH；Codex tool child 只继承保留该 PATH 的 core 环境，
+不继承 provider 凭据或 namespace 记账变量。supervisor 用同一个已固定 Codex executable、
+空临时 CODEX_HOME，在 model turn 前以相同 permission profile 运行隔离的 Python/native stdlib
+sandbox preflight；agent 退出后，foreground verifier 的 PATH 也前置同一 capsule command
+overlay，使其普通 `python3` 入口与 child 使用同一解释器；verifier 使用私有 HOME/shell startup
+环境但仍保留前台权限，执行后 capsule 会再次校验，变化会终止剩余 case。
+capsule identity 与 content digest 写入结果，受控 baseline/candidate 必须相同；
+suite 输入仍为 schema v2，但 capsule-backed patch result 升为 schema v3 并强制包含 toolchain，
+旧 result v2 契约保持不变；
+普通 dispatch 完全不经过 capsule 选择或 provisioning。这样仓库测试既不必扩大到用户目录，
+也不会把 runtime 发现和修复成本计入 agent 指标；
 patch 正文不进入 eval result，
 普通 run 仍按既有 TTL 保留 provider-native tool transcript。Agent Hub 持有一次 eval 的执行与
 判分事实，不做跨 commit 比较；完整契约见 [evals.md](evals.md)。

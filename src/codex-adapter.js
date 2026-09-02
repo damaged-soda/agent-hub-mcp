@@ -332,11 +332,30 @@ export function codexEvalPermissionArgs(profile) {
     `${JSON.stringify(scratchPath)} = "write" }`,
     "network = { enabled = false } }",
   ].join(", ");
+  const toolchainEnvironment = profile.kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE
+    ? [
+        "-c",
+        'shell_environment_policy.set.PYTHONNOUSERSITE="1"',
+        "-c",
+        'shell_environment_policy.set.PYTHONDONTWRITEBYTECODE="1"',
+        "-c",
+        'shell_environment_policy.set.PYTHONPATH=""',
+        "-c",
+        'shell_environment_policy.set.PYTHONHOME=""',
+        "-c",
+        'shell_environment_policy.set.PYTHONPLATLIBDIR=""',
+        "-c",
+        'shell_environment_policy.set.PYTHONEXECUTABLE=""',
+        "-c",
+        'shell_environment_policy.set.__PYVENV_LAUNCHER__=""',
+      ]
+    : [];
   return [
     "-c",
     'shell_environment_policy.inherit="core"',
     "-c",
     "allow_login_shell=false",
+    ...toolchainEnvironment,
     "-c",
     `permissions.${CODEX_EVAL_PERMISSION_PROFILE_NAME}=${permissionProfile}`,
   ];

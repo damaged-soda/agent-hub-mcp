@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenthub.local/schemas/agent-eval-runtime-capsule-v1.schema.json",
+  "title": "Agent Hub Python evaluation runtime capsule v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "runtime_id",
+    "python_version",
+    "platform",
+    "arch",
+    "root",
+    "commands",
+    "content_digest"
+  ],
+  "properties": {
+    "kind": { "const": "python-runtime-capsule/v1" },
+    "runtime_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+    },
+    "python_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "platform": {
+      "enum": ["darwin", "linux"]
+    },
+    "arch": {
+      "enum": ["arm64", "x64"]
+    },
+    "root": { "$ref": "#/$defs/relativePath" },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["python3"],
+      "properties": {
+        "python3": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "content_digest": { "$ref": "#/$defs/digest" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "archive_sha256"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?![^/?#]*@)"
+        },
+        "archive_sha256": { "$ref": "#/$defs/digest" }
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\u0000]+(?:/[^/\\u0000]+)*$"
+    }
+  }
+}

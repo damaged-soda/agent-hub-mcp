@@ -10,8 +10,8 @@ comparison cohorts.
 
 The versioned `eval-driven-refactor` Skill provides an opinionated workflow for designing controlled
 before/after cases and interpreting paired results without changing this single-run boundary. The
-target repository may provide sample questions, while runtime suites, comparisons, and conclusions
-remain evaluator-owned.
+target repository may provide sample questions, while evaluator-selected suites, comparisons, and
+conclusions remain evaluator-owned.
 
 ## Evaluator-owned questions
 
@@ -32,7 +32,7 @@ Repositories may version `.agenthub/evals.json` as the default sample suite:
 ```
 
 Suites contain questions only. Oracle fields, expected paths, immutable source comments, and grader
-scripts are rejected. The evaluated worktree must be clean and committed, but the runtime suite
+scripts are rejected. The evaluated worktree must be clean and committed, but the selected suite
 does not need to be. `--suite` may select an absolute file anywhere readable by the foreground
 evaluator; a relative path resolves from the evaluated worktree root. External suite paths are not
 added to the child agent's readable capabilities. The normalized suite is held in supervisor memory,
@@ -88,14 +88,57 @@ entrypoint.
 Schema v1 and v2 cases cannot be mixed in one suite. Use separate suite files and `--suite` when
 both kinds are needed.
 
-## One-command flow
+## Runtime provisioning
+
+Patch Eval never derives a Python runtime from the caller's `PATH`. It uses a self-contained,
+read-only runtime capsule selected by a built-in catalog ID or by an absolute evaluator-owned
+`manifest.json` path. Provision a catalog runtime before starting the evaluation:
+
+```sh
+agenthub eval runtime install --runtime default
+agenthub eval runtime status --runtime default
+```
+
+The built-in platform catalog pins an exact gzip release artifact from
+[astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone), including
+its archive digest. Installation is the only step
+that may fetch that artifact. It validates and extracts the capsule into a private,
+content-addressed runtime store. Objects live below `objects/sha256/<digest>/manifest.json`, while
+catalog IDs resolve through local `refs/<runtime_id>` entries; `status` only inspects local state.
+Before an object is published, Agent Hub removes write bits from its manifest and runtime tree,
+runs the native self-test against that sealed payload, and atomically renames it into its digest
+slot. A catalog reference is accepted only when the slot name, manifest digest, pinned source, and
+sealed tree agree.
+The store defaults to `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/eval-runtimes` and can be moved
+with `AGENT_HUB_EVAL_RUNTIME_DIR`.
+`eval run` never downloads or builds a runtime, probes a host Python installation, copies a host
+virtual environment, or falls back to `/usr/bin/python3`, Homebrew, user site-packages, or package
+caches. A missing, damaged, wrong-platform, or wrong-architecture capsule fails before standards
+are collected or a model turn starts.
+
+Each capsule has one `python-runtime-capsule/v1` manifest. Its relative `root` and
+`commands.python3` must stay inside the capsule. Its `content_digest` binds the normalized runtime
+identity, selected command, pinned source provenance, and validated extracted tree. The
+machine-readable contract is
+[`schemas/agent-eval-runtime-capsule-v1.schema.json`](../schemas/agent-eval-runtime-capsule-v1.schema.json).
+An absolute manifest selector is useful for an evaluator-managed pre-provisioned capsule; it does
+not authorize an implicit install or a host-runtime fallback.
+
+The selected runtime ID, Python version, platform, architecture, and content digest are part of the Eval facts.
+Controlled baseline/candidate comparisons must require the same runtime content digest in addition
+to matching suite, question, model, and effort inputs. The patch suite remains suite schema v2, but
+capsule-backed patch runs emit result schema v3 with a required `toolchain` object. Historical
+result schema v2 remains unchanged rather than being reinterpreted as capsule-backed.
+
+## Run flow
 
 Run from the repository root:
 
 ```sh
 agenthub eval run --agent codex --cwd "$PWD" \
   --model gpt-5.6-sol \
-  --effort medium
+  --effort medium \
+  --runtime default
 ```
 
 Model and effort are required. Eval validates both against the live Codex catalog and never chooses
@@ -109,14 +152,18 @@ agenthub eval run \
   --suite .agenthub/evals.json \
   --model gpt-5.6-sol \
   --effort medium \
+  --runtime /absolute/path/to/manifest.json \
   --timeout-ms 600000
 ```
 
-The command writes questions and standard prompts to stderr, reads all human standards from the
-interactive terminal, and prints one final JSON result to stdout. It collects every standard before
-starting the first agent case. Location suites ask for `path`, `symbol`, and `definition_line`;
-patch suites ask for an executable verifier path. There is no prepare command and no answer file.
-Missing model or effort fails before the first standard prompt.
+`--runtime` accepts a catalog ID, `default`, or an absolute capsule manifest. Omitting it selects
+`default`; the default still must already be installed. The command writes questions and standard
+prompts to stderr, reads all human standards from the interactive terminal, and prints one final
+JSON result to stdout. It collects every standard before starting the first agent case. Location
+suites ask for `path`, `symbol`, and `definition_line`; patch suites ask for an executable verifier
+path. Runtime installation is separate from collecting
+answers; there is no answer prepare command or answer file. Missing model or effort fails before the
+first standard prompt.
 
 The standards remain in the foreground Eval supervisor's memory. They are never included in
 the agent prompt, argv, child environment, ordinary run request, or eval result. Only a canonical
@@ -153,25 +200,31 @@ changes the current workspace capability from read to write. The writable worksp
 detached worktree at the evaluated commit, never the worktree passed through `--cwd`. `.git`
 remains denied, command network remains disabled, and temp files are redirected into the private
 per-case scratch directory after namespace rebinding, even when shell startup changes `TMPDIR`,
-`TMP`, or `TEMP`. To let repository tests use the same system Python as the foreground
-evaluator, Agent Hub detects `python3` before collecting standards and grants its executable,
-prefix, and enclosing macOS Command Line Tools root read-only; no Python user site, package cache,
-or home directory is added. Detection uses Python's isolated/no-site mode, canonicalizes the system
-executable, and rejects candidates or reported roots that overlap the immutable subject worktree.
-For each case it also creates an agent-read-only runtime command directory outside both writable
-roots. The runner prepends that directory only after its cwd-based
-namespace rebind, so an ordinary `python3` command resolves to the detected interpreter without
-replacing the rest of the child `PATH`. Before dispatching a model turn, the supervisor executes the
-same command through `codex sandbox` with the final permission profile; failure records
-`runtime_preflight_failed` without starting an agent run. The evaluator first resolves and pins the
-Codex executable—and any simple `/usr/bin/env INTERPRETER` shebang target—through the same cwd-bound zsh
-birth used by the formal run; preflight uses those pinned executables
-and an empty temporary `CODEX_HOME`, so user config cannot make its policy differ from the formal
-`--ignore-user-config` run. When the cwd-bound shell exposes a real `CODEX_HOME`, a second fail-closed
-preflight also uses it so local and authentication-backed managed requirements can reject the case;
-this policy gate may be stricter than the formal run when user config adds restrictions. Private
-handoff variables are consumed before Codex starts and are not exposed to the agent; metadata retains
-the already-declared runtime capability directory, but never the composed child `PATH` value.
+`TMP`, or `TEMP`. Agent Hub validates the selected capsule before collecting standards and grants
+only its canonical root read-only; it does not grant host Python, Homebrew, developer-tool,
+site-package, cache, or home-directory roots. For each case it creates an agent-read-only command
+overlay outside both writable roots. The runner prepends that directory only after its cwd-based
+namespace rebind, so an ordinary `python3` command resolves to the capsule interpreter without
+allowing shell startup to replace it. The child policy disables Python user-site discovery,
+`PYTHONPATH`, bytecode writes, and host variables that can replace Python's executable or prefix;
+the foreground verifier receives the same Python settings.
+Before dispatching a model turn, the supervisor runs an
+isolated Python native-standard-library smoke test through `codex sandbox` with the final permission
+profile. The smoke test exercises native standard-library modules rather than merely checking
+interpreter identity; failure records `runtime_preflight_failed` without starting an agent run.
+After a successful preflight, the result includes `pinned-eval-toolchain` in
+`isolation.data_read`.
+
+The evaluator resolves and pins the Codex executable—and any simple `/usr/bin/env INTERPRETER`
+shebang target—through the same cwd-bound zsh birth used by the formal run. Preflight uses those
+pinned executables and an empty temporary `CODEX_HOME`, so user config cannot make its policy differ
+from the formal `--ignore-user-config` run. When the cwd-bound shell exposes a real `CODEX_HOME`, a
+second fail-closed preflight also uses it so local and authentication-backed managed requirements
+can reject the case; this policy gate may be stricter than the formal run when user config adds
+restrictions. Private handoff variables are consumed before Codex starts and are not exposed to the
+agent; metadata retains the declared capsule capability and runtime command directory, but never
+the composed child `PATH` value.
+
 Disposable worktree creation overrides `core.hooksPath` with a private empty directory, so repository
 checkout hooks cannot publish the temporary path or mutate external state. Agent Hub records the
 patch before verifier execution and removes the worktree afterward.
@@ -183,7 +236,13 @@ reported to the foreground stderr without replacing the completed case result.
 
 The agent sandbox does not extend to verifier execution. The verifier is evaluator-trusted and may
 execute code written by the agent with the foreground user's filesystem and network authority when
-it invokes repository tests. A background process deliberately left by the agent is another known
+it invokes repository tests. Its `PATH` starts with the same capsule command overlay, so an ordinary
+`python3` test entrypoint uses the recorded toolchain even though the verifier retains foreground
+authority. Verifier startup uses a private `HOME`/`ZDOTDIR` and does not inherit `BASH_ENV` or
+namespace rebinding state, preventing its shebang shell from replacing that PATH first. Agent Hub
+revalidates the capsule after verification; a mutation makes the case
+`invalid/runtime_capsule_changed` and leaves later cases unrun. A background process deliberately
+left by the agent is another known
 residual risk: Agent Hub does not kill a persisted process group from stored pid metadata because of
 pid-reuse/incorrect-target risk. The verifier copy stays outside the agent permission profile, but
 patch eval is not a hostile-code sandbox. Run it only on repositories and tasks for which executing
@@ -197,6 +256,8 @@ Every completed eval command stores one private `0600` JSON result under
 
 - suite, question, answer, workspace, and grader digests;
 - the exact commit, agent version, model, effort, and isolation policy;
+- for patch suites, the selected runtime ID, Python version, platform, architecture, and capsule
+  content digest;
 - per-case pass/fail/invalid/error status and the backing ordinary `agent_run_ref`;
 - elapsed time, usage, turn/tool counts, and high-confidence observed file-read counts;
 - for patch suites, observed write counts, bounded change statistics, patch digest, and verifier
@@ -204,25 +265,30 @@ Every completed eval command stores one private `0600` JSON result under
 
 The suite `relative_path` is recorded relative to the evaluated worktree root and may contain `..`
 for evaluator-owned external input. The result never stores suite question text. Controlled
-cross-commit comparisons should require matching suite and question digests; if the evaluator
-modifies or extrapolates questions between runs, the consumer should treat them as exploratory new
-cases rather than paired efficiency measurements.
+cross-commit comparisons should require matching suite, question, and runtime content digests; if
+the evaluator modifies or extrapolates questions between runs, the consumer should treat them as
+exploratory new cases rather than paired efficiency measurements.
 
 The eval result does not contain question text, standard answers/verifiers, parsed agent answers,
 patch bodies, or verifier output. The backing ordinary run keeps the ordinary provider-native
 prompt and tool transcript under the existing run TTL, so commands and code excerpts observed by
 the agent may still be present there; verifier identity, contents, and output never enter that run.
 
-The machine-readable contracts are
+The machine-readable result contracts are
 [`schemas/agent-eval-result-v1.schema.json`](../schemas/agent-eval-result-v1.schema.json) and
-[`schemas/agent-eval-result-v2.schema.json`](../schemas/agent-eval-result-v2.schema.json).
+[`schemas/agent-eval-result-v2.schema.json`](../schemas/agent-eval-result-v2.schema.json) for
+historical runs, plus
+[`schemas/agent-eval-result-v3.schema.json`](../schemas/agent-eval-result-v3.schema.json) for
+capsule-backed patch runs.
 
 Eval results default to the ordinary seven-day run TTL. Override storage or retention with:
 
 ```text
 AGENT_HUB_EVAL_DIR
 AGENT_HUB_EVAL_TTL_SECONDS
+AGENT_HUB_EVAL_RUNTIME_DIR
 ```
 
 Expired result files are removed on the next eval run. Comparison and long-term retention remain
-outside Agent Hub.
+outside Agent Hub. Runtime capsules are provisioned artifacts rather than result-TTL data and are
+not removed by Eval result cleanup.
