@@ -164,6 +164,9 @@ describe("codex adapter", () => {
     expect(command.argv).toContain('approval_policy="never"');
     expect(command.argv).toContain('shell_environment_policy.inherit="core"');
     expect(command.argv).toContain("allow_login_shell=false");
+    expect(command.argv.join("\n")).not.toContain("PYTHONNOUSERSITE");
+    expect(command.argv.join("\n")).not.toContain("PYTHONDONTWRITEBYTECODE");
+    expect(command.argv.join("\n")).not.toContain("PYTHONPATH");
     const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
     expect(profile).toContain('":minimal" = "read"');
     expect(profile).toContain('":workspace_roots" = { "." = "read"');
@@ -210,6 +213,13 @@ describe("codex adapter", () => {
     expect(command.argv).toContain("--ephemeral");
     expect(command.path_prepend).toEqual(["/private/tmp/agenthub-eval-runtime-bin"]);
     expect(command.env).not.toHaveProperty("PATH");
+    expect(command.argv).toContain('shell_environment_policy.set.PYTHONNOUSERSITE="1"');
+    expect(command.argv).toContain('shell_environment_policy.set.PYTHONDONTWRITEBYTECODE="1"');
+    expect(command.argv).toContain('shell_environment_policy.set.PYTHONPATH=""');
+    expect(command.argv).toContain('shell_environment_policy.set.PYTHONHOME=""');
+    expect(command.argv).toContain('shell_environment_policy.set.PYTHONPLATLIBDIR=""');
+    expect(command.argv).toContain('shell_environment_policy.set.PYTHONEXECUTABLE=""');
+    expect(command.argv).toContain('shell_environment_policy.set.__PYVENV_LAUNCHER__=""');
     expect(command.argv).not.toContain(
       'shell_environment_policy.set.PATH="/private/tmp/agenthub-eval-runtime-bin"',
     );
@@ -226,6 +236,13 @@ describe("codex adapter", () => {
     expect(CODEX_EVAL_PERMISSION_PROFILE_NAME).toBe("agenthub-eval");
     expect(args).toContain('shell_environment_policy.inherit="core"');
     expect(args).toContain("allow_login_shell=false");
+    expect(args).toContain('shell_environment_policy.set.PYTHONNOUSERSITE="1"');
+    expect(args).toContain('shell_environment_policy.set.PYTHONDONTWRITEBYTECODE="1"');
+    expect(args).toContain('shell_environment_policy.set.PYTHONPATH=""');
+    expect(args).toContain('shell_environment_policy.set.PYTHONHOME=""');
+    expect(args).toContain('shell_environment_policy.set.PYTHONPLATLIBDIR=""');
+    expect(args).toContain('shell_environment_policy.set.PYTHONEXECUTABLE=""');
+    expect(args).toContain('shell_environment_policy.set.__PYVENV_LAUNCHER__=""');
     expect(args).not.toContain("--ephemeral");
     expect(args).not.toContain("--output-schema");
     expect(args).not.toContain('default_permissions="agenthub-eval"');

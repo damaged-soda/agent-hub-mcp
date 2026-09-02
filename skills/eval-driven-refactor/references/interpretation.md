@@ -10,6 +10,7 @@
 - 预定的不可变 commit 与干净 worktree；
 - 一致的评测集和题目 digest；
 - 相同的 agent、model、effort、timeout、CLI 版本与隔离策略；
+- 代码修改题使用相同的 `toolchain.content_digest`，且结果都包含 `pinned-eval-toolchain`；
 - 语义等价的人工标准答案或 patch verifier；
 - 未恢复旧上下文、没有额外可读目录的全新会话。
 

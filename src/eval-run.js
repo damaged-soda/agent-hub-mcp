@@ -25,9 +25,10 @@ import {
 } from "./codex-adapter.js";
 import { buildAgentEnv } from "./env.js";
 import {
-  PYTHON_RUNTIME_PROBE_ARGS,
+  PYTHON_RUNTIME_SELFTEST_ARGS,
   createRuntimeCommandBin,
-  detectPythonRuntime,
+  resolvePythonRuntimeCapsule,
+  validatePythonRuntimeSelftest,
 } from "./eval-runtime.js";
 import { projectLiveStream } from "./agent-session-core.js";
 import { readTextIfExists, runDirFor } from "./fs-store.js";
@@ -145,6 +146,7 @@ export async function runEval(input, io, internal = {}) {
       };
       break;
     }
+    if (caseResults.at(-1)?.reason === "runtime_capsule_changed") break;
   }
 
   const completedAt = new Date();
@@ -154,7 +156,7 @@ export async function runEval(input, io, internal = {}) {
     ? PATCH_EVAL_EXECUTION_PROFILE
     : READONLY_EVAL_EXECUTION_PROFILE;
   const result = {
-    schema_version: patchEval ? 2 : 1,
+    schema_version: patchEval ? 3 : 1,
     kind: "agent-eval-run",
     eval_run_id: evalRunId,
     status: "completed",
@@ -175,6 +177,7 @@ export async function runEval(input, io, internal = {}) {
       model: agent.model,
       effort: agent.effort,
     },
+    ...(patchEval ? { toolchain: publicEvalToolchain(agent.eval_toolchain) } : {}),
     isolation: {
       policy: executionProfile,
       enforcement: "codex-permission-profile",
@@ -182,7 +185,7 @@ export async function runEval(input, io, internal = {}) {
         "workspace",
         "minimal-runtime",
         "agent-runtime",
-        ...(patchEval && agent.patch_runtime_ready ? ["detected-patch-runtime"] : []),
+        ...(patchEval && agent.eval_toolchain_ready ? ["pinned-eval-toolchain"] : []),
         "private-per-case-scratch",
       ],
       data_write: patchEval
@@ -278,11 +281,15 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
       `Effort ${effort} is not supported by model ${model.id}`,
     );
   }
+  const evalToolchain = executionProfile === PATCH_EVAL_EXECUTION_PROFILE
+    ? await resolvePythonRuntimeCapsule(input.runtime ?? "default", env, {
+        forbidden_roots: [cwd],
+      })
+    : null;
   const runtime = await codexRuntimeReadPaths(
-    env,
     birthContext.executable,
     birthContext.interpreter,
-    executionProfile === PATCH_EVAL_EXECUTION_PROFILE,
+    evalToolchain,
     cwd,
   );
   return {
@@ -294,8 +301,8 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
     agent_interpreter: runtime.agent_interpreter,
     agent_code_home: birthContext.code_home,
     runtime_read_paths: runtime.paths,
-    patch_runtime: runtime.patch_runtime,
-    patch_runtime_ready: false,
+    eval_toolchain: runtime.eval_toolchain,
+    eval_toolchain_ready: false,
   };
 }
 
@@ -427,10 +434,9 @@ function birthEnvironment(env) {
 }
 
 async function codexRuntimeReadPaths(
-  env,
   selectedExecutable,
   selectedInterpreter,
-  includePatchRuntime = false,
+  evalToolchain = null,
   deniedRoot = null,
 ) {
   const paths = new Set();
@@ -468,15 +474,15 @@ async function codexRuntimeReadPaths(
   }
   const standaloneRoot = ancestorNamed(agentExecutable, "standalone");
   if (standaloneRoot) paths.add(standaloneRoot);
-  const patchRuntime = includePatchRuntime
-    ? await detectPythonRuntime(env, { forbidden_roots: deniedRoot ? [deniedRoot] : [] })
-    : null;
-  for (const item of patchRuntime?.read_paths ?? []) paths.add(item);
+  if (evalToolchain) {
+    paths.add(evalToolchain.root);
+    for (const item of evalToolchain.read_paths) paths.add(item);
+  }
   return {
     agent_executable: agentExecutable,
     agent_interpreter: agentInterpreter,
     paths: Array.from(paths).sort(),
-    patch_runtime: patchRuntime,
+    eval_toolchain: evalToolchain,
   };
 }
 
@@ -621,17 +627,16 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
         metrics: { telemetry_status: "not-run" },
       });
     }
-    if (agent.patch_runtime) {
-      try {
-        runtimeBin = await createRuntimeCommandBin(disposable.root, {
-          python3: agent.patch_runtime.executable,
-        });
-      } catch {
-        throw evalError(
-          "runtime_preflight_failed",
-          "Detected Python runtime could not be prepared for the isolated child",
-        );
-      }
+    await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+    try {
+      runtimeBin = await createRuntimeCommandBin(disposable.root, {
+        python3: agent.eval_toolchain.commands.python3,
+      });
+    } catch {
+      throw evalError(
+        "runtime_preflight_failed",
+        "Pinned Python runtime capsule could not be prepared for the isolated child",
+      );
     }
     const executionProfile = {
       kind: PATCH_EVAL_EXECUTION_PROFILE,
@@ -641,35 +646,33 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       agent_interpreter: agent.agent_interpreter,
       runtime_read_paths: Array.from(new Set([
         ...agent.runtime_read_paths,
-        ...(runtimeBin ? [runtimeBin] : []),
+        runtimeBin,
       ])).sort(),
-      path_prepend: runtimeBin ? [runtimeBin] : [],
+      path_prepend: [runtimeBin],
     };
-    if (agent.patch_runtime) {
-      try {
-        const preflightCodexHome = path.join(disposable.root, "preflight-codex-home");
-        await fsp.mkdir(preflightCodexHome, { mode: 0o700 });
-        await preflightPatchRuntime({
-          codexHome: preflightCodexHome,
+    try {
+      const preflightCodexHome = path.join(disposable.root, "preflight-codex-home");
+      await fsp.mkdir(preflightCodexHome, { mode: 0o700 });
+      await preflightPatchToolchain({
+        codexHome: preflightCodexHome,
+        cwd: disposable.workspace,
+        env,
+        executionProfile,
+        runtime: agent.eval_toolchain,
+      });
+      if (agent.agent_code_home) {
+        await preflightPatchToolchain({
+          codexHome: agent.agent_code_home,
           cwd: disposable.workspace,
           env,
           executionProfile,
-          runtime: agent.patch_runtime,
+          runtime: agent.eval_toolchain,
         });
-        if (agent.agent_code_home) {
-          await preflightPatchRuntime({
-            codexHome: agent.agent_code_home,
-            cwd: disposable.workspace,
-            env,
-            executionProfile,
-            runtime: agent.patch_runtime,
-          });
-        }
-      } catch {
-        throw runtimePreflightError();
       }
-      agent.patch_runtime_ready = true;
+    } catch {
+      throw runtimePreflightError();
     }
+    agent.eval_toolchain_ready = true;
     accepted = await dispatchToAgent(
       {
         agent_id: agent.agent_id,
@@ -721,8 +724,18 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       disposable.workspace,
       env,
       timeoutMs,
+      runtimeBin,
     );
     metrics.verifier = verification.metrics;
+    try {
+      await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+    } catch {
+      return baseCaseResult(item, expected, accepted.run_ref, {
+        status: "invalid",
+        reason: "runtime_capsule_changed",
+        metrics,
+      });
+    }
     return baseCaseResult(item, expected, accepted.run_ref, {
       status: verification.status,
       reason: verification.reason,
@@ -744,7 +757,7 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
   }
 }
 
-async function preflightPatchRuntime({ codexHome, cwd, env, executionProfile, runtime }) {
+async function preflightPatchToolchain({ codexHome, cwd, env, executionProfile, runtime }) {
   const command = {
     command: executionProfile.agent_executable,
     args: [
@@ -760,7 +773,7 @@ async function preflightPatchRuntime({ codexHome, cwd, env, executionProfile, ru
       "-c",
       'exec python3 "$@"',
       "agenthub-runtime-preflight",
-      ...PYTHON_RUNTIME_PROBE_ARGS,
+      ...PYTHON_RUNTIME_SELFTEST_ARGS,
     ],
   };
   const birth = buildBirthLaunch(command, {
@@ -790,35 +803,9 @@ async function preflightPatchRuntime({ codexHome, cwd, env, executionProfile, ru
     throw runtimePreflightError();
   }
   if (result.error || result.code !== 0) throw runtimePreflightError();
-  let reported;
   try {
-    reported = JSON.parse(result.stdout.trim());
+    await validatePythonRuntimeSelftest(result.stdout, runtime);
   } catch {
-    throw runtimePreflightError();
-  }
-  if (
-    !Array.isArray(reported) ||
-    reported.length !== 3 ||
-    reported.some((item) => typeof item !== "string" || !path.isAbsolute(item))
-  ) {
-    throw runtimePreflightError();
-  }
-  const [actualExecutable, actualPrefix, actualBasePrefix] = await Promise.all(
-    reported.map((item) => fsp.realpath(item).catch(() => null)),
-  );
-  const [expectedExecutable, expectedPrefix, expectedBasePrefix] = await Promise.all([
-    runtime.executable,
-    runtime.identity.prefix,
-    runtime.identity.base_prefix,
-  ].map((item) => fsp.realpath(item).catch(() => null)));
-  if (
-    !actualExecutable ||
-    actualExecutable !== expectedExecutable ||
-    !actualPrefix ||
-    actualPrefix !== expectedPrefix ||
-    !actualBasePrefix ||
-    actualBasePrefix !== expectedBasePrefix
-  ) {
     throw runtimePreflightError();
   }
 }
@@ -826,8 +813,36 @@ async function preflightPatchRuntime({ codexHome, cwd, env, executionProfile, ru
 function runtimePreflightError() {
   return evalError(
     "runtime_preflight_failed",
-    "Detected Python runtime is unavailable in the isolated child profile",
+    "Pinned Python runtime capsule is unavailable in the isolated child profile",
   );
+}
+
+async function assertPinnedEvalToolchain(expected, env, forbiddenRoot) {
+  let current;
+  try {
+    current = await resolvePythonRuntimeCapsule(expected.manifest_path, env, {
+      forbidden_roots: [forbiddenRoot],
+      require_sealed: expected.sealed === true,
+    });
+  } catch {
+    throw runtimePreflightError();
+  }
+  const projection = (runtime) => ({
+    kind: runtime.kind,
+    runtime_id: runtime.runtime_id,
+    python_version: runtime.python_version,
+    platform: runtime.platform,
+    arch: runtime.arch,
+    content_digest: runtime.content_digest,
+    manifest_path: runtime.manifest_path,
+    root: runtime.root,
+    python3: runtime.commands.python3,
+    source: runtime.source ?? null,
+    sealed: runtime.sealed === true,
+  });
+  if (JSON.stringify(projection(current)) !== JSON.stringify(projection(expected))) {
+    throw runtimePreflightError();
+  }
 }
 
 async function patchEvalMetrics(runRef, snapshot, cwd) {
@@ -846,7 +861,7 @@ async function patchEvalMetrics(runRef, snapshot, cwd) {
   }
 }
 
-async function runVerifier(expected, cwd, env, timeoutMs) {
+async function runVerifier(expected, cwd, env, timeoutMs, runtimeBin) {
   const verificationParent = path.join(getEvalRoot(env), ".verifier-scratch");
   await fsp.mkdir(verificationParent, { recursive: true, mode: 0o700 });
   await fsp.chmod(verificationParent, 0o700).catch(() => undefined);
@@ -872,17 +887,30 @@ async function runVerifier(expected, cwd, env, timeoutMs) {
       };
     }
     await fsp.mkdir(verifierTmp, { mode: 0o700 });
+    const verifierHome = path.join(verificationRoot, "home");
+    await fsp.mkdir(verifierHome, { mode: 0o700 });
     await fsp.writeFile(verifierPath, body, { mode: 0o700 });
     await fsp.chmod(verifierPath, 0o700);
     const startedAt = Date.now();
+    const verifierEnv = verifierEnvironment(env);
+    verifierEnv.PATH = [runtimeBin, verifierEnv.PATH || "/usr/bin:/bin"].join(path.delimiter);
     const result = await runCommand(verifierPath, [], {
       cwd,
       env: {
-        ...verifierEnvironment(env),
+        ...verifierEnv,
         AGENT_HUB_EVAL_WORKSPACE: cwd,
+        HOME: verifierHome,
+        PYTHONDONTWRITEBYTECODE: "1",
+        PYTHONEXECUTABLE: "",
+        PYTHONHOME: "",
+        PYTHONNOUSERSITE: "1",
+        PYTHONPATH: "",
+        PYTHONPLATLIBDIR: "",
         TMPDIR: verifierTmp,
         TMP: verifierTmp,
         TEMP: verifierTmp,
+        ZDOTDIR: verifierHome,
+        __PYVENV_LAUNCHER__: "",
       },
       timeoutMs,
       captureOutput: false,
@@ -903,17 +931,23 @@ async function runVerifier(expected, cwd, env, timeoutMs) {
   }
 }
 
+function publicEvalToolchain(runtime) {
+  return {
+    kind: runtime.kind,
+    runtime_id: runtime.runtime_id,
+    python_version: runtime.python_version,
+    content_digest: runtime.content_digest,
+    platform: runtime.platform,
+    arch: runtime.arch,
+  };
+}
+
 function verifierEnvironment(source) {
   const allowed = [
-    "BASH_ENV",
-    "GH_CONFIG_DIR",
-    "HOME",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
     "LOGNAME",
-    "NS",
-    "NS_UNDO",
     "PATH",
     "SHELL",
     "USER",

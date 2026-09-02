@@ -6,6 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  PYTHON_RUNTIME_SELFTEST_ARGS,
+  writePythonRuntimeCapsuleManifest,
+} from "../src/eval-runtime.js";
 
 const execFileAsync = promisify(execFile);
 const CLI_PATH = path.resolve("src/cli.js");
@@ -16,6 +20,10 @@ describe("agenthub eval CLI", () => {
   let runDir;
   let evalDir;
   let fakeBin;
+  let runtimeCapsuleDir;
+  let runtimeRoot;
+  let runtimePython;
+  let runtimeManifest;
   let env;
 
   beforeEach(async () => {
@@ -54,6 +62,21 @@ describe("agenthub eval CLI", () => {
     await git(workspace, "add", ".");
     await git(workspace, "commit", "-m", "fixture");
     await writeFakeCodex(path.join(fakeBin, "codex"));
+    runtimeCapsuleDir = path.join(root, "runtime-capsule");
+    runtimeRoot = path.join(runtimeCapsuleDir, "python");
+    runtimePython = path.join(runtimeRoot, "bin", "python3");
+    await writeFakePython(runtimePython, {
+      prefix: runtimeRoot,
+      pythonVersion: "3.12.13",
+    });
+    runtimeManifest = await writePythonRuntimeCapsuleManifest(runtimeCapsuleDir, {
+      runtime_id: "python-test-3.12",
+      python_version: "3.12.13",
+      platform: process.platform,
+      arch: process.arch,
+      root: "python",
+      commands: { python3: "bin/python3" },
+    });
     const helper = path.join(root, "eval-helper.mjs");
     await fsp.writeFile(
       helper,
@@ -82,12 +105,54 @@ process.exitCode = await main(process.argv.slice(2), io);
       AGENT_HUB_FORWARD_ENV: "ZDOTDIR",
       AGENT_HUB_RUN_DIR: runDir,
       AGENT_HUB_EVAL_DIR: evalDir,
+      AGENT_HUB_EVAL_RUNTIME_DIR: path.join(root, "runtime-store"),
       AGENT_HUB_TEST_HELPER: helper,
     };
   });
 
   afterEach(async () => {
     await fsp.rm(root, { recursive: true, force: true });
+  });
+
+  it("reports capsule status through the CLI without exposing local paths", async () => {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        env.AGENT_HUB_TEST_HELPER,
+        "eval",
+        "runtime",
+        "status",
+        "--runtime",
+        runtimeManifest,
+      ],
+      {
+        cwd: path.dirname(CLI_PATH),
+        env: { ...env, AGENT_HUB_TEST_ANSWERS: "[]" },
+        timeout: 15000,
+      },
+    );
+    const status = JSON.parse(stdout);
+    expect(status).toMatchObject({
+      status: "ready",
+      toolchain: {
+        kind: "python-runtime-capsule/v1",
+        runtime_id: "python-test-3.12",
+        python_version: "3.12.13",
+        platform: process.platform,
+        arch: process.arch,
+      },
+    });
+    expect(JSON.stringify(status)).not.toContain(runtimeCapsuleDir);
+
+    const installPath = await invokeRawFailure([
+      "eval", "runtime", "install", "--runtime", runtimeManifest,
+    ]);
+    expect(installPath).toEqual({
+      error: {
+        code: "runtime_capsule_unsupported",
+        message: "Python runtime capsule install accepts only default or a pinned runtime ID",
+      },
+    });
   });
 
   it("collects answers once, runs an isolated case, and persists only digests", async () => {
@@ -208,7 +273,7 @@ process.exitCode = await main(process.argv.slice(2), io);
     const result = await invokeEval([verifier]);
 
     expect(result).toMatchObject({
-      schema_version: 2,
+      schema_version: 3,
       grader_version: "workspace-patch/v1",
       isolation: {
         policy: "workspace-write/v1",
@@ -251,21 +316,18 @@ process.exitCode = await main(process.argv.slice(2), io);
       .toEqual([]);
   }, 20000);
 
-  it("delivers the detected Python command after child namespace rebinding", async () => {
-    const selectedBin = path.join(root, "selected-python", "bin");
-    const selectedPrefix = path.join(root, "selected-python");
-    const selectedExecutable = path.join(selectedPrefix, "libexec", "python3.12");
-    const selectedCommand = path.join(selectedBin, "python3");
+  it("delivers one pinned Python capsule to the child and verifier", async () => {
     const brokenBin = path.join(root, "broken-system-bin");
     const reboundCodexBin = path.join(root, "rebound-codex-bin");
     const callerNodeBin = path.join(root, "caller-node-bin");
     const reboundNodeBin = path.join(root, "rebound-node-bin");
     const reboundCodeHome = path.join(root, "rebound-codex-home");
     const zdot = path.join(root, "zdot");
+    const verifierBashEnv = path.join(root, "verifier-bash-env");
+    const verifierStartupMarker = path.join(root, "verifier-startup-sourced");
     const projectBin = path.join(workspace, "bin");
     const ignoredCodexBin = path.join(workspace, "node_modules", ".bin");
     await Promise.all([
-      fsp.mkdir(selectedBin, { recursive: true }),
       fsp.mkdir(brokenBin, { recursive: true }),
       fsp.mkdir(reboundCodexBin, { recursive: true }),
       fsp.mkdir(callerNodeBin, { recursive: true }),
@@ -275,12 +337,6 @@ process.exitCode = await main(process.argv.slice(2), io);
       fsp.mkdir(projectBin),
       fsp.mkdir(ignoredCodexBin, { recursive: true }),
     ]);
-    await writeFakePython(selectedExecutable, {
-      executable: selectedCommand,
-      prefix: selectedPrefix,
-      basePrefix: selectedPrefix,
-    });
-    await fsp.symlink(selectedExecutable, selectedCommand);
     await fsp.writeFile(
       path.join(brokenBin, "python3"),
       "#!/bin/sh\necho 'xcrun: invalid active developer path' >&2\nexit 72\n",
@@ -298,6 +354,12 @@ process.exitCode = await main(process.argv.slice(2), io);
         '*) unset FAKE_SCRATCH_AT_BIRTH ;; esac\n' +
         `export PATH=${shellQuote(reboundPath)}\n` +
         `export CODEX_HOME=${shellQuote(reboundCodeHome)}\n`,
+    );
+    await fsp.writeFile(
+      verifierBashEnv,
+      `if [ -n "\${AGENT_HUB_EVAL_WORKSPACE:-}" ]; then ` +
+        `printf sourced > ${shellQuote(verifierStartupMarker)}; ` +
+        `export PATH=${shellQuote(`${brokenBin}:/usr/bin:/bin`)}; fi\n`,
     );
     await fsp.writeFile(
       path.join(projectBin, "cockpit-test"),
@@ -331,7 +393,15 @@ process.exitCode = await main(process.argv.slice(2), io);
     await fsp.mkdir(verifierDir);
     await fsp.writeFile(
       verifier,
-      "#!/bin/sh\nset -eu\n" +
+      "#!/bin/bash\nset -eu\n" +
+        "[ \"${PYTHONDONTWRITEBYTECODE:-}\" = 1 ]\n" +
+        "[ -z \"${PYTHONEXECUTABLE:-}\" ]\n" +
+        "[ -z \"${PYTHONHOME:-}\" ]\n" +
+        "[ \"${PYTHONNOUSERSITE:-}\" = 1 ]\n" +
+        "[ \"${PYTHONPATH+x}\" = x ] && [ -z \"${PYTHONPATH}\" ]\n" +
+        "[ -z \"${PYTHONPLATLIBDIR:-}\" ]\n" +
+        "[ -z \"${__PYVENV_LAUNCHER__:-}\" ]\n" +
+        "[ \"$(python3 -m unittest)\" = selected-runtime ]\n" +
         "grep -qx 'selected-runtime' runtime-result.txt\n" +
         "grep -q '\"changed\"' src/app.js\n",
       { mode: 0o700 },
@@ -339,19 +409,36 @@ process.exitCode = await main(process.argv.slice(2), io);
     await fsp.chmod(verifier, 0o700);
     env = {
       ...env,
-      PATH: [selectedBin, callerNodeBin, fakeBin, ignoredCodexBin, brokenBin, "/usr/bin", "/bin"]
+      PATH: [callerNodeBin, fakeBin, ignoredCodexBin, brokenBin, "/usr/bin", "/bin"]
         .join(path.delimiter),
       ZDOTDIR: zdot,
+      BASH_ENV: verifierBashEnv,
       AGENT_HUB_FORWARD_ENV:
-        "ZDOTDIR,FAKE_REQUIRE_REBOUND_NODE,FAKE_REQUIRE_SCRATCH_BIRTH",
+        "ZDOTDIR,FAKE_REQUIRE_REBOUND_NODE,FAKE_REQUIRE_SCRATCH_BIRTH," +
+        "PYTHONEXECUTABLE,PYTHONHOME,PYTHONPLATLIBDIR,__PYVENV_LAUNCHER__",
       FAKE_REQUIRE_REBOUND_NODE: "1",
       FAKE_REQUIRE_SCRATCH_BIRTH: "1",
+      PYTHONEXECUTABLE: "/usr/bin/python3",
+      PYTHONHOME: "/nonexistent-python-home",
+      PYTHONPLATLIBDIR: "broken-lib",
+      __PYVENV_LAUNCHER__: "/usr/bin/python3",
     };
 
     const result = await invokeEval([verifier]);
 
     expect(result.summary).toMatchObject({ pass: 1, error: 0 });
-    expect(result.isolation.data_read).toContain("detected-patch-runtime");
+    expect(result.isolation.data_read).toContain("pinned-eval-toolchain");
+    expect(result.toolchain).toEqual({
+      kind: "python-runtime-capsule/v1",
+      runtime_id: "python-test-3.12",
+      python_version: "3.12.13",
+      content_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      platform: process.platform,
+      arch: process.arch,
+    });
+    expect(JSON.stringify(result.toolchain)).not.toContain(runtimeCapsuleDir);
+    const persistedResult = JSON.parse(await fsp.readFile(result.artifact.path, "utf8"));
+    expect(persistedResult.toolchain).toEqual(result.toolchain);
     expect(result.cases[0]).toMatchObject({
       status: "pass",
       reason: "verifier_passed",
@@ -369,6 +456,7 @@ process.exitCode = await main(process.argv.slice(2), io);
     const permissionProfile = command.argv.find(
       (item) => item.startsWith("permissions.agenthub-eval="),
     );
+    const realRuntimeRoot = await fsp.realpath(runtimeRoot);
     expect(command.argv).toContain('shell_environment_policy.inherit="core"');
     expect(command.argv).toContain("allow_login_shell=false");
     expect(command.argv[0]).toBe(request.execution_profile.agent_executable);
@@ -379,6 +467,7 @@ process.exitCode = await main(process.argv.slice(2), io);
     expect(path.isAbsolute(command.argv[0])).toBe(true);
     expect(command.env_keys).toContain("AGENT_HUB_INTERNAL_PATH_PREPEND");
     expect(permissionProfile).toContain(`${JSON.stringify(runtimeBin)} = "read"`);
+    expect(permissionProfile).toContain(`${JSON.stringify(realRuntimeRoot)} = "read"`);
     expect(pathIsInside(runtimeBin, request.cwd)).toBe(false);
     expect(pathIsInside(request.cwd, runtimeBin)).toBe(false);
     expect(pathIsInside(runtimeBin, request.execution_profile.scratch_path)).toBe(false);
@@ -386,20 +475,14 @@ process.exitCode = await main(process.argv.slice(2), io);
     expect(request.execution_profile.runtime_read_paths.some(
       (item) => pathIsInside(item, workspace),
     )).toBe(false);
+    expect(request.execution_profile.runtime_read_paths).toContain(realRuntimeRoot);
     expect(JSON.stringify(command)).not.toContain(env.PATH);
+    await expect(fsp.access(verifierStartupMarker)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
       .toEqual([]);
   }, 20000);
 
-  it("fails before dispatch when the detected runtime cannot pass the final profile", async () => {
-    const selectedBin = path.join(root, "preflight-python", "bin");
-    const selectedExecutable = path.join(selectedBin, "python3");
-    await fsp.mkdir(selectedBin, { recursive: true });
-    await writeFakePython(selectedExecutable, {
-      executable: selectedExecutable,
-      prefix: path.dirname(selectedBin),
-      basePrefix: path.dirname(selectedBin),
-    });
+  it("fails before dispatch when the pinned capsule cannot pass the final profile", async () => {
     await fsp.writeFile(
       path.join(workspace, ".agenthub", "evals.json"),
       `${JSON.stringify({
@@ -421,8 +504,6 @@ process.exitCode = await main(process.argv.slice(2), io);
     await fsp.chmod(verifier, 0o700);
     env = {
       ...env,
-      PATH: [selectedBin, fakeBin, path.dirname(process.execPath), "/usr/bin", "/bin"]
-        .join(path.delimiter),
       AGENT_HUB_FORWARD_ENV: "ZDOTDIR,FAKE_CODEX_SANDBOX_FAIL",
       FAKE_CODEX_SANDBOX_FAIL: "1",
     };
@@ -430,7 +511,7 @@ process.exitCode = await main(process.argv.slice(2), io);
     const result = await invokeEval([verifier]);
 
     expect(result.summary).toMatchObject({ pass: 0, error: 1 });
-    expect(result.isolation.data_read).not.toContain("detected-patch-runtime");
+    expect(result.isolation.data_read).not.toContain("pinned-eval-toolchain");
     expect(result.cases[0]).toMatchObject({
       status: "error",
       reason: "runtime_preflight_failed",
@@ -440,6 +521,101 @@ process.exitCode = await main(process.argv.slice(2), io);
     expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
     expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
       .toEqual([]);
+  }, 20000);
+
+  it("invalidates a case when the foreground verifier mutates the pinned capsule", async () => {
+    await fsp.writeFile(
+      path.join(workspace, ".agenthub", "evals.json"),
+      `${JSON.stringify({
+        schema_version: 2,
+        suite_id: "runtime-capsule-immutability",
+        cases: [
+          {
+            id: "verifier-must-not-change-runtime",
+            prompt: "Change locateTarget.",
+            answer_schema: "workspace-patch/v1",
+          },
+          {
+            id: "must-not-run-after-runtime-change",
+            prompt: "Make a second change.",
+            answer_schema: "workspace-patch/v1",
+          },
+        ],
+      }, null, 2)}\n`,
+    );
+    await git(workspace, "add", ".");
+    await git(workspace, "commit", "-m", "runtime capsule immutability suite");
+    const verifierDir = path.join(root, "runtime-mutating-verifier");
+    const verifier = path.join(verifierDir, "verify");
+    await fsp.mkdir(verifierDir);
+    await fsp.writeFile(
+      verifier,
+      "#!/bin/sh\nset -eu\n" +
+        "runtime_command=$(command -v python3)\n" +
+        "runtime_target=$(readlink \"$runtime_command\")\n" +
+        "printf '\\n# verifier mutation\\n' >> \"$runtime_target\"\n",
+      { mode: 0o700 },
+    );
+    await fsp.chmod(verifier, 0o700);
+
+    const result = await invokeEval([verifier, verifier]);
+
+    expect(result.summary).toMatchObject({ pass: 0, invalid: 1, error: 0, not_run: 1 });
+    expect(result.cases).toHaveLength(1);
+    expect(result.cases[0]).toMatchObject({
+      status: "invalid",
+      reason: "runtime_capsule_changed",
+      metrics: { verifier: { status: "passed", exit_code: 0 } },
+    });
+  }, 20000);
+
+  it("rejects missing and modified runtime capsules before collecting answers", async () => {
+    await fsp.writeFile(
+      path.join(workspace, ".agenthub", "evals.json"),
+      `${JSON.stringify({
+        schema_version: 2,
+        suite_id: "runtime-capsule-validation",
+        cases: [{
+          id: "must-not-collect-answers",
+          prompt: "Change locateTarget.",
+          answer_schema: "workspace-patch/v1",
+        }],
+      }, null, 2)}\n`,
+    );
+    await git(workspace, "add", ".");
+    await git(workspace, "commit", "-m", "runtime capsule validation suite");
+    const baseArgs = [
+      "eval", "run", "--agent", "codex", "--model", "gpt-test", "--effort", "medium",
+      "--cwd", workspace,
+    ];
+    const missingManifest = path.join(root, "missing-capsule", "manifest.json");
+
+    const missing = await invokeRawFailure([
+      ...baseArgs,
+      "--runtime", missingManifest,
+    ]);
+
+    expect(missing).toEqual({
+      error: {
+        code: "runtime_capsule_missing",
+        message: `Python runtime capsule manifest is unavailable: ${missingManifest}`,
+      },
+    });
+
+    await fsp.chmod(runtimePython, 0o755);
+    await fsp.appendFile(runtimePython, "# changed after manifest digest\n");
+    const modified = await invokeRawFailure([
+      ...baseArgs,
+      "--runtime", runtimeManifest,
+    ]);
+
+    expect(modified).toEqual({
+      error: {
+        code: "runtime_capsule_invalid",
+        message: "Python runtime capsule content digest does not match its manifest",
+      },
+    });
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
   }, 20000);
 
   it("keeps verifier grading independent from patch telemetry and verifier output size", async () => {
@@ -594,6 +770,8 @@ process.exitCode = await main(process.argv.slice(2), io);
       "medium",
       "--cwd",
       workspace,
+      "--runtime",
+      runtimeManifest,
       "--timeout-ms",
       "10000",
     ];
@@ -615,6 +793,7 @@ process.exitCode = await main(process.argv.slice(2), io);
     return invokeRawFailure([
       "eval", "run", "--agent", agent,
       "--model", "gpt-test", "--effort", "medium", "--cwd", workspace,
+      "--runtime", runtimeManifest,
     ], answers);
   }
 
@@ -643,6 +822,14 @@ async function writeFakeCodex(target) {
 const fs = require("node:fs");
 const childProcess = require("node:child_process");
 const args = process.argv.slice(2);
+const toolEnv = { ...process.env };
+for (let index = 0; index < args.length - 1; index += 1) {
+  if (args[index] !== "-c") continue;
+  const match = args[index + 1].match(
+    /^shell_environment_policy\\.set\\.([A-Za-z_][A-Za-z0-9_]*)=(.*)$/,
+  );
+  if (match) toolEnv[match[1]] = JSON.parse(match[2]);
+}
 if (process.env.FAKE_REQUIRE_REBOUND_NODE === "1" && process.env.FAKE_NODE_KIND !== "rebound") {
   process.exit(23);
 }
@@ -681,7 +868,7 @@ if (args[0] === "sandbox") {
   if (separator < 0 || separator === args.length - 1) process.exit(18);
   const command = args.slice(separator + 1);
   const child = childProcess.spawnSync(command[0], command.slice(1), {
-    env: process.env,
+    env: toolEnv,
     encoding: "utf8",
   });
   if (child.stdout) process.stdout.write(child.stdout);
@@ -702,7 +889,7 @@ process.stdin.on("end", () => {
     if (fs.existsSync("bin/cockpit-test")) {
       const runtimeResult = childProcess.execFileSync("./bin/cockpit-test", [], {
         encoding: "utf8",
-        env: process.env,
+        env: toolEnv,
       });
       fs.writeFileSync("runtime-result.txt", runtimeResult.trim() + "\\n");
     }
@@ -741,15 +928,36 @@ async function writeNodeLauncher(target, kind) {
   await fsp.chmod(target, 0o755);
 }
 
-async function writeFakePython(target, { executable, prefix, basePrefix }) {
-  const identity = JSON.stringify([executable, prefix, basePrefix]);
+async function writeFakePython(target, { prefix, pythonVersion }) {
+  const selftest = JSON.stringify({
+    executable: target,
+    prefix,
+    base_prefix: prefix,
+    python_version: pythonVersion,
+    checks: ["bz2", "ctypes", "lzma", "sqlite3", "ssl"],
+  });
   await fsp.mkdir(path.dirname(target), { recursive: true });
   await fsp.writeFile(
     target,
     "#!/bin/sh\n" +
-      `if [ "\${1:-}" = "-I" ] && [ "\${2:-}" = "-S" ] && [ "\${3:-}" = "-c" ]; then ` +
-      `printf '%s\\n' ${shellQuote(identity)}; exit 0; fi\n` +
+      `if [ "$#" -eq ${PYTHON_RUNTIME_SELFTEST_ARGS.length} ] && ` +
+      `[ "\${1:-}" = ${shellQuote(PYTHON_RUNTIME_SELFTEST_ARGS[0])} ] && ` +
+      `[ "\${2:-}" = ${shellQuote(PYTHON_RUNTIME_SELFTEST_ARGS[1])} ] && ` +
+      `[ "\${3:-}" = ${shellQuote(PYTHON_RUNTIME_SELFTEST_ARGS[2])} ] && ` +
+      `[ "\${4:-}" = ${shellQuote(PYTHON_RUNTIME_SELFTEST_ARGS[3])} ]; then ` +
+      `[ "\${PYTHONDONTWRITEBYTECODE:-}" = 1 ] && ` +
+      `[ "\${PYTHONNOUSERSITE:-}" = 1 ] && ` +
+      `[ -z "\${PYTHONPATH:-}" ] && [ -z "\${PYTHONHOME:-}" ] && ` +
+      `[ -z "\${PYTHONPLATLIBDIR:-}" ] && [ -z "\${PYTHONEXECUTABLE:-}" ] && ` +
+      `[ -z "\${__PYVENV_LAUNCHER__:-}" ] || exit 95; ` +
+      `printf '%s\\n' ${shellQuote(selftest)}; exit 0; fi\n` +
+      `if [ "\${1:-}" = "--version" ]; then printf 'Python %s\\n' ${shellQuote(pythonVersion)}; exit 0; fi\n` +
       "if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"unittest\" ]; then\n" +
+      "  [ \"${PYTHONDONTWRITEBYTECODE:-}\" = 1 ] || exit 95\n" +
+      "  [ \"${PYTHONNOUSERSITE:-}\" = 1 ] || exit 95\n" +
+      "  [ -z \"${PYTHONPATH:-}\" ] && [ -z \"${PYTHONHOME:-}\" ] || exit 95\n" +
+      "  [ -z \"${PYTHONPLATLIBDIR:-}\" ] && [ -z \"${PYTHONEXECUTABLE:-}\" ] || exit 95\n" +
+      "  [ -z \"${__PYVENV_LAUNCHER__:-}\" ] || exit 95\n" +
       "  [ -z \"${AGENT_HUB_INTERNAL_PATH_PREPEND:-}\" ] || exit 91\n" +
       "  case \"${PATH:-}\" in */runtime-bin:*) ;; *) exit 92 ;; esac\n" +
       "  command -v codex >/dev/null 2>&1 || exit 93\n" +

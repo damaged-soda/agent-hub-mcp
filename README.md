@@ -116,13 +116,16 @@ The same flow works for Codex with `"agent_id": "codex"` and `metadata.codex`, K
 
 Use the returned `run_ref.run_id` with `agenthub wait RUN_ID` until the run reaches a terminal state. If a wait times out, keep the run ID and wait again. `agenthub run` is available for short tasks.
 
-Run an evaluator-selected code-navigation or patch suite against one clean commit with one
-interactive command:
+Run an evaluator-selected code-navigation or patch suite against one clean commit with this
+interactive flow:
 
 ```sh
+agenthub eval runtime install
+agenthub eval runtime status
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
-  --model gpt-5.6-sol --effort medium
+  --model gpt-5.6-sol --effort medium \
+  --runtime default
 ```
 
 The suite is evaluator input: repositories may provide `.agenthub/evals.json` as a default sample,
@@ -130,11 +133,20 @@ while `--suite` may select an uncommitted file outside the evaluated workspace. 
 and hashes its questions at startup; the evaluated worktree itself must remain clean and immutable.
 Schema v1 collects the current commit's standard source location and performs exact grading in the
 read-only workspace. Schema v2 collects an external executable verifier, lets the agent edit a
-disposable detached worktree, and runs the verifier only after the agent exits. Both keep standards
-and external suite paths out of child inputs, use fresh ephemeral sessions, deny `.git` and command
-network, and disable memory, session persistence, and subagents. Eval requires an explicit model
-and effort plus Codex CLI 0.151.0 or newer; providers without an equivalent whitelist fail with
-`unsupported_isolation`. See the [evaluation contract](docs/evals.md).
+disposable detached worktree, and runs the verifier only after the agent exits. Patch Eval uses an
+explicitly provisioned, self-contained Python runtime capsule selected by catalog ID or absolute
+manifest path. The built-in catalog pins a gzip artifact from
+[astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone);
+install is a separate operation, while `eval run` never
+downloads, probes, or falls back to a host Python. The capsule is content-addressed, exposed
+read-only, and reported by digest so baseline and candidate runs can require an exact runtime
+match. Patch inputs remain suite schema v2; capsule-backed patch results use result schema v3 with
+a required `toolchain` identity, while historical result schema v2 remains unchanged. Both suite
+versions keep standards and external suite paths out of child inputs, use fresh ephemeral sessions,
+deny `.git` and command network, and disable memory, session persistence, and subagents. Eval
+requires an explicit model and effort plus Codex CLI 0.151.0 or newer; providers without an
+equivalent whitelist fail with `unsupported_isolation`. See the
+[evaluation contract](docs/evals.md).
 
 For the machine-routed cross-review immediately after this process creates or updates a PR, use the
 persisted requester route instead of choosing an adapter ad hoc. A standalone review is performed by
@@ -177,7 +189,7 @@ Agent Hub does not resolve namespaces. It forwards the caller's session-axis sta
 `zsh -c 'exec …'` at the run `cwd`, so `~/.zshenv`（charter's glue）unloads the inherited
 domain and binds by `cwd`——exactly as a command typed in a terminal there would.
 Internal Eval profiles additionally pin the Codex executable resolved by that cwd-bound shell and
-restore validated runtime PATH/temp overlays after that rebind; ordinary dispatches keep the
+apply a validated capsule PATH/temp overlay after that rebind; ordinary dispatches keep the
 behavior above unchanged.
 
 ## Structured Discussions
@@ -285,6 +297,7 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_RUN_TTL_SECONDS` | Override terminal run retention; default is `604800`. |
 | `AGENT_HUB_EVAL_DIR` | Override private eval-result storage; defaults to `${XDG_STATE_HOME:-~/.local/state}/agent-hub-mcp/evals`. |
 | `AGENT_HUB_EVAL_TTL_SECONDS` | Override eval-result retention; defaults to `AGENT_HUB_RUN_TTL_SECONDS` or `604800`. |
+| `AGENT_HUB_EVAL_RUNTIME_DIR` | Override the private content-addressed Eval runtime capsule store; defaults to `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/eval-runtimes`. |
 | `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage; by default it is a `discussions` sibling of the run root. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Override terminal Discussion retention; defaults to `AGENT_HUB_RUN_TTL_SECONDS` or `604800`. |
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Comma-separated exact browser origins allowed to call the loopback HTTP daemon; unset rejects requests carrying `Origin`. |

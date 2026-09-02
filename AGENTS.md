@@ -34,7 +34,7 @@ Key files:
 | `src/fs-store.js` | Run storage, atomic writes, TTL cleanup, state locks. |
 | `src/session-registry.js` | Cross-run session leases, generations, and lineage claims. |
 | `src/eval-run.js` | Interactive repository-eval supervisor, per-case execution, grading, and telemetry. |
-| `src/eval-runtime.js` | Eval runtime discovery, minimal read capabilities, and read-only command overlays. |
+| `src/eval-runtime.js` | Content-addressed Eval runtime capsule provisioning, validation, and read-only command overlays. |
 | `src/eval-protocol.js` | Question-suite, source-location answer, Git snapshot, digest, and grader contracts. |
 | `src/eval-store.js` | Private TTL-bound eval-result storage; never stores plaintext standard answers. |
 | `src/discussion-manager.js` | Durable five-phase Discussion coordinator and recovery controller. |
@@ -70,7 +70,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 ## Behavioral Rules
 
 - Preserve prompt pass-through for ordinary run tools: do not prepend wrapper prompts, system prompts, or result-file instructions to user input. Review dispatch uses the versioned reviewer-control prompt in `src/review-prompts.js`; Discussion turns use only the versioned coordinator templates in `src/discussion-prompts.js`.
-- Eval may combine an evaluator-supplied question snapshot with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, expose an external suite path to the child, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree. Eval requires an explicit model and effort; it never selects either from defaults.
+- Eval may combine an evaluator-supplied question snapshot with the fixed `source-location/v1` output contract or `workspace-patch/v1` completion contract, but it must never include the human standard, expose an external suite path to the child, silently weaken `workspace-readonly/v1`, or grant `workspace-write/v1` to the caller's original worktree instead of a disposable detached worktree. Patch Eval uses only an explicitly provisioned, content-addressed, self-contained runtime capsule; `eval run` must never download, discover, copy, or fall back to a host Python. Capsule-backed patch runs emit result schema v3 with a required toolchain identity; historical result v2 remains unchanged. Eval requires an explicit model and effort; it never selects either from defaults.
 - Keep `run_id` and `cli_session_ref.native_session_id` separate. A continuation creates a new run and resumes the CLI session.
 - Codex assigns its own thread id: a new `codex` run dispatches with `cli_session_ref: null` and the runner backfills it from the first `thread.started` event.
 - Kimi assigns its own session id and reports it only in the final `session.resume_hint` event: a new `kimi-code` run dispatches with `cli_session_ref: null` and the ref appears on the terminal snapshot.
@@ -90,6 +90,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 | `AGENT_HUB_RUN_TTL_SECONDS` | Terminal run retention; default is `604800`. |
 | `AGENT_HUB_EVAL_DIR` | Private eval-result storage root. |
 | `AGENT_HUB_EVAL_TTL_SECONDS` | Eval-result retention; default follows run TTL. |
+| `AGENT_HUB_EVAL_RUNTIME_DIR` | Private content-addressed Eval runtime capsule store. |
 | `AGENT_HUB_DISCUSSION_DIR` | Override Discussion storage root. |
 | `AGENT_HUB_DISCUSSION_TTL_SECONDS` | Terminal Discussion retention; default follows run TTL. |
 | `AGENT_HUB_HTTP_ALLOWED_ORIGINS` | Exact comma-separated browser origins allowed to call the loopback HTTP daemon. |
