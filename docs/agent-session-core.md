@@ -126,9 +126,33 @@ available, and the effective context at that event. Resolution never persists a 
 or body cache. The versioned `agent-hub` Skill must pass the opaque reference to this command rather than
 reimplement URI parsing.
 
-When one provider/session id has multiple native source files, readers hash every candidate. Exact
-copies resolve through a deterministic active-first/path order and report `duplicate_source_count`;
-conflicting bodies are ambiguous and fail loud instead of selecting by mtime or directory order.
+One provider/session id can map to multiple native source files for two unrelated reasons, and the
+readers keep them apart.
+
+Codex writes a session as an ordered chain of **rollout segments**. Resuming or compacting a session
+closes the current rollout file and opens another one, named
+`rollout-<timestamp>-<session-id>_<rollout-id>.jsonl`. The first UUID is the session identity that
+the file's own `session_meta` declares; the trailing UUID identifies only that segment. A segment is
+not a copy of the session and not a session of its own: reading only the newest segment loses
+everything before the resume, and reading only the first one stops the session at the point where it
+was resumed. Segments are ordered root-first, then by the rollout timestamp in the file name, then by
+path. Segment order deliberately ignores the native `ordinal` field, which rewinds when a resume
+drops an aborted turn and resets to `0` when a compaction replays the conversation. A session
+descriptor therefore reports the first segment as its `source_path`, the summed `size_bytes`, the
+first segment's `created_at`, the latest segment's `updated_at`, and the full ordered chain in
+`segments[]` (`source_kind`, `source_path`, `rollout_id`, `size_bytes`, `created_at`, `updated_at`).
+Reads walk the chain as one continuous event stream with one sequence cursor. Because a replayed
+segment re-emits `session_meta` and can repeat earlier records verbatim, a projected session may show
+part of its history twice; that is native provider behavior, faithfully projected rather than
+repaired, and the re-emitted `session_meta` marks each seam.
+
+True duplicates remain the other case: several files carrying the same session id *and* the same
+rollout segment, typically one copy in `sessions/` and one in `archived_sessions/`. Readers hash
+every candidate within a segment. Exact copies resolve through a deterministic active-first/path
+order and report `duplicate_source_count` (the session's total source-file count, present only when
+it exceeds the number of segments); conflicting bodies are ambiguous and fail loud instead of
+selecting by mtime or directory order. Distinct segments never participate in that comparison, so a
+resumed session is chained rather than reported as a conflict.
 
 ## Adapter facets and read API
 
