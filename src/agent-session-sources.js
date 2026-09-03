@@ -25,6 +25,10 @@ const KIMI_ID_PATTERN = /^(?:session|ses)_[0-9a-f-]{36}$/i;
 const OPENCODE_ID_PATTERN = /^ses_[0-9A-Za-z]{8,128}$/;
 const MAX_LIST_LIMIT = 500;
 const MAX_EVENT_LIMIT = 1000;
+const MAX_QUERY_LENGTH = 200;
+const MAX_OPENCODE_DISCOVERY_LIMIT = 5000;
+const ENRICH_CONCURRENCY = 32;
+const QUERY_FIELDS = ["title", "cwd", "native_session_id", "provider", "source_kind"];
 const MAX_TITLE_LENGTH = 256;
 const CLAUDE_TITLE_TAIL_BYTES = 64 * 1024;
 const OPENCODE_SQLITE_TIMEOUT_MS = 15000;
@@ -50,6 +54,7 @@ export function nativeSessionRoots(env = process.env) {
 export async function discoverNativeSessions(options = {}) {
   const provider = optionalProvider(options.provider);
   const limit = boundedInteger(options.limit ?? 50, 1, MAX_LIST_LIMIT, "limit");
+  const query = optionalSearchQuery(options.query);
   const roots = options.roots ?? nativeSessionRoots(options.env);
   const providers = provider ? [provider] : ["claude", "codex", "kimi", "opencode"];
   const descriptors = [];
@@ -59,10 +64,7 @@ export async function discoverNativeSessions(options = {}) {
       if (item === "claude") descriptors.push(...(await discoverClaude(roots.claude)));
       if (item === "codex") descriptors.push(...(await discoverCodex(roots.codex)));
       if (item === "kimi") descriptors.push(...(await discoverKimi(roots.kimi)));
-      if (item === "opencode") descriptors.push(...(await discoverOpenCode(roots.opencode, {
-        ...options,
-        limit,
-      })));
+      if (item === "opencode") descriptors.push(...(await discoverOpenCode(roots.opencode, options)));
     } catch (error) {
       if (provider) throw error;
       sourceErrors.push({
@@ -73,9 +75,46 @@ export async function discoverNativeSessions(options = {}) {
     }
   }
   descriptors.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
-  const selected = descriptors.slice(0, limit);
-  const data = await Promise.all(selected.map(enrichDescriptor));
+  const totalDiscovered = descriptors.length;
+  // 一次搜索要富集整个目录，任何一个陈旧或不可读的原生文件都不能拖垮其余会话。
+  // 读不到的证据按未知呈现，并按 provider 汇总进 source_errors，不静默吞掉。
+  const enrichFailures = new Map();
+  const enrichOne = async (descriptor) => {
+    try {
+      return await enrichDescriptor(descriptor);
+    } catch (error) {
+      const failure = enrichFailures.get(descriptor.provider);
+      if (failure) failure.count += 1;
+      else {
+        enrichFailures.set(descriptor.provider, {
+          count: 1,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return descriptor;
+    }
+  };
+  let matched = totalDiscovered;
+  let data;
+  if (query) {
+    const enriched = await mapBounded(descriptors, ENRICH_CONCURRENCY, enrichOne);
+    const hits = enriched.filter((item) => matchesQuery(item, query));
+    matched = hits.length;
+    data = hits.slice(0, limit);
+  } else {
+    data = await mapBounded(descriptors.slice(0, limit), ENRICH_CONCURRENCY, enrichOne);
+  }
+  for (const [item, failure] of enrichFailures) {
+    sourceErrors.push({
+      provider: item,
+      code: "session_metadata_unreadable",
+      message: `${failure.count} session(s) kept unknown cwd and title: ${failure.message}`,
+    });
+  }
   Object.defineProperty(data, "source_errors", { value: sourceErrors });
+  Object.defineProperty(data, "total_discovered", { value: totalDiscovered });
+  Object.defineProperty(data, "matched", { value: matched });
+  Object.defineProperty(data, "query", { value: query });
   return data;
 }
 
@@ -354,10 +393,9 @@ async function discoverOpenCode(root, options = {}) {
   if (!root) return [];
   const sourcePath = path.join(root, "opencode.db");
   if (!(await fileExists(sourcePath))) return [];
-  const queryLimit = Math.min(5000, Math.max(50, Number(options.limit) || 50));
   const rows = await runSqliteJson(
     sourcePath,
-    OPENCODE_SESSION_QUERY(queryLimit),
+    OPENCODE_SESSION_QUERY(MAX_OPENCODE_DISCOVERY_LIMIT),
     options,
   );
   if (!Array.isArray(rows)) throw new Error("OpenCode session query did not return an array");
@@ -735,6 +773,39 @@ function safeChildPath(root, candidate) {
 function optionalProvider(value) {
   if (value === undefined || value === null || value === "") return null;
   return createSessionIdentity(value, null).provider;
+}
+
+function optionalSearchQuery(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new Error("query must be a string");
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (Array.from(normalized).length > MAX_QUERY_LENGTH) {
+    throw new Error(`query must be at most ${MAX_QUERY_LENGTH} characters`);
+  }
+  return normalized.toLowerCase();
+}
+
+function matchesQuery(descriptor, query) {
+  return QUERY_FIELDS.some((field) => {
+    const value = descriptor[field];
+    return typeof value === "string" && value.toLowerCase().includes(query);
+  });
+}
+
+async function mapBounded(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const poolSize = Math.max(1, Math.min(concurrency, items.length));
+  const workers = Array.from({ length: poolSize }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function boundedInteger(value, min, max, name) {

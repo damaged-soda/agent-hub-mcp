@@ -158,6 +158,83 @@ describe("native session sources", () => {
     });
   });
 
+  it("searches the whole directory instead of only the returned page", async () => {
+    const recent = new Date("2026-08-27T10:00:00.000Z");
+    const older = new Date("2026-08-20T10:00:00.000Z");
+    await fsp.utimes(sourcePaths.kimiPath, recent, recent);
+    await fsp.utimes(sourcePaths.codexPath, recent, recent);
+    await fsp.utimes(sourcePaths.claudePath, older, older);
+
+    const page = await discoverNativeSessions({ roots, limit: 1 });
+    expect(page).toHaveLength(1);
+    expect(page.map((item) => item.provider)).not.toContain("claude");
+    expect(page.total_discovered).toBe(3);
+    expect(page.matched).toBe(3);
+    expect(page.query).toBe(null);
+
+    const hits = await discoverNativeSessions({ roots, limit: 1, query: "Claude 会话" });
+    expect(hits.map((item) => item.native_session_id)).toEqual([CLAUDE_ID]);
+    expect(hits.total_discovered).toBe(3);
+    expect(hits.matched).toBe(1);
+    expect(hits.query).toBe("claude 会话");
+  });
+
+  it("reports the full match count even when the page truncates it", async () => {
+    const sessions = await discoverNativeSessions({ roots, limit: 1, query: "会话" });
+    expect(sessions).toHaveLength(1);
+    expect(sessions.matched).toBe(3);
+    expect(sessions.total_discovered).toBe(3);
+  });
+
+  it("matches cwd and native session id as well as the native title", async () => {
+    const byCwd = await discoverNativeSessions({ roots, limit: 10, query: "/workspace/example" });
+    expect(byCwd.matched).toBe(3);
+    const byId = await discoverNativeSessions({ roots, limit: 10, query: CODEX_ID.toUpperCase() });
+    expect(byId.map((item) => item.native_session_id)).toEqual([CODEX_ID]);
+    const byProvider = await discoverNativeSessions({ roots, limit: 10, query: "kimi" });
+    expect(byProvider.map((item) => item.provider)).toEqual(["kimi"]);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps one unreadable transcript from failing the whole search",
+    async () => {
+      const brokenId = "770e8400-e29b-41d4-a716-4466554400ff";
+      const brokenPath = path.join(
+        roots.claude, "projects", "-workspace-example", `${brokenId}.jsonl`,
+      );
+      await fsp.copyFile(sourcePaths.claudePath, brokenPath);
+      await fsp.chmod(brokenPath, 0o000);
+      try {
+        const sessions = await discoverNativeSessions({
+          roots, limit: 10, query: "claude",
+        });
+        expect(sessions.total_discovered).toBe(4);
+        expect(sessions.map((item) => item.native_session_id)).toContain(CLAUDE_ID);
+        const broken = sessions.find((item) => item.native_session_id === brokenId);
+        expect(broken).toMatchObject({ provider: "claude", cwd: null, title: null });
+        expect(sessions.source_errors).toEqual([
+          expect.objectContaining({
+            provider: "claude",
+            code: "session_metadata_unreadable",
+          }),
+        ]);
+      } finally {
+        await fsp.chmod(brokenPath, 0o600);
+        await fsp.rm(brokenPath, { force: true });
+      }
+    },
+  );
+
+  it("treats a blank query as no query and rejects an unbounded one", async () => {
+    const blank = await discoverNativeSessions({ roots, limit: 10, query: "   " });
+    expect(blank.query).toBe(null);
+    expect(blank.matched).toBe(3);
+    await expect(discoverNativeSessions({ roots, limit: 10, query: "x".repeat(201) }))
+      .rejects.toThrow("query must be at most 200 characters");
+    await expect(discoverNativeSessions({ roots, limit: 10, query: 7 }))
+      .rejects.toThrow("query must be a string");
+  });
+
   it("keeps scanning Claude metadata after timestamp-only preamble records", async () => {
     const createdAt = "2026-08-26T09:59:00.000Z";
     await fsp.writeFile(

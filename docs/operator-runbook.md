@@ -52,6 +52,7 @@ Verify the body-free metadata path before exposing a reverse proxy:
 
 ```sh
 agent-session list --limit 5
+agent-session list --query cockpit --limit 5
 agent-session inspect --provider codex --session-id SESSION_ID --profile metadata --limit 20
 agent-session inspect --provider opencode --session-id SESSION_ID --profile metadata --limit 20
 agent-session serve --host 127.0.0.1 --port 8765  # keep this terminal open

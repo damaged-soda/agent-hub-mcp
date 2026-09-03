@@ -67,6 +67,7 @@ async function handleRequest(request, response, options) {
       data: {
         read_only: true,
         profiles: ["metadata", "inspect"],
+        features: ["session-search"],
         endpoints: {
           health: "healthz",
           sessions: "api/sessions",
@@ -87,6 +88,7 @@ async function handleRequest(request, response, options) {
   if (routedPath.pathname === "/api/sessions") {
     const data = await discoverNativeSessions({
       provider: optionalQuery(url, "provider"),
+      query: optionalQuery(url, "query"),
       limit: optionalQuery(url, "limit") ?? 50,
       roots: options.roots,
       env: options.env,
@@ -95,6 +97,9 @@ async function handleRequest(request, response, options) {
     sendJson(response, 200, {
       api_version: API_VERSION,
       kind: "agent-session-list",
+      total_discovered: data.total_discovered,
+      matched: data.matched,
+      ...(data.query === null ? {} : { query: data.query }),
       data,
       ...(data.source_errors?.length > 0 ? { source_errors: data.source_errors } : {}),
     }, request.method);

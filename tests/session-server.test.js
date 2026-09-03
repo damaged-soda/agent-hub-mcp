@@ -70,6 +70,7 @@ describe("agent session server", () => {
       data: {
         read_only: true,
         profiles: ["metadata", "inspect"],
+        features: ["session-search"],
         endpoints: {
           health: "healthz",
           sessions: "api/sessions",
@@ -86,6 +87,27 @@ describe("agent session server", () => {
     expect((await fetch(`${baseUrl}/index.html`)).status).toBe(404);
     expect((await fetch(`${baseUrl}/app.js`)).status).toBe(404);
     expect((await fetch(`${baseUrl}/style.css`)).status).toBe(404);
+  });
+
+  it("searches the whole native directory behind a bounded page", async () => {
+    const page = await (await fetch(`${baseUrl}/api/sessions?limit=10`)).json();
+    expect(page.total_discovered).toBe(1);
+    expect(page.matched).toBe(1);
+    expect(page.query).toBeUndefined();
+
+    const hit = await (await fetch(
+      `${baseUrl}/api/sessions?query=${encodeURIComponent("审查 Agent")}&limit=10`,
+    )).json();
+    expect(hit.query).toBe("审查 agent");
+    expect(hit.matched).toBe(1);
+    expect(hit.data.map((item) => item.native_session_id)).toEqual([CODEX_ID]);
+
+    const miss = await (await fetch(`${baseUrl}/api/sessions?query=nomatch&limit=10`)).json();
+    expect(miss.total_discovered).toBe(1);
+    expect(miss.matched).toBe(0);
+    expect(miss.data).toEqual([]);
+
+    expect((await fetch(`${baseUrl}/api/sessions?query=${"x".repeat(201)}`)).status).toBe(400);
   });
 
   it("keeps API bodies hidden until inspect is explicit", async () => {

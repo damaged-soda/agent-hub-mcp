@@ -48,6 +48,7 @@ sessions whether or not Agent Hub launched them:
 
 ```sh
 agent-session list --limit 20
+agent-session list --query cockpit --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID
 agent-session inspect --provider codex --session-id SESSION_ID \
   --profile inspect --after 0 --limit 200
@@ -83,7 +84,7 @@ The loopback server exposes the same contract:
 ```text
 GET /
 GET /healthz
-GET /api/sessions?provider=&limit=
+GET /api/sessions?provider=&query=&limit=
 GET /api/sessions/<provider>/<native-session-id>?profile=&after=&limit=
 ```
 

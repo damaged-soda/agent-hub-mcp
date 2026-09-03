@@ -143,7 +143,7 @@ hiding healthy providers.
 The daemon-free `agent-session` CLI is the stable read surface:
 
 ```text
-agent-session list [--provider ...] [--limit ...]
+agent-session list [--provider ...] [--query ...] [--limit ...]
 agent-session inspect --provider ... --session-id ...
   [--profile metadata|inspect] [--after ...] [--limit ...]
 agent-session resolve 'agenthub://session/v1/...'
@@ -151,7 +151,21 @@ agent-session serve [--host 127.0.0.1] [--port 8765]
   [--public-origin https://cockpit.example.ts.net] [--base-path /agent-session]
 ```
 
-`list` derives identity from provider-native stores. Its nullable, bounded `title` is copied only
+`list` derives identity from provider-native stores. `--limit` bounds the returned page, never the
+directory that is searched: `total_discovered` reports every session the enabled providers exposed
+and `matched` reports every session the query matched, so a truncated page stays visibly truncated
+instead of passing itself off as the whole directory. `--query` is one bounded (200-character)
+case-insensitive substring matched against `title`, `cwd`, `native_session_id`, `provider`, and
+`source_kind` after every discovered session is enriched and before `--limit` truncates; a blank
+query is no query, and the normalized query is echoed back so a consumer can tell a filtered
+response from an unfiltered one. Searching therefore reads bounded metadata for the whole
+directory with bounded concurrency; it still stores nothing. One session whose native evidence
+cannot be read — deleted between discovery and enrichment, or unreadable — keeps its discovered
+identity with unknown `cwd` and `title` instead of failing the whole directory, and is reported as
+a per-provider `session_metadata_unreadable` entry in `source_errors`; a search never hides such a
+session behind an error for every other session. OpenCode root-session discovery uses
+one fixed bound rather than the requested page size, so `total_discovered` means the same thing
+whether or not a query is present. Its nullable, bounded `title` is copied only
 from provider-written title metadata (Codex's session index, Claude's `ai-title`, a Kimi title
 explicitly marked custom, or OpenCode's root session row); it never derives a fallback from prompt
 text or launches a model call.
@@ -191,7 +205,10 @@ the next request. The current native wire exposes no stable request ID for these
 bounded body-bearing diagnostic package described above. Neither reference contains transcript body
 or grants network access.
 
-`serve` exposes the same list/inspect contract as a loopback-only JSON API for Cockpit. It does not
+`serve` exposes the same list/inspect contract as a loopback-only JSON API for Cockpit, including
+`GET /api/sessions?query=...`, and advertises `features: ["session-search"]` in its service
+description so a consumer can detect the capability instead of mistaking an unfiltered page for a
+search result. It does not
 add a database or background coordinator. Responses are `no-store`, cross-origin browser requests
 are rejected, the root returns a versioned service description, and `/healthz` is side-effect free.
 An optional exact HTTPS `public-origin` may admit Host/Origin values from a trusted reverse proxy;
