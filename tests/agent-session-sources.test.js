@@ -15,12 +15,31 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const fixtureRoot = path.join(repoRoot, "fixtures", "agent-session");
 const CLAUDE_ID = "550e8400-e29b-41d4-a716-446655440000";
 const CODEX_ID = "01a03dc9-2a7e-76a2-b03d-39e06e22a5b6";
+const CODEX_ROLLOUT_ID = "01a03dc9-7867-78c3-8783-bc3c361ae198";
 const KIMI_ID = "session_437f4ac7-19f4-472b-be3c-a87be0f41419";
 const OPENCODE_ID = "ses_01a03dc9bffezOpenCodeFixture";
 
 let tempRoot;
 let roots;
 let sourcePaths;
+
+// Codex 在 resume/compact 之后另起一段 rollout：文件名带上本段自己的 rollout id，
+// 文件内的 session_meta 仍然声明原会话，并可能逐字重放已经写过的记录。
+async function writeCodexContinuation() {
+  const continuationPath = path.join(
+    roots.codex,
+    "sessions",
+    "2026",
+    "08",
+    "26",
+    `rollout-2026-08-26T12-00-00-${CODEX_ID}_${CODEX_ROLLOUT_ID}.jsonl`,
+  );
+  await fsp.copyFile(
+    path.join(fixtureRoot, "codex-transcript-resumed.jsonl"),
+    continuationPath,
+  );
+  return continuationPath;
+}
 
 function openCodeSessionRow(info) {
   return {
@@ -623,6 +642,152 @@ describe("native session sources", () => {
     await expect(resolveNativeSessionEventReference(reference, { roots })).rejects.toThrow(
       /Ambiguous.*conflicting transcript sources/,
     );
+  });
+
+  it("chains a resumed Codex rollout segment onto the session that wrote it", async () => {
+    const continuationPath = await writeCodexContinuation();
+
+    const sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      native_session_id: CODEX_ID,
+      title: "检查 Codex 会话",
+      cwd: "/workspace/example",
+      source_kind: "codex-rollout",
+      source_path: sourcePaths.codexPath,
+    });
+    expect(sessions[0].segments.map((item) => item.source_path)).toEqual([
+      sourcePaths.codexPath,
+      continuationPath,
+    ]);
+    expect(sessions[0].segments.map((item) => item.rollout_id)).toEqual([null, CODEX_ROLLOUT_ID]);
+    expect(sessions[0]).not.toHaveProperty("duplicate_source_count");
+
+    const [root, continuation] = await Promise.all([
+      fsp.stat(sourcePaths.codexPath),
+      fsp.stat(continuationPath),
+    ]);
+    expect(sessions[0].size_bytes).toBe(root.size + continuation.size);
+    expect(sessions[0].updated_at).toBe(continuation.mtime.toISOString());
+  });
+
+  it("reads a resumed Codex session across the segment boundary as one cursor", async () => {
+    const before = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+    await writeCodexContinuation();
+    const after = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+
+    expect(after.data.length).toBeGreaterThan(before.data.length);
+    expect(after.data.map((event) => event.sequence)).toEqual(
+      after.data.map((_event, index) => index),
+    );
+    const text = JSON.stringify(after);
+    expect(text).toContain("Review this change.");
+    expect(text).toContain("Now ship it.");
+
+    // 跨段游标必须连续：第二页只能从第一页结束的地方继续，不能回到第二个文件的开头。
+    const head = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 4 },
+      { roots },
+    );
+    expect(head.has_more).toBe(true);
+    const tail = await inspectNativeSession(
+      {
+        provider: "codex",
+        native_session_id: CODEX_ID,
+        profile: "inspect",
+        after: head.next_sequence,
+        limit: 100,
+      },
+      { roots },
+    );
+    expect([...head.data, ...tail.data].map((event) => event.event_ref)).toEqual(
+      after.data.map((event) => event.event_ref),
+    );
+  });
+
+  it("keeps event references stable when a session gains a rollout segment", async () => {
+    const before = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+    await writeCodexContinuation();
+    const after = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+
+    // 追加证据不得改写既有引用，包括续写段逐字重放了根段记录的情况。
+    const references = after.data.map((event) => event.event_ref);
+    expect(after.data.length).toBeGreaterThan(before.data.length);
+    expect(references.slice(0, before.data.length)).toEqual(
+      before.data.map((event) => event.event_ref),
+    );
+    expect(new Set(references).size).toBe(references.length);
+
+    const resolved = await resolveNativeSessionEventReference(
+      before.data.find((event) => event.kind === "tool-call").event_ref,
+      { roots },
+    );
+    expect(JSON.stringify(resolved.data.target)).toContain("git status --short");
+  });
+
+  it("separates rollout segments from copies of one rollout segment", async () => {
+    const continuationPath = await writeCodexContinuation();
+    const archivedPath = path.join(
+      roots.codex,
+      "archived_sessions",
+      path.basename(continuationPath),
+    );
+    await fsp.mkdir(path.dirname(archivedPath), { recursive: true });
+    await fsp.copyFile(continuationPath, archivedPath);
+
+    const inspect = await inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    );
+    expect(inspect.session.segments).toHaveLength(2);
+    expect(inspect.session.duplicate_source_count).toBe(3);
+
+    const divergent = (await fsp.readFile(archivedPath, "utf8")).replace("Now ship it.", "Revert.");
+    await fsp.writeFile(archivedPath, divergent);
+    await expect(inspectNativeSession(
+      { provider: "codex", native_session_id: CODEX_ID, profile: "inspect", limit: 100 },
+      { roots },
+    )).rejects.toThrow(/Ambiguous.*conflicting transcript sources/);
+  });
+
+  it("orders same-second rollout segments by their time-ordered rollout id", async () => {
+    // 文件名上的时间戳是本地时间且只到秒；同秒续写、或时区变化，都不能决定段序。
+    const dir = path.join(roots.codex, "sessions", "2026", "08", "26");
+    const later = "01a03dca-0000-7000-8000-000000000000";
+    const earlier = "01a03dc9-ffff-7fff-8fff-ffffffffffff";
+    await fsp.copyFile(
+      path.join(fixtureRoot, "codex-transcript-resumed.jsonl"),
+      path.join(dir, `rollout-2026-08-26T12-00-00-${CODEX_ID}_${later}.jsonl`),
+    );
+    await fsp.copyFile(
+      path.join(fixtureRoot, "codex-transcript-resumed.jsonl"),
+      path.join(dir, `rollout-2026-08-26T12-00-00-${CODEX_ID}_${earlier}.jsonl`),
+    );
+
+    const [session] = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(session.segments.map((item) => item.rollout_id)).toEqual([null, earlier, later]);
+  });
+
+  it("never exposes a Codex rollout id as a session of its own", async () => {
+    await writeCodexContinuation();
+    const sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(sessions.map((item) => item.native_session_id)).toEqual([CODEX_ID]);
+    await expect(resolveNativeSessionReference(
+      `agenthub://session/v1/codex/${CODEX_ROLLOUT_ID}`,
+      { roots },
+    )).rejects.toThrow(/Unknown codex native_session_id/);
   });
 
   it("supports bounded cursor reads and leaves provider files untouched", async () => {

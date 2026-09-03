@@ -279,32 +279,43 @@ async function walkNativeSessionEvents(descriptor, identity, visitor, options = 
     }
     return { malformed_lines: malformedLines, next_sequence: sequence, stopped: false };
   }
-  const stream = fs.createReadStream(descriptor.source_path, { encoding: "utf8" });
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of lines) {
-      if (!line.trim()) continue;
-      let record;
-      try {
-        record = JSON.parse(line);
-      } catch {
-        malformedLines += 1;
-        continue;
-      }
-      const events = referenceProjector.attach(record, projector.project(record));
-      for (const event of events) {
-        const sequenced = { ...event, sequence };
-        sequence += 1;
-        if (visitor(sequenced) === false) {
-          return { malformed_lines: malformedLines, next_sequence: sequence, stopped: true };
+  // 一个会话可能被原生 CLI 写成多段 rollout 文件；投影器与 sequence 必须跨段延续，
+  // 否则续写的部分要么读不到，要么拿到和单段读取不一致的 event_ref。
+  for (const segment of sessionSegments(descriptor)) {
+    const stream = fs.createReadStream(segment.source_path, { encoding: "utf8" });
+    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    try {
+      for await (const line of lines) {
+        if (!line.trim()) continue;
+        let record;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          malformedLines += 1;
+          continue;
+        }
+        const events = referenceProjector.attach(record, projector.project(record));
+        for (const event of events) {
+          const sequenced = { ...event, sequence };
+          sequence += 1;
+          if (visitor(sequenced) === false) {
+            return { malformed_lines: malformedLines, next_sequence: sequence, stopped: true };
+          }
         }
       }
+    } finally {
+      lines.close();
+      stream.destroy();
     }
-  } finally {
-    lines.close();
-    stream.destroy();
   }
   return { malformed_lines: malformedLines, next_sequence: sequence, stopped: false };
+}
+
+// 段列表是唯一的读取顺序来源；非分段 provider 退化为单段，读取路径无需分叉。
+function sessionSegments(descriptor) {
+  return Array.isArray(descriptor.segments) && descriptor.segments.length > 0
+    ? descriptor.segments
+    : [descriptor];
 }
 
 async function readEventAtSequence(descriptor, identity, targetSequence, options = {}) {
@@ -325,20 +336,133 @@ async function discoverCodex(root, options = {}) {
   ];
   const descriptors = [];
   for (const sourcePath of files) {
-    const match = /([0-9a-f]{8}-[0-9a-f-]{27})\.jsonl$/i.exec(sourcePath);
-    if (!match || !UUID_PATTERN.test(match[1])) continue;
+    const parsed = parseCodexRolloutName(sourcePath);
+    if (!parsed) continue;
     const descriptor = await baseDescriptor(
       "codex",
-      match[1],
+      parsed.native_session_id,
       sourcePath,
       sourcePath.includes(`${path.sep}archived_sessions${path.sep}`)
         ? "codex-rollout-archived"
         : "codex-rollout",
     );
-    descriptor.title = titles.get(match[1]) ?? null;
+    descriptor.title = titles.get(parsed.native_session_id) ?? null;
+    descriptor.rollout_id = parsed.rollout_id;
+    descriptor.rollout_started_at = parsed.rollout_started_at;
     descriptors.push(descriptor);
   }
-  return options.dedupe === false ? descriptors : dedupeDescriptors(descriptors);
+  return options.dedupe === false ? descriptors : chainCodexSegments(descriptors);
+}
+
+// Codex 在 resume/compact 后会另起一个 rollout 文件，文件名成为
+// `rollout-<时间戳>-<会话 id>_<rollout id>.jsonl`。第一段 UUID 才是会话身份
+// （与文件内 session_meta.session_id 一致），第二段只是这一段 rollout 自己的 id。
+// 旧解析从文件名尾部取 UUID，于是把续写段认成一个原生证据里根本不存在的会话，
+// 原会话则停在中断处。
+function parseCodexRolloutName(sourcePath) {
+  const name = path.basename(sourcePath);
+  if (!name.endsWith(".jsonl")) return null;
+  const stem = name.slice(0, -".jsonl".length);
+  const separator = stem.lastIndexOf("_");
+  if (separator !== -1) {
+    const rolloutId = stem.slice(separator + 1);
+    const sessionId = stem.slice(0, separator).slice(-36);
+    if (UUID_PATTERN.test(rolloutId) && UUID_PATTERN.test(sessionId)) {
+      return {
+        native_session_id: sessionId,
+        rollout_id: rolloutId,
+        rollout_started_at: rolloutStartLabel(stem),
+      };
+    }
+  }
+  const sessionId = stem.slice(-36);
+  if (!UUID_PATTERN.test(sessionId)) return null;
+  return {
+    native_session_id: sessionId,
+    rollout_id: null,
+    rollout_started_at: rolloutStartLabel(stem),
+  };
+}
+
+function rolloutStartLabel(stem) {
+  const match = /(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})/.exec(stem);
+  return match ? match[1] : null;
+}
+
+// 同一 rollout id 的多个文件是同一份证据的副本（活跃目录与归档目录），沿用既有的
+// 副本规则；不同 rollout id 是同一会话的不同段，必须按序串成一条链而不是互相顶掉。
+function chainCodexSegments(descriptors) {
+  const sessions = [];
+  for (const [, group] of groupBy(descriptors, (item) => item.native_session_id)) {
+    const segments = [];
+    for (const [, copies] of groupBy(group, (item) => item.rollout_id ?? "")) {
+      segments.push(pickRolloutCopy(copies));
+    }
+    sessions.push(chainedCodexSession(segments.sort(compareCodexSegments), group.length));
+  }
+  return sessions;
+}
+
+function pickRolloutCopy(copies) {
+  return copies.length === 1 ? copies[0] : [...copies].sort(compareDuplicateSources)[0];
+}
+
+function chainedCodexSession(segments, sourceFileCount) {
+  // rollout id 与 rollout 起始时间是段的属性，不是会话的属性，只留在 segments[] 里。
+  const [{ rollout_id: _rolloutId, rollout_started_at: _startedAt, ...first }] = segments;
+  const session = {
+    ...first,
+    size_bytes: segments.reduce((total, item) => total + item.size_bytes, 0),
+    updated_at: segments.reduce(
+      (latest, item) => (item.updated_at > latest ? item.updated_at : latest),
+      first.updated_at,
+    ),
+    segments: segments.map((item) => ({
+      source_kind: item.source_kind,
+      source_path: item.source_path,
+      rollout_id: item.rollout_id,
+      size_bytes: item.size_bytes,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+    })),
+  };
+  // duplicate_source_count 只报告“同一段存在额外副本”，段本身不是副本。
+  if (sourceFileCount > segments.length) session.duplicate_source_count = sourceFileCount;
+  return session;
+}
+
+// 根段（无 rollout id）永远在最前。续写段之间优先比 rollout id：Codex 写的是
+// UUIDv7，前 48 位就是毫秒时间戳，字典序即创建序，且与时区无关。文件名上的时间戳
+// 是本地时间且只到秒，时区变化或同秒连续续写都会让它失序，只作降级依据；路径兜底
+// 稳定性。不用 ordinal：resume 会回退 ordinal，compact 会把它重置为 0。
+function compareCodexSegments(left, right) {
+  const leftRank = left.rollout_id === null ? 0 : 1;
+  const rightRank = right.rollout_id === null ? 0 : 1;
+  const byRolloutId =
+    isTimeOrderedUuid(left.rollout_id) && isTimeOrderedUuid(right.rollout_id)
+      ? left.rollout_id.localeCompare(right.rollout_id)
+      : 0;
+  return (
+    leftRank - rightRank ||
+    byRolloutId ||
+    String(left.rollout_started_at ?? "").localeCompare(String(right.rollout_started_at ?? "")) ||
+    left.source_path.localeCompare(right.source_path)
+  );
+}
+
+function isTimeOrderedUuid(value) {
+  return typeof value === "string" && value[14] === "7" && UUID_PATTERN.test(value);
+}
+
+function groupBy(items, keyOf) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    const existing = groups.get(key);
+    if (existing) existing.push(item);
+    else groups.set(key, [item]);
+  }
+  return groups;
 }
 
 async function discoverClaude(root, options = {}) {
@@ -578,7 +702,12 @@ async function findSession(provider, nativeSessionId, roots, options = {}) {
           ? await discoverKimi(roots.kimi, { dedupe: false })
           : await discoverOpenCode(roots.opencode, options);
   const matches = descriptors.filter((item) => item.native_session_id === nativeSessionId);
-  if (matches.length <= 1) return matches[0] ?? null;
+  if (matches.length === 0) return null;
+  if (provider === "codex") {
+    const [session] = await chainCodexSegmentsStrict(matches, nativeSessionId);
+    return session ?? null;
+  }
+  if (matches.length === 1) return matches[0];
   const digests = await Promise.all(matches.map((item) => fileSha256(item.source_path)));
   if (new Set(digests).size !== 1) {
     throw new Error(
@@ -587,6 +716,21 @@ async function findSession(provider, nativeSessionId, roots, options = {}) {
   }
   const selected = [...matches].sort(compareDuplicateSources)[0];
   return { ...selected, duplicate_source_count: matches.length };
+}
+
+// 读取路径要 fail loud：同一 rollout 段的多个副本必须逐字节一致，否则拒绝在同名证据
+// 之间挑一个。段与段之间内容本来就不同，不参与这个比对。
+async function chainCodexSegmentsStrict(descriptors, nativeSessionId) {
+  for (const [, copies] of groupBy(descriptors, (item) => item.rollout_id ?? "")) {
+    if (copies.length === 1) continue;
+    const digests = await Promise.all(copies.map((item) => fileSha256(item.source_path)));
+    if (new Set(digests).size !== 1) {
+      throw new Error(
+        `Ambiguous codex native_session_id has conflicting transcript sources: ${nativeSessionId}`,
+      );
+    }
+  }
+  return chainCodexSegments(descriptors);
 }
 
 async function baseDescriptor(provider, nativeSessionId, sourcePath, sourceKind) {
@@ -738,13 +882,12 @@ async function directoryEntries(root) {
   });
 }
 
+// Codex 走 chainCodexSegments，这里只服务一个会话对应一个原生文件的 provider。
 function dedupeDescriptors(descriptors) {
   const selected = new Map();
   for (const descriptor of descriptors) {
     const current = selected.get(descriptor.native_session_id);
-    const preferActive =
-      current?.source_kind === "codex-rollout-archived" && descriptor.source_kind === "codex-rollout";
-    if (!current || preferActive || descriptor.updated_at > current.updated_at) {
+    if (!current || descriptor.updated_at > current.updated_at) {
       selected.set(descriptor.native_session_id, descriptor);
     }
   }
