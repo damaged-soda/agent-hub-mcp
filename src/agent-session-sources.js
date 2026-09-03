@@ -76,15 +76,40 @@ export async function discoverNativeSessions(options = {}) {
   }
   descriptors.sort((left, right) => String(right.updated_at).localeCompare(String(left.updated_at)));
   const totalDiscovered = descriptors.length;
+  // 一次搜索要富集整个目录，任何一个陈旧或不可读的原生文件都不能拖垮其余会话。
+  // 读不到的证据按未知呈现，并按 provider 汇总进 source_errors，不静默吞掉。
+  const enrichFailures = new Map();
+  const enrichOne = async (descriptor) => {
+    try {
+      return await enrichDescriptor(descriptor);
+    } catch (error) {
+      const failure = enrichFailures.get(descriptor.provider);
+      if (failure) failure.count += 1;
+      else {
+        enrichFailures.set(descriptor.provider, {
+          count: 1,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return descriptor;
+    }
+  };
   let matched = totalDiscovered;
   let data;
   if (query) {
-    const enriched = await mapBounded(descriptors, ENRICH_CONCURRENCY, enrichDescriptor);
+    const enriched = await mapBounded(descriptors, ENRICH_CONCURRENCY, enrichOne);
     const hits = enriched.filter((item) => matchesQuery(item, query));
     matched = hits.length;
     data = hits.slice(0, limit);
   } else {
-    data = await mapBounded(descriptors.slice(0, limit), ENRICH_CONCURRENCY, enrichDescriptor);
+    data = await mapBounded(descriptors.slice(0, limit), ENRICH_CONCURRENCY, enrichOne);
+  }
+  for (const [item, failure] of enrichFailures) {
+    sourceErrors.push({
+      provider: item,
+      code: "session_metadata_unreadable",
+      message: `${failure.count} session(s) kept unknown cwd and title: ${failure.message}`,
+    });
   }
   Object.defineProperty(data, "source_errors", { value: sourceErrors });
   Object.defineProperty(data, "total_discovered", { value: totalDiscovered });
@@ -771,7 +796,8 @@ function matchesQuery(descriptor, query) {
 async function mapBounded(items, concurrency, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+  const poolSize = Math.max(1, Math.min(concurrency, items.length));
+  const workers = Array.from({ length: poolSize }, async () => {
     while (cursor < items.length) {
       const index = cursor;
       cursor += 1;

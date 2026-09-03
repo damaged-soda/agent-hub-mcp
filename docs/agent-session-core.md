@@ -159,7 +159,11 @@ case-insensitive substring matched against `title`, `cwd`, `native_session_id`, 
 `source_kind` after every discovered session is enriched and before `--limit` truncates; a blank
 query is no query, and the normalized query is echoed back so a consumer can tell a filtered
 response from an unfiltered one. Searching therefore reads bounded metadata for the whole
-directory with bounded concurrency; it still stores nothing. OpenCode root-session discovery uses
+directory with bounded concurrency; it still stores nothing. One session whose native evidence
+cannot be read — deleted between discovery and enrichment, or unreadable — keeps its discovered
+identity with unknown `cwd` and `title` instead of failing the whole directory, and is reported as
+a per-provider `session_metadata_unreadable` entry in `source_errors`; a search never hides such a
+session behind an error for every other session. OpenCode root-session discovery uses
 one fixed bound rather than the requested page size, so `total_discovered` means the same thing
 whether or not a query is present. Its nullable, bounded `title` is copied only
 from provider-written title metadata (Codex's session index, Claude's `ai-title`, a Kimi title

@@ -195,6 +195,36 @@ describe("native session sources", () => {
     expect(byProvider.map((item) => item.provider)).toEqual(["kimi"]);
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps one unreadable transcript from failing the whole search",
+    async () => {
+      const brokenId = "770e8400-e29b-41d4-a716-4466554400ff";
+      const brokenPath = path.join(
+        roots.claude, "projects", "-workspace-example", `${brokenId}.jsonl`,
+      );
+      await fsp.copyFile(sourcePaths.claudePath, brokenPath);
+      await fsp.chmod(brokenPath, 0o000);
+      try {
+        const sessions = await discoverNativeSessions({
+          roots, limit: 10, query: "claude",
+        });
+        expect(sessions.total_discovered).toBe(4);
+        expect(sessions.map((item) => item.native_session_id)).toContain(CLAUDE_ID);
+        const broken = sessions.find((item) => item.native_session_id === brokenId);
+        expect(broken).toMatchObject({ provider: "claude", cwd: null, title: null });
+        expect(sessions.source_errors).toEqual([
+          expect.objectContaining({
+            provider: "claude",
+            code: "session_metadata_unreadable",
+          }),
+        ]);
+      } finally {
+        await fsp.chmod(brokenPath, 0o600);
+        await fsp.rm(brokenPath, { force: true });
+      }
+    },
+  );
+
   it("treats a blank query as no query and rejects an unbounded one", async () => {
     const blank = await discoverNativeSessions({ roots, limit: 10, query: "   " });
     expect(blank.query).toBe(null);
