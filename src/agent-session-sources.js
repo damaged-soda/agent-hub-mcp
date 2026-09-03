@@ -431,16 +431,27 @@ function chainedCodexSession(segments, sourceFileCount) {
   return session;
 }
 
-// 根段（无 rollout id）永远在最前，其余按文件名时间戳排序，最后用路径兜底稳定性。
-// 不用 ordinal：resume 会回退 ordinal，compact 会把它重置为 0。
+// 根段（无 rollout id）永远在最前。续写段之间优先比 rollout id：Codex 写的是
+// UUIDv7，前 48 位就是毫秒时间戳，字典序即创建序，且与时区无关。文件名上的时间戳
+// 是本地时间且只到秒，时区变化或同秒连续续写都会让它失序，只作降级依据；路径兜底
+// 稳定性。不用 ordinal：resume 会回退 ordinal，compact 会把它重置为 0。
 function compareCodexSegments(left, right) {
   const leftRank = left.rollout_id === null ? 0 : 1;
   const rightRank = right.rollout_id === null ? 0 : 1;
+  const byRolloutId =
+    isTimeOrderedUuid(left.rollout_id) && isTimeOrderedUuid(right.rollout_id)
+      ? left.rollout_id.localeCompare(right.rollout_id)
+      : 0;
   return (
     leftRank - rightRank ||
+    byRolloutId ||
     String(left.rollout_started_at ?? "").localeCompare(String(right.rollout_started_at ?? "")) ||
     left.source_path.localeCompare(right.source_path)
   );
+}
+
+function isTimeOrderedUuid(value) {
+  return typeof value === "string" && value[14] === "7" && UUID_PATTERN.test(value);
 }
 
 function groupBy(items, keyOf) {

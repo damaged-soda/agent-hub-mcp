@@ -135,9 +135,13 @@ closes the current rollout file and opens another one, named
 the file's own `session_meta` declares; the trailing UUID identifies only that segment. A segment is
 not a copy of the session and not a session of its own: reading only the newest segment loses
 everything before the resume, and reading only the first one stops the session at the point where it
-was resumed. Segments are ordered root-first, then by the rollout timestamp in the file name, then by
-path. Segment order deliberately ignores the native `ordinal` field, which rewinds when a resume
-drops an aborted turn and resets to `0` when a compaction replays the conversation. A session
+was resumed. Segments are ordered root-first, then — between continuation segments — by the rollout
+id when it is a time-ordered UUIDv7, whose leading 48 bits are a millisecond timestamp, so lexical
+order is creation order regardless of time zone. The rollout timestamp in the file name is only a
+fallback: it is local time at second resolution, so a time-zone change or two resumes within one
+second can reorder it. Path order breaks any remaining tie. Segment order deliberately ignores the
+native `ordinal` field, which rewinds when a resume drops an aborted turn and resets to `0` when a
+compaction replays the conversation. A session
 descriptor therefore reports the first segment as its `source_path`, the summed `size_bytes`, the
 first segment's `created_at`, the latest segment's `updated_at`, and the full ordered chain in
 `segments[]` (`source_kind`, `source_path`, `rollout_id`, `size_bytes`, `created_at`, `updated_at`).

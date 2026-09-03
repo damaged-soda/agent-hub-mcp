@@ -762,6 +762,24 @@ describe("native session sources", () => {
     )).rejects.toThrow(/Ambiguous.*conflicting transcript sources/);
   });
 
+  it("orders same-second rollout segments by their time-ordered rollout id", async () => {
+    // 文件名上的时间戳是本地时间且只到秒；同秒续写、或时区变化，都不能决定段序。
+    const dir = path.join(roots.codex, "sessions", "2026", "08", "26");
+    const later = "01a03dca-0000-7000-8000-000000000000";
+    const earlier = "01a03dc9-ffff-7fff-8fff-ffffffffffff";
+    await fsp.copyFile(
+      path.join(fixtureRoot, "codex-transcript-resumed.jsonl"),
+      path.join(dir, `rollout-2026-08-26T12-00-00-${CODEX_ID}_${later}.jsonl`),
+    );
+    await fsp.copyFile(
+      path.join(fixtureRoot, "codex-transcript-resumed.jsonl"),
+      path.join(dir, `rollout-2026-08-26T12-00-00-${CODEX_ID}_${earlier}.jsonl`),
+    );
+
+    const [session] = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
+    expect(session.segments.map((item) => item.rollout_id)).toEqual([null, earlier, later]);
+  });
+
   it("never exposes a Codex rollout id as a session of its own", async () => {
     await writeCodexContinuation();
     const sessions = await discoverNativeSessions({ roots, provider: "codex", limit: 10 });
