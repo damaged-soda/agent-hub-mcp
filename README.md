@@ -55,6 +55,7 @@ sessions, including sessions that were not launched by Agent Hub:
 
 ```sh
 agent-session list --limit 20
+agent-session list --query cockpit --limit 20
 agent-session inspect --provider codex --session-id SESSION_ID --limit 200
 agent-session inspect --provider codex --session-id SESSION_ID --profile inspect --limit 200
 agent-session inspect --provider opencode --session-id SESSION_ID --profile inspect --limit 200

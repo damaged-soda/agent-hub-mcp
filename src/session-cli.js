@@ -24,14 +24,18 @@ async function main(argv = process.argv.slice(2)) {
   }
   const flags = parseFlags(rest);
   if (command === "list") {
-    rejectUnknown(flags, new Set(["provider", "limit"]));
+    rejectUnknown(flags, new Set(["provider", "query", "limit"]));
     const data = await discoverNativeSessions({
       provider: flags.provider,
+      query: flags.query,
       limit: flags.limit,
     });
     printJson({
       api_version: 1,
       kind: "agent-session-list",
+      total_discovered: data.total_discovered,
+      matched: data.matched,
+      ...(data.query === null ? {} : { query: data.query }),
       data,
       ...(data.source_errors?.length > 0 ? { source_errors: data.source_errors } : {}),
     });
@@ -122,7 +126,7 @@ function helpText() {
   return `agent-session — inspect provider-native agent sessions without mutating them
 
 Usage:
-  agent-session list [--provider claude|codex|kimi|opencode] [--limit N]
+  agent-session list [--provider claude|codex|kimi|opencode] [--query TEXT] [--limit N]
   agent-session inspect --provider ID --session-id ID
       [--profile metadata|inspect] [--after N] [--limit N]
   agent-session resolve 'agenthub://session/v1/PROVIDER/SESSION_ID[/event/EVENT_ID]'
@@ -132,7 +136,10 @@ Usage:
 HTTP endpoints: GET /, GET /healthz, GET /api/sessions,
 and GET /api/sessions/PROVIDER/SESSION_ID (all below --base-path when set).
 
-The default inspect profile is metadata. Resolve identifies one copied session reference;
+List --query matches one case-insensitive substring against every discovered session's
+title, cwd, native session id, provider, and source kind before --limit truncates the
+result; total_discovered and matched report the full directory size and the full match
+count. The default inspect profile is metadata. Resolve identifies one copied session reference;
 event references additionally return a bounded inspect diagnostic. Use --profile inspect
 to include visible prompts, assistant text, tool arguments, and tool results when paging
 a session. Thinking blocks are never projected. Commands only read provider-native files;
