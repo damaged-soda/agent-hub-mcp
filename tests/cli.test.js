@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { questionUntilClosed } from "../src/cli.js";
+import { REVIEW_DEPTH_ENV } from "../src/review-context.js";
 
 const CLI_PATH = path.resolve("src/cli.js");
 
@@ -37,6 +38,7 @@ describe("agenthub CLI", () => {
       AGENT_HUB_CWD_ALLOWLIST: workspace,
       CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
+    delete env[REVIEW_DEPTH_ENV];
     internalDispatchHelper = path.join(root, "internal-dispatch.mjs");
     await fsp.writeFile(
       internalDispatchHelper,

@@ -271,6 +271,7 @@ describe("review routing", () => {
   function internal(extra = {}) {
     return {
       configPath,
+      env: { [REVIEW_DEPTH_ENV]: "" },
       listAgents: async () => catalog,
       catalogCache: false,
       ...extra,
