@@ -25,7 +25,10 @@ import {
   installPythonRuntimeCapsule,
   pythonRuntimeCapsuleStatus,
 } from "./eval-runtime.js";
-import { evalToolchainCapsuleStatus } from "./eval-toolchain.js";
+import {
+  evalToolchainCapsuleStatus,
+  writeEvalToolchainCapsuleManifest,
+} from "./eval-toolchain.js";
 
 const HELP = `agenthub — run local coding agents without a resident daemon
 
@@ -41,6 +44,7 @@ Usage:
   agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
   agenthub eval runtime install [--runtime ID]
   agenthub eval runtime status [--runtime ID]
+  agenthub eval toolchain manifest --directory ABSOLUTE_DIR (--json JSON | --json-file FILE)
   agenthub eval toolchain status --toolchain ABSOLUTE_MANIFEST
   agenthub eval run --agent ID --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST | --toolchain ABSOLUTE_MANIFEST] [--cwd DIR] [--suite FILE] [--timeout-ms MS]
   agenthub discussion dispatch (--json JSON | --json-file FILE)
@@ -165,6 +169,42 @@ async function executeEvalToolchain(args) {
   const command = args.shift();
   if (!command || command === "help" || command === "--help" || command === "-h") {
     return { usage: HELP };
+  }
+  if (command === "manifest") {
+    const parsed = parseArgs(args, new Set(["directory", "json", "json-file"]));
+    rejectPositionals(parsed);
+    const input = await requiredRawInput(
+      parsed.options,
+      "Eval toolchain manifest requires --json or --json-file",
+    );
+    const allowed = new Set(["toolchain_id", "platform", "arch", "root", "commands"]);
+    if (Object.keys(input).some((key) => !allowed.has(key))) {
+      throw usageError(
+        "Eval toolchain manifest input accepts only toolchain_id, platform, arch, root, and commands",
+      );
+    }
+    const manifestPath = await writeEvalToolchainCapsuleManifest(
+      required(parsed.options.directory, "--directory is required"),
+      {
+        ...input,
+        platform: input.platform ?? process.platform,
+        arch: input.arch ?? process.arch,
+      },
+    );
+    const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
+    return {
+      status: "written",
+      manifest_path: manifestPath,
+      toolchain: {
+        kind: manifest.kind,
+        toolchain_id: manifest.toolchain_id,
+        content_digest: manifest.content_digest,
+        platform: manifest.platform,
+        arch: manifest.arch,
+        root: manifest.root,
+        commands: manifest.commands,
+      },
+    };
   }
   if (command !== "status") {
     throw usageError(`Unknown eval toolchain command: ${command}`);

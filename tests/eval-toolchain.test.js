@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execute } from "../src/cli.js";
 import {
   EVAL_TOOLCHAIN_CAPSULE_KIND,
   computeEvalToolchainTreeDigest,
@@ -45,6 +46,52 @@ describe("Eval toolchain capsules", () => {
     });
     expect(Object.keys(resolved.commands)).toEqual(["git", "node", "python3"]);
     expect(resolved.content_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("writes an exact manifest through the public CLI before the evaluator seals it", async () => {
+    const directory = path.join(scratch, "cli-manifest");
+    const toolchainRoot = path.join(directory, "toolchain");
+    const executable = path.join(toolchainRoot, "bin", "node");
+    await writeProgram(executable, "node");
+
+    const result = await execute([
+      "eval",
+      "toolchain",
+      "manifest",
+      "--directory",
+      directory,
+      "--json",
+      JSON.stringify({
+        toolchain_id: "cli-toolchain",
+        root: "toolchain",
+        commands: { node: "bin/node" },
+      }),
+    ]);
+
+    const expectedManifest = path.join(await fsp.realpath(directory), "manifest.json");
+    expect(result).toEqual({
+      status: "written",
+      manifest_path: expectedManifest,
+      toolchain: {
+        kind: EVAL_TOOLCHAIN_CAPSULE_KIND,
+        toolchain_id: "cli-toolchain",
+        content_digest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        platform: process.platform,
+        arch: process.arch,
+        root: "toolchain",
+        commands: { node: "bin/node" },
+      },
+    });
+    expect((await fsp.stat(result.manifest_path)).mode & 0o777).toBe(0o600);
+    await expect(resolveEvalToolchainCapsule(result.manifest_path)).resolves.toMatchObject({
+      toolchain_id: "cli-toolchain",
+      commands: { node: await fsp.realpath(executable) },
+    });
+
+    await sealFixture({ manifest: result.manifest_path, toolchainRoot });
+    await expect(resolveEvalToolchainCapsule(result.manifest_path, {}, {
+      require_sealed: true,
+    })).resolves.toMatchObject({ sealed: true });
   });
 
   it("hashes the complete tree and a canonically sorted command map", async () => {
@@ -146,6 +193,25 @@ describe("Eval toolchain capsules", () => {
     await expect(writeEvalToolchainCapsuleManifest(directory, manifestFields({
       commands: { "../node": "bin/node" },
     }))).rejects.toMatchObject({ code: "toolchain_capsule_invalid" });
+  });
+
+  it("never writes a manifest larger than the resolver accepts", async () => {
+    const directory = path.join(scratch, "oversized-manifest");
+    await writeProgram(path.join(directory, "toolchain", "bin", "node"), "node");
+    const commands = Object.fromEntries(
+      Array.from({ length: 512 }, (_, index) => [
+        `command-${String(index).padStart(4, "0")}-${"x".repeat(114)}`,
+        "bin/node",
+      ]),
+    );
+
+    await expect(writeEvalToolchainCapsuleManifest(directory, manifestFields({ commands })))
+      .rejects.toMatchObject({
+        code: "toolchain_capsule_invalid",
+        message: "Eval toolchain capsule manifest must be a small regular file",
+      });
+    await expect(fsp.stat(path.join(directory, "manifest.json")))
+      .rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rejects non-executable commands and command targets outside the root", async () => {

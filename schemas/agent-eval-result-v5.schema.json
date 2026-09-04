@@ -27,6 +27,15 @@
     "schema_version": { "const": 5 },
     "kind": { "const": "agent-eval-run" },
     "eval_run_id": { "type": "string", "format": "uuid" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "eval_run_id"],
+      "properties": {
+        "type": { "const": "eval-result" },
+        "eval_run_id": { "type": "string", "format": "uuid" }
+      }
+    },
     "status": { "const": "completed" },
     "suite": {
       "type": "object",

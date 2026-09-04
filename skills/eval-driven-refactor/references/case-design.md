@@ -86,6 +86,9 @@ sandbox 外执行 capsule 命令，该运行不得作为受控评测。
 `--toolchain` 并位于 subject worktree 及其 Git common dir 外；child 可读的 capsule root 不得与任何 oracle 重叠。运行前移除
 manifest 所在目录、manifest 及整个 capsule tree 的所有写权限位。不要把 token、答案、verifier
 或 known-good 内容打包进 child 可读 capsule。
+评测者组装完 root 后，使用 `agenthub eval toolchain manifest --directory ... --json ...` 让
+Agent Hub 的权威 writer 生成精确 digest；再 seal 并运行 `eval toolchain status`。这个命令不会
+替评测者发现、安装或复制工具。
 
 ## 在模型运行前校准 verifier
 

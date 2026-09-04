@@ -214,7 +214,8 @@ run，不向 child 暴露 suite 路径；标准答案及 verifier preflight 的 
 supervisor 内存，完成后只保留不可反查 control 的 digest。
 model 与 effort 必须由调用者显式指定，不读取 catalog 推荐值或环境默认值。
 
-每个 case 的普通 run 带内部 `execution_profile=workspace-readonly/v1`。该字段不在普通 CLI
+suite schema v1 的每个 case 普通 run 带内部
+`execution_profile=workspace-readonly/v1`。该字段不在普通 CLI
 或 MCP 输入暴露，只由 Eval supervisor 构造；runner 把它交给 Codex adapter，后者使用
 Codex permission profile，而不是旧 `--sandbox`：`:minimal` 提供运行时只读面，
 `:workspace_roots` 只读开放当前 worktree，`.git` 显式 deny，独立 scratch 显式 write，
@@ -273,6 +274,9 @@ fallback。manifest 将安全 command name 映射到 capsule root 内相对 exec
 绑定平台、架构、规范化 identity、排序 command map 与完整 tree。运行时还要求 manifest 父目录、
 manifest 与 root tree 无写位并拒绝 hardlink regular file，且在执行前后复核 identity。这里的
 sealed 是权限位 seal 与 digest 校验，不是内核 immutable mount。
+评测者先自行组装 tree，再通过公开的 `eval toolchain manifest` 薄封装调用权威 writer 计算精确
+digest 并写 manifest；该命令不发现、安装、复制或 seal 工具。随后由评测者去掉写位，`status`
+复核 ready 后才能运行 suite。
 
 v3 supervisor 从固定 capsule、声明 requirements、Codex version 与
 `workspace-write/v2` 生成一个 `eval-capability-plan/v1`。所有声明 argv smoke 在收集 oracle 或

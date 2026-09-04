@@ -53,6 +53,10 @@ capability plan 下的 verifier 拒绝 untouched subject、接受 known-good。�
 配置运行同一评测集：
 
 ```sh
+agenthub eval toolchain manifest \
+  --directory /absolute/path/to/toolchain \
+  --json '{"toolchain_id":"repo-tools","root":"root","commands":{"git":"bin/git","node":"bin/node","python3":"bin/python3"}}'
+chmod -R a-w /absolute/path/to/toolchain
 agenthub eval toolchain status --toolchain /absolute/path/to/toolchain/manifest.json
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
@@ -64,6 +68,8 @@ agenthub eval run --agent codex --cwd "$PWD" \
 命令映射、内容 digest 与 `eval run` 同样的 seal：manifest 所在目录、manifest 与整个 capsule
 tree 都不得有写权限位，普通文件也不得通过硬链接共享 inode。capsule 由评测者预先构建并持有，
 `eval run` 没有 install、host discovery、download 或 fallback 路径。
+`eval toolchain manifest` 只为评测者已经组装好的 root 计算权威 digest 并写 manifest；它
+同样不发现、安装、复制或 seal 工具。先运行它，再去掉整个专用 capsule 目录的写位。
 
 `--model` 和 `--effort` 必须显式传入；Agent Hub 不接受默认值。`--suite` 选择评测者本次固定的
 问题快照，`--timeout-ms` 只在实验预先指定时传入。两侧的 suite、model、effort、timeout、
