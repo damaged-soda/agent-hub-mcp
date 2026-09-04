@@ -805,18 +805,10 @@ server/transport，但共享同一个 manager。MCP stdio 只保留普通 run to
 主持人 DecisionRecord。调用方在材料准备时确定完整 roster；主持人只主持，不邀请成员。
 协议过程中不能追加消息，讨论完成后才能创建继承原 roster 的 follow-up。
 
-主要模块：
-
-| 模块 | 职责 |
-|---|---|
-| `discussion-manager.js` | 生命周期、阶段 deadline、并行 turn、quorum、重试、取消、恢复和 follow-up。 |
-| `discussion-protocol.js` | dispatch 输入、五种结构化输出、大小和引用校验、capability 解析。 |
-| `discussion-store.js` | `discussions/<id>` 事件优先持久化、投影、lease、恢复和 TTL。 |
-| `discussion-materials.js` | inline/file 材料冻结、普通文件校验、hash 和 Git provenance。 |
-| `review-prompts.js` | 版本化 reviewer-control prompt，声明已选 reviewer 和禁止嵌套 review。 |
-| `review-context.js` | review provenance、depth marker 和嵌套 dispatch 防护。 |
-| `discussion-prompts.js` | 版本化 coordinator prompt 和固定 JSON output contract。 |
-| `discussion-render.js` | 从权威 DecisionRecord 确定性渲染 `decision.md`。 |
+完整模块职责见 [Discussion 实现代码结构](discussion-design.md#19-实现代码结构)：
+`discussion-cli.js` / `discussion-worker.js` 启动 `discussion-manager.js` 主链，budget / observability
+提供调度与诊断，store / session registry 保证持久化和 lineage，protocol / materials / prompts /
+render 负责协议输入、冻结上下文和确定性产物。
 
 每场讨论的 `events.jsonl` 是提交记录，`state.json` 是可恢复投影。提交在短时 discussion
 lock 内验证 lease 的 `owner_id + generation`，先 append/fsync 事件，再原子替换投影。

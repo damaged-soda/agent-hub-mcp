@@ -568,7 +568,7 @@ Coordinator 不自动访问 URL 或本地路径判定外部证据真伪；它只
 
 ## 9. 结构化消息
 
-下面是逻辑结构，不是最终 JSON Schema；实现时使用 Zod 定义并带
+下面是逻辑结构，不是最终 JSON Schema；实现使用 Zod 定义并带
 `schema_version`。
 
 ### 9.1 ParticipantMemo
@@ -873,9 +873,8 @@ lease 保证，而不是只靠单个 Discussion controller 自律。
   提前完成时，后续阶段可以在自身 maximum 内使用结余。
 - quick 的绝对截止点仍是 `T0 + 10/13/19/25/30m`，兼容旧版 30 分钟边界；区别只在于
   前序提前完成后允许受限结转。
-- 引入 profile 之前，省略预算的请求隐含使用旧 30 分钟计划；本版本起省略
-  `budget_profile` 会选择 standard，把默认硬上限提升到 60 分钟。需要旧成本/墙钟边界的
-  调用方必须显式选择 quick。
+- 新请求省略 `budget_profile` 时使用 standard，硬上限为 60 分钟；需要 30 分钟成本/墙钟
+  边界的调用方必须显式选择 quick。
 - 阶段截止时取消仍在运行的 runs；首轮按 quorum 决定继续或失败，后续 participant
   阶段按已接受结果继续并降级。主持人阶段截止仍没有合法输出时 Discussion 失败。
 - 重试只能使用当前阶段剩余时间，不能延长 deadline。
@@ -950,7 +949,7 @@ HTTP server process
 either coordinator ──dispatch──> many detached participant runs
 ```
 
-建议职责：
+现有职责：
 
 - `start()`：扫描并恢复非终态 Discussion。
 - `dispatch(request)`：持久化请求并触发执行。
@@ -1106,32 +1105,32 @@ Discussion 与 run 是平级资源。Discussion 只引用 `run_ref`，不复制�
 
 ### 14.3 events.jsonl
 
-事件采用 append-only JSONL。候选事件类型包括：
+事件采用 append-only JSONL。当前 coordinator append 的事件类型包括：
 
 - `discussion.created`
 - `materials.frozen`
+- `discussion.started`
 - `phase.started`
 - `turn.dispatch_requested`
 - `turn.dispatched`
 - `turn.skipped`
-- `turn.completed`
 - `turn.late`
 - `turn.failed`
 - `participant.memo.accepted`
 - `challenge.response.accepted`
 - `participant.revision.accepted`
-- `external_evidence.recorded`
-- `external_evidence.status_changed`
 - `moderation.plan.accepted`
 - `decision.accepted`
-- `session.resumed`
-- `session.rebuilt`
-- `session.tainted`
+- `session.updated`
 - `discussion.cancel_requested`
 - `discussion.recovered`
 - `discussion.completed`
 - `discussion.failed`
 - `discussion.cancelled`
+
+`external_evidence.recorded` 和 `external_evidence.status_changed` 是公开事件 allowlist 中的
+兼容/预留名称，当前 coordinator 不 append；外部证据及其 verdict 随对应的已接受 turn
+payload 持久化。
 
 提交严格采用 event-first：在 discussion lock 内验证 lease generation 和 sequence，
 追加完整事件并 fsync，然后根据事件计算投影并原子替换 `state.json`，最后释放锁。

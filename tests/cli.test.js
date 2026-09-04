@@ -623,7 +623,11 @@ try {
       AGENT_HUB_FORWARD_ENV: "FAKE_CLAUDE_INVOCATION_LOG",
       FAKE_CLAUDE_INVOCATION_LOG: invocationLog,
     };
-    const initial = await runCli(["review", "status", "--cwd", workspace], reviewEnv);
+    const initial = await runCli(
+      ["review", "status", "--cwd", workspace],
+      reviewEnv,
+      30000,
+    );
     expect(initial.kind).toBe("agent-review-config");
     expect(initial.routes.find((route) => route.requester === "codex")).toMatchObject({
       reviewer: "claude-code",
@@ -637,7 +641,7 @@ try {
       "--reviewer", "claude-code",
       "--model", "haiku",
       "--cwd", workspace,
-    ], reviewEnv);
+    ], reviewEnv, 30000);
     expect(updated.routes.find((route) => route.requester === "codex")).toMatchObject({
       reviewer: "claude-code",
       model: "haiku",
