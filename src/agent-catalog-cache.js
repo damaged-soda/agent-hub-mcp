@@ -25,8 +25,8 @@ const REFRESH_WORKER_PATH = fileURLToPath(
 );
 
 // Only non-secret routing/configuration identity participates in the key. Credential values are
-// deliberately excluded: status may be briefly stale after an account change, while set/dispatch
-// still perform live validation.
+// deliberately excluded: status may be briefly stale after an account change. Review set still
+// performs live validation; review dispatch does not read this catalog.
 const CACHE_IDENTITY_ENV_KEYS = Object.freeze([
   "AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE",
   "AGENT_HUB_FORWARD_ENV",
