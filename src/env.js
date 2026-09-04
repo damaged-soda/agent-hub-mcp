@@ -54,6 +54,13 @@ const DEFAULT_AGENT_ENV_KEYS = new Set([
   "XDG_DATA_HOME",
 ]);
 
+// Runner-only configuration must never reach an agent child, even when a caller
+// accidentally names it in AGENT_HUB_FORWARD_ENV.
+const NEVER_FORWARD_AGENT_ENV_KEYS = new Set([
+  "AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+]);
+
 // Namespace：agent-hub 不解析、不推导、不清洗。会话轴状态（NS / NS_UNDO / PATH /
 // GH_CONFIG_DIR / BASH_ENV）**整体**转发，runner 置 NS_REBIND=1 并经 zsh 把 agent 起在
 // run 的 cwd：~/.zshenv 的 glue（charter ns-resolve）先按 NS_UNDO 卸掉继承的域（同域也
@@ -69,7 +76,7 @@ export function buildAgentEnv(source = process.env) {
   }
 
   for (const key of forwardedEnvKeys(source.AGENT_HUB_FORWARD_ENV)) {
-    if (typeof source[key] === "string") {
+    if (!NEVER_FORWARD_AGENT_ENV_KEYS.has(key) && typeof source[key] === "string") {
       env[key] = source[key];
     }
   }

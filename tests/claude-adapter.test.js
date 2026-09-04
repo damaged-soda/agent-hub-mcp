@@ -1,6 +1,10 @@
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeCommand,
+  getClaudeModelCatalog,
   interpretClaudeExit,
   parseClaudeModelCatalog,
   parseClaudeJson,
@@ -9,6 +13,68 @@ import {
 } from "../src/claude-adapter.js";
 
 describe("claude adapter", () => {
+  it("uses the private setup-token source for model discovery", async () => {
+    let root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-claude-catalog-test-"));
+    root = await fsp.realpath(root);
+    try {
+      const bin = path.join(root, "bin");
+      const tokenFile = path.join(root, "setup-token");
+      await fsp.mkdir(bin);
+      await fsp.writeFile(tokenFile, "catalog-oauth-token\n", { mode: 0o600 });
+      await fsp.chmod(tokenFile, 0o600);
+      await fsp.writeFile(
+        path.join(bin, "claude"),
+        `#!/usr/bin/env node
+let input = "";
+process.stdin.on("data", (chunk) => { input += chunk; });
+process.stdin.on("end", () => {
+  const request = JSON.parse(input.trim());
+  const authOk = process.env.CLAUDE_CODE_OAUTH_TOKEN === "catalog-oauth-token" &&
+    process.env.ANTHROPIC_API_KEY === undefined &&
+    process.env.ANTHROPIC_BASE_URL === undefined &&
+    process.env.CLAUDE_CODE_USE_BEDROCK === undefined;
+  if (!authOk) process.exit(17);
+  process.stdout.write(JSON.stringify({
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: request.request_id,
+      response: { models: [{ value: "opus", resolvedModel: "claude-opus-test" }] },
+    },
+  }) + "\\n");
+});
+`,
+        { mode: 0o755 },
+      );
+      await fsp.chmod(path.join(bin, "claude"), 0o755);
+
+      const catalog = await getClaudeModelCatalog({
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+          ANTHROPIC_API_KEY: "wrong-api-key",
+          ANTHROPIC_BASE_URL: "https://wrong.invalid",
+          CLAUDE_CODE_USE_BEDROCK: "1",
+        },
+        credential_env: {
+          AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE: tokenFile,
+        },
+      });
+
+      expect(catalog).toEqual({
+        models: [{
+          id: "opus",
+          display_name: "opus",
+          resolved_id: "claude-opus-test",
+        }],
+        model_discovery: { status: "available", source: "claude-code-control" },
+      });
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("normalizes the selectable model catalog from a control response", () => {
     const requestId = "models-1";
     const models = parseClaudeModelCatalog(

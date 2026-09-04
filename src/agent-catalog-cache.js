@@ -28,6 +28,7 @@ const REFRESH_WORKER_PATH = fileURLToPath(
 // deliberately excluded: status may be briefly stale after an account change, while set/dispatch
 // still perform live validation.
 const CACHE_IDENTITY_ENV_KEYS = Object.freeze([
+  "AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE",
   "AGENT_HUB_FORWARD_ENV",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
@@ -187,6 +188,7 @@ export function buildRefreshWorkerEnv(source = process.env) {
   const env = buildAgentEnv(source);
   for (const key of [
     "AGENT_HUB_CATALOG_CACHE_DIR",
+    "AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE",
     "AGENT_HUB_CWD_ALLOWLIST",
     "AGENT_HUB_RUN_DIR",
   ]) {

@@ -55,9 +55,18 @@ export async function listAgents(input = {}, internal = {}) {
   if (input?.cwd !== undefined) {
     ({ cwd } = await validateRequestPaths(input.cwd));
   }
-  const env = buildAgentEnv(internal.env ?? process.env);
+  const sourceEnv = internal.env ?? process.env;
+  const env = buildAgentEnv(sourceEnv);
   const described = await Promise.all(
-    allAdapters().map((adapter) => adapter.listAgent({ cwd, env })),
+    allAdapters().map((adapter) => adapter.listAgent({
+      cwd,
+      env,
+      credential_env: Object.fromEntries(
+        (adapter.credentialEnvKeys ?? []).flatMap((key) =>
+          typeof sourceEnv[key] === "string" ? [[key, sourceEnv[key]]] : [],
+        ),
+      ),
+    })),
   );
   return {
     agents: described.filter((agent) => agent.available),
@@ -552,7 +561,7 @@ function normalizeInternalRetention(internal) {
 
 function buildRunnerEnv(source) {
   const env = buildAgentEnv(source);
-  for (const key of ["AGENT_HUB_RUN_DIR"]) {
+  for (const key of ["AGENT_HUB_RUN_DIR", "AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE"]) {
     if (typeof source[key] === "string") env[key] = source[key];
   }
   return env;

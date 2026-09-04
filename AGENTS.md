@@ -19,6 +19,7 @@ Key files:
 | `src/birth-command.js` | Shared cwd-bound zsh birth launcher and private post-birth environment handoff. |
 | `src/adapters.js` | Adapter registry keyed by `agent_id`. |
 | `src/claude-adapter.js` | Claude Code argv/session/result mapping. |
+| `src/claude-auth.js` | Secure runner-only Claude setup-token file loading and launch overlay. |
 | `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
 | `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/opencode-adapter.js` | OpenCode argv/session/result/model-catalog mapping. |
@@ -98,6 +99,7 @@ Use Node.js 20 or newer. Prefer `agenthub`; `npm start` and streamable HTTP are 
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra env keys forwarded to the agent CLI. |
 | `AGENT_HUB_CATALOG_CACHE_DIR` | Override the private cross-process catalog cache used by `review status`. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default model for Claude runs. |
+| `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` | Absolute 0600 setup-token file read only for Claude runs. |
 | `AGENT_HUB_CODEX_MODEL` | Default model for Codex runs. |
 | `AGENT_HUB_CLAUDE_EFFORT` | Default effort for Claude runs. |
 | `AGENT_HUB_CODEX_EFFORT` | Default effort for Codex runs. |

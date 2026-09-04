@@ -126,6 +126,108 @@ try {
     expect(command.launcher.slice(3)).toEqual(command.argv);
   });
 
+  it("injects a setup-token after zsh birth without exposing it to artifacts or Codex", async () => {
+    const token = "unit-test-long-lived-oauth-token";
+    let tokenFile = path.join(root, "claude-setup-token");
+    const zdot = path.join(root, "auth-zdot");
+    await fsp.mkdir(zdot);
+    await fsp.writeFile(tokenFile, `${token}\n`, { mode: 0o600 });
+    await fsp.chmod(tokenFile, 0o600);
+    tokenFile = await fsp.realpath(tokenFile);
+    await fsp.writeFile(
+      path.join(zdot, ".zshenv"),
+      "unset CLAUDE_CODE_OAUTH_TOKEN\n" +
+        "export ANTHROPIC_API_KEY=wrong-api-key\n" +
+        "export ANTHROPIC_AUTH_TOKEN=wrong-auth-token\n" +
+        "export ANTHROPIC_BASE_URL=https://wrong.invalid\n" +
+        "export CLAUDE_CODE_OAUTH_REFRESH_TOKEN=wrong-refresh\n" +
+        "export CLAUDE_CODE_OAUTH_SCOPES=wrong-scope\n" +
+        "export CLAUDE_CODE_USE_BEDROCK=1\n" +
+        "export CLAUDE_CODE_USE_VERTEX=1\n" +
+        "export CLAUDE_CODE_USE_FOUNDRY=1\n",
+    );
+    const authEnv = {
+      ...env,
+      ZDOTDIR: zdot,
+      AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE: tokenFile,
+      CLAUDE_CODE_OAUTH_TOKEN: "stale-caller-token",
+      AGENT_HUB_FORWARD_ENV:
+        "ZDOTDIR,AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE,CLAUDE_CODE_OAUTH_TOKEN",
+    };
+
+    const accepted = await runCli(
+      ["dispatch", "--agent", "claude-code", "--cwd", workspace, "--prompt", "dump-auth-env"],
+      authEnv,
+    );
+    const completed = await runCli(
+      ["wait", accepted.run_ref.run_id, "--timeout-ms", "10000"],
+      authEnv,
+    );
+    expect(completed.status).toBe("completed");
+    expect(JSON.parse(completed.content[0].text)).toEqual({
+      oauth_matches: true,
+      oauth_file: null,
+      anthropic_api_key: null,
+      anthropic_auth_token: null,
+      anthropic_base_url: null,
+      oauth_refresh_token: null,
+      oauth_scopes: null,
+      bedrock: null,
+      vertex: null,
+      foundry: null,
+      internal_keys: [],
+    });
+
+    const runPath = path.join(env.AGENT_HUB_RUN_DIR, accepted.run_ref.run_id);
+    const artifactBodies = await Promise.all(
+      (await fsp.readdir(runPath)).map(async (name) => {
+        const target = path.join(runPath, name);
+        return (await fsp.stat(target)).isFile() ? fsp.readFile(target, "utf8") : "";
+      }),
+    );
+    expect(artifactBodies.join("\n")).not.toContain(token);
+    expect(artifactBodies.join("\n")).not.toContain(tokenFile);
+
+    const codexAccepted = await runCli(
+      ["dispatch", "--agent", "codex", "--cwd", workspace, "--prompt", "dump-auth-env"],
+      authEnv,
+    );
+    const codexCompleted = await runCli(
+      ["wait", codexAccepted.run_ref.run_id, "--timeout-ms", "10000"],
+      authEnv,
+    );
+    expect(codexCompleted.status).toBe("completed");
+    expect(JSON.parse(codexCompleted.content[0].text)).toEqual({
+      oauth_token: null,
+      oauth_file: null,
+    });
+  }, 15000);
+
+  it("fails before spawning Claude when the configured token file is not private", async () => {
+    const tokenFile = path.join(root, "loose-claude-setup-token");
+    await fsp.writeFile(tokenFile, "unit-test-secret\n", { mode: 0o644 });
+    await fsp.chmod(tokenFile, 0o644);
+    const accepted = await runCli(
+      ["dispatch", "--agent", "claude-code", "--cwd", workspace, "--prompt", "review this"],
+      { ...env, AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE: tokenFile },
+    );
+    const failed = await runCli(
+      ["wait", accepted.run_ref.run_id, "--timeout-ms", "10000"],
+      env,
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toMatchObject({
+      code: "claude_oauth_token_file_invalid",
+      retryable: false,
+    });
+    await expect(fsp.stat(path.join(
+      env.AGENT_HUB_RUN_DIR,
+      accepted.run_ref.run_id,
+      "command.json",
+    ))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("prepends execution-profile runtime paths after zsh birth without leaking the handoff value", async () => {
     const runtimeA = path.join(root, "runtime-a");
     const runtimeB = path.join(root, "runtime-b");
@@ -578,7 +680,7 @@ try {
     expect(JSON.parse(contextCompleted.content[0].text)).toEqual({
       depth: "1",
     });
-  }, 15000);
+  }, 60000);
 
   it("runs a durable discussion from a detached CLI worker", async () => {
     const staleCommandDir = path.join(
@@ -918,6 +1020,21 @@ process.stdin.on("end", async () => {
   if (input.trim() === "dump-env2") {
     result = JSON.stringify({ NS: process.env.NS ?? null, DA_FLAG: process.env.DA_FLAG ?? null, DB_FLAG: process.env.DB_FLAG ?? null, NS_REBIND: process.env.NS_REBIND ?? null, PATH: process.env.PATH ?? "" });
   }
+  if (input.trim() === "dump-auth-env") {
+    result = JSON.stringify({
+      oauth_matches: process.env.CLAUDE_CODE_OAUTH_TOKEN === "unit-test-long-lived-oauth-token",
+      oauth_file: process.env.AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE ?? null,
+      anthropic_api_key: process.env.ANTHROPIC_API_KEY ?? null,
+      anthropic_auth_token: process.env.ANTHROPIC_AUTH_TOKEN ?? null,
+      anthropic_base_url: process.env.ANTHROPIC_BASE_URL ?? null,
+      oauth_refresh_token: process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN ?? null,
+      oauth_scopes: process.env.CLAUDE_CODE_OAUTH_SCOPES ?? null,
+      bedrock: process.env.CLAUDE_CODE_USE_BEDROCK ?? null,
+      vertex: process.env.CLAUDE_CODE_USE_VERTEX ?? null,
+      foundry: process.env.CLAUDE_CODE_USE_FOUNDRY ?? null,
+      internal_keys: Object.keys(process.env).filter((key) => key.startsWith("AGENT_HUB_INTERNAL_")),
+    });
+  }
   if (input.includes("AGENT_HUB_REVIEW_PROTOCOL_V1")) {
     if (input.includes("dump-review-context")) {
       result = JSON.stringify({
@@ -958,8 +1075,9 @@ if (args.includes("--version")) {
 let input = "";
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
-  const result = input.trim() === "dump-path-handoff"
-    ? JSON.stringify({
+  let result = "fake codex result: " + input;
+  if (input.trim() === "dump-path-handoff") {
+    result = JSON.stringify({
         path: process.env.PATH ?? "",
         path_after_zsh: process.env.PATH_AFTER_ZSH ?? null,
         tmp_after_zsh: process.env.TMP_AFTER_ZSH ?? null,
@@ -968,8 +1086,14 @@ process.stdin.on("end", () => {
         temp: process.env.TEMP ?? null,
         internal_path_prepend: process.env.AGENT_HUB_INTERNAL_PATH_PREPEND ?? null,
         internal_keys: Object.keys(process.env).filter((key) => key.startsWith("AGENT_HUB_INTERNAL_")),
-      })
-    : "fake codex result: " + input;
+      });
+  }
+  if (input.trim() === "dump-auth-env") {
+    result = JSON.stringify({
+      oauth_token: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
+      oauth_file: process.env.AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE ?? null,
+    });
+  }
   const events = [
     { type: "thread.started", thread_id: "019f38ae-357d-7db3-89fb-670f88316240" },
     { type: "turn.started" },

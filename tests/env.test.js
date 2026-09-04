@@ -60,6 +60,20 @@ describe("agent environment", () => {
     expect(env).toMatchObject({ AGENT_HUB_REVIEW_DEPTH: "1" });
   });
 
+  it("never forwards Claude setup-token material through the common agent environment", () => {
+    const env = buildAgentEnv({
+      AGENT_HUB_FORWARD_ENV:
+        "AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE,CLAUDE_CODE_OAUTH_TOKEN,SAFE_PROFILE",
+      AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE: "/private/setup-token",
+      CLAUDE_CODE_OAUTH_TOKEN: "secret",
+      SAFE_PROFILE: "profile",
+    });
+
+    expect(env.AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.SAFE_PROFILE).toBe("profile");
+  });
+
   it("omits namespace keys that were explicitly cleared from command metadata", () => {
     expect(currentEnvKeys({ PATH: "/bin", NS: undefined, CLAUDE_CONFIG_DIR: undefined })).toEqual([
       "PATH",
