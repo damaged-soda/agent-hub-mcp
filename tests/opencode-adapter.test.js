@@ -1,7 +1,7 @@
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenCodeCommand,
   createOpenCodeSessionRef,
@@ -12,6 +12,7 @@ import {
   parseOpenCodeModelCatalog,
   parseOpenCodeStdout,
   parseOpenCodeVersion,
+  runOpenCodeAvailabilityProbe,
 } from "../src/opencode-adapter.js";
 
 const SESSION_ID = "ses_fb85c573bffepZtC0aqhSb265B";
@@ -50,6 +51,107 @@ describe("opencode version probe", () => {
       "--variant",
       "--auto",
     ]);
+  });
+
+  it.each(["version", "help"])(
+    "retries only the %s command once when it times out",
+    async (timedOutCommand) => {
+      const timeout = {
+        code: null,
+        signal: "SIGKILL",
+        error: new Error("Timed out after 15000ms"),
+        stdout: "",
+        stderr: "",
+      };
+      const versionSuccess = {
+        code: 0,
+        signal: null,
+        stdout: "1.18.25\n",
+        stderr: "",
+      };
+      const helpSuccess = {
+        code: 0,
+        signal: null,
+        stdout: "--format --session --model --variant --auto",
+        stderr: "",
+      };
+      const runVersion = vi
+        .fn()
+        .mockResolvedValueOnce(timedOutCommand === "version" ? timeout : versionSuccess)
+        .mockResolvedValueOnce(versionSuccess);
+      const runHelp = vi
+        .fn()
+        .mockResolvedValueOnce(timedOutCommand === "help" ? timeout : helpSuccess)
+        .mockResolvedValueOnce(helpSuccess);
+      const wait = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        runOpenCodeAvailabilityProbe({ runVersion, runHelp, wait }),
+      ).resolves.toEqual({ result: versionSuccess, help: helpSuccess });
+
+      expect(runVersion).toHaveBeenCalledTimes(timedOutCommand === "version" ? 2 : 1);
+      expect(runVersion).toHaveBeenNthCalledWith(1, "opencode", ["--version"], 15000);
+      if (timedOutCommand === "version") {
+        expect(runVersion).toHaveBeenNthCalledWith(2, "opencode", ["--version"], 15000);
+      }
+      expect(runHelp).toHaveBeenCalledTimes(timedOutCommand === "help" ? 2 : 1);
+      expect(runHelp).toHaveBeenNthCalledWith(1, "opencode", ["run", "--help"], {
+        timeoutMs: 15000,
+      });
+      if (timedOutCommand === "help") {
+        expect(runHelp).toHaveBeenNthCalledWith(2, "opencode", ["run", "--help"], {
+          timeoutMs: 15000,
+        });
+      }
+      expect(wait).toHaveBeenCalledOnce();
+      expect(wait).toHaveBeenCalledWith(100);
+    },
+  );
+
+  it("does not retry a non-timeout probe failure", async () => {
+    const versionFailure = {
+      code: null,
+      signal: null,
+      error: new Error("spawn opencode ENOENT"),
+      stdout: "",
+      stderr: "",
+    };
+    const helpSuccess = {
+      code: 0,
+      signal: null,
+      stdout: "--format --session --model --variant --auto",
+      stderr: "",
+    };
+    const runVersion = vi.fn().mockResolvedValue(versionFailure);
+    const runHelp = vi.fn().mockResolvedValue(helpSuccess);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      runOpenCodeAvailabilityProbe({ runVersion, runHelp, wait }),
+    ).resolves.toEqual({ result: versionFailure, help: helpSuccess });
+    expect(runVersion).toHaveBeenCalledOnce();
+    expect(runHelp).toHaveBeenCalledOnce();
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("stops after one retry when the probe keeps timing out", async () => {
+    const timeout = {
+      code: null,
+      signal: "SIGKILL",
+      error: new Error("Timed out after 15000ms"),
+      stdout: "",
+      stderr: "",
+    };
+    const runVersion = vi.fn().mockResolvedValue(timeout);
+    const runHelp = vi.fn().mockResolvedValue(timeout);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      runOpenCodeAvailabilityProbe({ runVersion, runHelp, wait }),
+    ).resolves.toEqual({ result: timeout, help: timeout });
+    expect(runVersion).toHaveBeenCalledTimes(2);
+    expect(runHelp).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledOnce();
   });
 });
 

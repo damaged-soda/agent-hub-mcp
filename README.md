@@ -178,20 +178,22 @@ agenthub review dispatch --requester codex --cwd "$PWD" \
 self-review, and atomically stores overrides in
 `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. With no override, Codex uses
 Claude Code's `default` model (currently resolved by Claude Code to Opus 5); Claude Code and Kimi
-Code use Codex `gpt-5.6-sol`. `review dispatch` revalidates the configured route and fails
-instead of silently falling back when either the reviewer or model is unavailable. It wraps the
-request in the versioned reviewer-control prompt so the selected reviewer performs the review
-directly and does not dispatch another review; the original request remains embedded verbatim.
-Its response is the ordinary detached run response, so waiting and inspection remain unchanged.
-This routed command is not a default for a review request merely because a PR, diff, or change is
-mentioned.
+Code use Codex `gpt-5.6-sol`. `review dispatch` reads the configured route and hands its reviewer
+and model directly to the ordinary detached-run path without performing model-catalog discovery.
+The target CLI is authoritative if a saved model has since disappeared: dispatch still returns the
+ordinary run response, and `wait` reports any resulting provider failure. Agent Hub never silently
+falls back. The command wraps the request in the versioned reviewer-control prompt so the selected
+reviewer performs the review directly and does not dispatch another review; the original request
+remains embedded verbatim. This routed command is not a default for a review request merely because
+a PR, diff, or change is mentioned.
 
 `review status` keeps its normalized Agent/model catalog in a private cross-process cache under
 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. A catalog is fresh for five minutes;
 for the next 24 hours status returns it immediately and starts one detached refresh. The first
 request and catalogs older than 24 hours still discover synchronously. Refresh failure preserves
-the last catalog and is surfaced in `catalog_cache`; `review set` and `review dispatch` always use
-live discovery, so the display cache never weakens route validation.
+the last catalog and is surfaced in `catalog_cache`. `review set` always uses live discovery;
+`review dispatch` neither reads this display cache nor triggers model discovery. A route's
+`available` field is therefore a status snapshot, not a dispatch gate.
 
 Every CLI invocation inherits the caller's login, environment, and macOS Keychain context. The dispatch command exits after creating a detached runner; later `query`, `wait`, and `cancel` commands reopen the same private on-disk state, so no Agent Hub daemon has to remain alive.
 

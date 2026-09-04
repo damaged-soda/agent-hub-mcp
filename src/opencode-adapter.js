@@ -16,6 +16,8 @@ export const OPENCODE_DISCUSSION_CAPABILITIES = Object.freeze({
 });
 
 const AVAILABILITY_CACHE_MS = 30000;
+const AVAILABILITY_PROBE_TIMEOUT_MS = 15000;
+const AVAILABILITY_RETRY_DELAY_MS = 100;
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_OPENCODE_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_OPENCODE_EFFORT";
 const MODEL_DISCOVERY_SOURCE = "opencode-models";
@@ -59,10 +61,7 @@ export async function getOpenCodeAvailability() {
   ) {
     return availabilityCache.value;
   }
-  const [result, help] = await Promise.all([
-    runVersionCommand("opencode", ["--version"], 5000),
-    runCommand("opencode", ["run", "--help"], { timeoutMs: 5000 }),
-  ]);
+  const { result, help } = await runOpenCodeAvailabilityProbe();
   const version = parseOpenCodeVersion(result.stdout, result.stderr);
   const missingFlags = missingOpenCodeRunFlags(help.stdout, help.stderr);
   let value;
@@ -92,6 +91,45 @@ export async function getOpenCodeAvailability() {
   }
   availabilityCache = { checkedAtMs: Date.now(), value };
   return value;
+}
+
+export async function runOpenCodeAvailabilityProbe({
+  runVersion = runVersionCommand,
+  runHelp = runCommand,
+  wait = sleep,
+} = {}) {
+  const probe = async () => {
+    const [result, help] = await Promise.all([
+      runVersion("opencode", ["--version"], AVAILABILITY_PROBE_TIMEOUT_MS),
+      runHelp("opencode", ["run", "--help"], {
+        timeoutMs: AVAILABILITY_PROBE_TIMEOUT_MS,
+      }),
+    ]);
+    return { result, help };
+  };
+
+  const first = await probe();
+  const retryVersion = isCommandTimeout(first.result);
+  const retryHelp = isCommandTimeout(first.help);
+  if (!retryVersion && !retryHelp) {
+    return first;
+  }
+  await wait(AVAILABILITY_RETRY_DELAY_MS);
+  const [result, help] = await Promise.all([
+    retryVersion
+      ? runVersion("opencode", ["--version"], AVAILABILITY_PROBE_TIMEOUT_MS)
+      : first.result,
+    retryHelp
+      ? runHelp("opencode", ["run", "--help"], {
+          timeoutMs: AVAILABILITY_PROBE_TIMEOUT_MS,
+        })
+      : first.help,
+  ]);
+  return { result, help };
+}
+
+function isCommandTimeout(result) {
+  return result?.error?.message === `Timed out after ${AVAILABILITY_PROBE_TIMEOUT_MS}ms`;
 }
 
 export function parseOpenCodeVersion(stdout, stderr) {

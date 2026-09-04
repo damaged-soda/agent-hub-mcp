@@ -124,7 +124,9 @@ The first status call discovers every local CLI. Later processes read the privat
 entries are fresh for five minutes, then served stale for up to 24 hours while one detached worker
 refreshes them. Inspect the top-level `catalog_cache` field to distinguish `fresh`, `stale`,
 `refreshed`, and `uncached`; a failed refresh keeps the last catalog and waits 60 seconds before
-retrying. `review set` and `review dispatch` bypass the display cache and validate live.
+retrying. `review set` bypasses the display cache and validates live. `review dispatch` reads the
+saved route without consulting or refreshing the catalog. Treat `routes[].available` as a status
+snapshot rather than a dispatch gate.
 
 Change a route through the validated CLI; Cockpit's Agent page calls this same command rather than
 writing the file directly:
@@ -137,8 +139,10 @@ agenthub review set --requester codex --reviewer kimi-code \
 The supported requester IDs are `codex`, `claude-code`, and `kimi-code`. Reviewer and
 model must appear together in the current `agenthub agents` result, and reviewer must differ from
 requester. OpenCode remains selectable as a reviewer; it is not a requester until the machine-level
-instruction discovery chain covers it. Selecting the built-in default pair removes that requester's stored override. Corrupt
-configuration, missing reviewers, and removed models remain explicit errors.
+instruction discovery chain covers it. Selecting the built-in default pair removes that requester's
+stored override. Corrupt configuration remains a synchronous error. An unavailable reviewer CLI
+fails dispatch synchronously; a model removed after configuration fails the created run. Neither case
+falls back.
 
 After one of the routed-review conditions above, agents dispatch through the route and keep the returned
 run ID:
@@ -152,6 +156,8 @@ agenthub wait RUN_ID
 Review dispatch supplies the configured model as unified metadata and otherwise preserves the
 ordinary detached-run contract. It wraps the original request in the versioned reviewer-control
 prompt, records review provenance, and rejects nested review dispatch from the selected reviewer.
+It does not query the model catalog: if a saved model is no longer accepted, the target CLI fails
+the created run and `agenthub wait` reports that terminal error. No fallback is selected.
 
 The server only accepts literal `127.0.0.1` or `::1` binds. To admit one private reverse-proxy
 origin and mount the complete surface below a path, restart it with
