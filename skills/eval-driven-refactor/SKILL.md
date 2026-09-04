@@ -26,15 +26,23 @@ description: 使用 Agent Hub 为仓库结构重构设计、运行和解读受�
 重构结果反向调题。可以复制仓库样例并在评测者侧修改或类推，再把选定 suite 同时用于两侧。
 记录 baseline 与 candidate commit，以及必须保持一致的 agent、model、effort、timeout、评测集
 digest、CLI 版本和隔离策略。
-代码修改题还要预先选定同一个 Eval runtime capsule，并把两侧结果中的 `toolchain.content_digest`
-列为硬性控制变量。
+代码修改题优先使用 suite schema v3：预先选定同一个 evaluator-owned
+`eval-toolchain-capsule/v1`，并把两侧结果中的 `toolchain.content_digest`、
+`capability_plan.contract_digest` 列为硬性控制变量。这个 capsule 必须通过绝对 manifest 路径提供，
+位于被测 worktree 及其 Git common dir 外，并在运行前用权限位密封；Agent Hub 不会从宿主发现、复制、下载或回退任何
+工具。
 
-受控重构的代码修改 suite 必须启用
-`verifier_preflight: "subject-reject-known-good-pass/v1"`。在启动任何模型前，先由独立视角审阅
+`source-location` suite v1 仍是定位题的当前协议；patch suite v2、
+`python-runtime-capsule/v1` 与 result v1-v4 仍保持原有语义，供既有 patch 实验兼容使用。
+
+新的受控重构代码修改 suite 必须启用
+`verifier_preflight: "subject-reject-known-good-pass/v2"`，并用 `toolchain_requirements` 声明
+会实际消费的命令及 smoke argv。在启动任何模型前，先由独立视角审阅
 verifier，并以至少一个代表性 partial-bad mutation 确认它会拒绝关键的半成品；再准备每题
 clean、committed、same-repository、descends-from-subject 的 known-good worktree。Agent Hub
-内建 preflight 只证明同一 verifier 会拒绝 untouched subject、接受 known-good，并且能在固定 runtime 下执行；它不能证明
-断言完整或 subject 是因预期理由失败。
+先在最终 `workspace-write/v2` capability profile 中执行所有声明 smoke，再让同一 Codex sandbox
+capability plan 下的 verifier 拒绝 untouched subject、接受 known-good。内建 preflight 不能证明
+断言完整、subject 是因预期理由失败，或任意动态依赖已经形成静态闭包。
 
 编写或修改用例时读取 [references/case-design.md](references/case-design.md)。定位题和代码修改题
 必须分属不同评测集，因为对应的 Agent Hub schema 不能混用。
@@ -45,23 +53,28 @@ clean、committed、same-repository、descends-from-subject 的 known-good workt
 配置运行同一评测集：
 
 ```sh
-agenthub eval runtime install --runtime default
-agenthub eval runtime status --runtime default
+agenthub eval toolchain status --toolchain /absolute/path/to/toolchain/manifest.json
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
   --model gpt-5.6-sol --effort medium \
-  --runtime default
+  --toolchain /absolute/path/to/toolchain/manifest.json
 ```
 
+以上命令针对推荐的 schema v3 patch suite。`eval toolchain status` 会检查 manifest、平台、
+命令映射、内容 digest 与 `eval run` 同样的 seal：manifest 所在目录、manifest 与整个 capsule
+tree 都不得有写权限位，普通文件也不得通过硬链接共享 inode。capsule 由评测者预先构建并持有，
+`eval run` 没有 install、host discovery、download 或 fallback 路径。
+
 `--model` 和 `--effort` 必须显式传入；Agent Hub 不接受默认值。`--suite` 选择评测者本次固定的
-问题快照，`--timeout-ms` 只在实验预先指定时传入。Patch Eval 的 runtime 必须在实验开始前显式
-provision；`eval run` 不会下载或回退宿主 Python。两侧的 suite、model、effort、timeout 与
-runtime content digest 必须完全一致。分别为两个 commit 输入当时正确的标准答案：重构可能合理地移动权威路径、symbol 或
+问题快照，`--timeout-ms` 只在实验预先指定时传入。两侧的 suite、model、effort、timeout、
+toolchain content digest 与 capability contract digest 必须完全一致。分别为两个 commit 输入当时
+正确的标准答案：重构可能合理地移动权威路径、symbol 或
 定义行，只要任务语义没有变化。代码修改题两侧必须使用语义相同的 verifier 与 preflight
 policy；按 TTY 提示为每个 case 输入 verifier 和 known-good worktree。Agent Hub 会先完成整套
-双向 preflight，再启动第一条 agent run。成功的 patch 结果应为 schema v4、grader
-`workspace-patch/v2`；结果只保存 opaque preflight binding，known-good 的 path、commit、内容与
-verifier 输出均不得出现。
+toolchain smoke 和双向 verifier preflight，再启动第一条 agent run。成功的 v3 patch 结果应为
+schema v5、grader `workspace-patch/v3`，包含已通过的 `eval-capability-plan/v1`；结果只保存 capability
+与 preflight 的 opaque binding，subject `cwd`、artifact storage path、known-good 的 path、commit、
+内容与 verifier 输出均不得出现。
 
 评测者可以在一组成对运行开始前修改或类推样例问题。若两侧的 suite 或 question digest 不同，
 就把它们视为探索性新用例，只做定性观察，不计算成对效率收益。
@@ -70,7 +83,7 @@ verifier 输出均不得出现。
 agent。当前环境若无法维持交互 PTY，就准备好成对 worktree 和命令，请人类在终端执行，不要从
 非交互工具 shell 强行调用 Eval。
 
-不要增加独立答案文件、可复用 receipt 或仓库 prepare 阶段；runtime provisioning 是独立的环境
+不要增加独立答案文件、可复用 receipt 或仓库 prepare 阶段；toolchain provisioning 是独立的环境
 前置条件，verifier preflight 则留在同一个前台 `eval run` 的交互内存中。不要恢复旧 agent
 会话、启用 memory、暴露额外目录或放宽隔离。Agent Hub 的 eval profile 已用关闭 memory 与
 subagent 的全新会话执行。worktree 不干净、评测集或
@@ -78,9 +91,12 @@ subagent 的全新会话执行。worktree 不干净、评测集或
 两次运行不可比较。preflight 失败时不应存在 agent run 或 Eval artifact；不要把 untouched
 subject 的预期失败单独当作校准完成。
 
-verifier 的 preflight 与最终判分都在 agent sandbox 外以前台用户权限执行，可能访问文件和网络，
-也可能运行 control 或 agent 产生的代码。只对可信、最好幂等的 verifier 和仓库使用；preflight
-不把 Patch Eval 变成 hostile-code sandbox，也不消除 agent 或 verifier 残留后台进程风险。
+schema v3 的 control verifier、final verifier 与 child 都消费同一个版本化 capability plan，并受
+Codex sandbox、无网络、capsule-only `PATH` 和确定性任务环境约束。这个保证只覆盖 suite 声明且
+smoke 成功的命令；shebang 解释器、动态插件、绝对路径子进程或其它间接依赖不会被静态推导，
+仍须由用例作者纳入 capsule 与 smoke。它也不是 hostile-code sandbox 的形式化证明。兼容的
+schema v2 verifier 仍按旧契约在 sandbox 外以前台用户权限执行，可能访问文件、网络并运行 control
+或 agent 产生的代码；不要把旧结果与 v5 当成同一安全边界下的对照。
 
 ## 解读结果，而不只看分数
 

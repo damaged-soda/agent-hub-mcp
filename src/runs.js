@@ -47,6 +47,7 @@ const CANCEL_GRACE_MS = 10000;
 const INTERNAL_EXECUTION_PROFILES = new Set([
   "workspace-readonly/v1",
   "workspace-write/v1",
+  "workspace-write/v2",
 ]);
 
 export async function listAgents(input = {}, internal = {}) {

@@ -5,9 +5,14 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE,
+  CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION,
   WORKSPACE_PATCH_SCHEMA,
+  WORKSPACE_PATCH_CAPABILITY_GRADER_VERSION,
+  WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT,
   WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
   buildEvalPrompt,
+  canonicalHash,
   canonicalizeExistingSourceLocation,
   cleanWorkspaceSnapshot,
   gradeSourceLocation,
@@ -15,6 +20,7 @@ import {
   normalizeExpectedVerifier,
   normalizeExpectedSourceLocation,
   normalizeKnownGoodWorkspace,
+  normalizeSuite,
   parseSourceLocationOutput,
   verifierUnchanged,
 } from "../src/eval-protocol.js";
@@ -200,6 +206,224 @@ describe("eval protocol", () => {
       }],
     });
     await expect(loadEvalSuite(root)).rejects.toMatchObject({ code: "invalid_eval_suite" });
+  });
+
+  it("normalizes capability-bound patch suites and command smokes", async () => {
+    expect(CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION).toBe(3);
+    expect(CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE).toBe("workspace-write/v2");
+    expect(WORKSPACE_PATCH_CAPABILITY_GRADER_VERSION).toBe("workspace-patch/v3");
+    expect(WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT)
+      .toBe("subject-reject-known-good-pass/v2");
+
+    await writeSuite(root, {
+      schema_version: CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION,
+      suite_id: "capability-patch-eval",
+      verifier_preflight: WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT,
+      toolchain_requirements: {
+        kind: "command-smoke/v1",
+        commands: [
+          { name: "node", argv: ["-e", "process.exit(0)"] },
+          { name: "git", argv: ["--version"] },
+        ],
+      },
+      cases: [{
+        id: "change-target",
+        prompt: "  Change the target behavior.  ",
+        answer_schema: WORKSPACE_PATCH_SCHEMA,
+      }],
+    });
+    const suite = await loadEvalSuite(root);
+    expect(suite).toMatchObject({
+      schema_version: 3,
+      verifier_preflight: "subject-reject-known-good-pass/v2",
+      toolchain_requirements: {
+        kind: "command-smoke/v1",
+        commands: [
+          { name: "git", argv: ["--version"] },
+          { name: "node", argv: ["-e", "process.exit(0)"] },
+        ],
+      },
+      cases: [{
+        id: "change-target",
+        prompt: "Change the target behavior.",
+        answer_schema: "workspace-patch/v1",
+      }],
+    });
+
+    const reordered = normalizeSuite({
+      schema_version: 3,
+      suite_id: "capability-patch-eval",
+      verifier_preflight: WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT,
+      toolchain_requirements: {
+        kind: "command-smoke/v1",
+        commands: [
+          { name: "git", argv: ["--version"] },
+          { name: "node", argv: ["-e", "process.exit(0)"] },
+        ],
+      },
+      cases: [{
+        id: "change-target",
+        prompt: "Change the target behavior.",
+        answer_schema: WORKSPACE_PATCH_SCHEMA,
+      }],
+    });
+    expect(canonicalHash(reordered)).toBe(suite.digest);
+  });
+
+  it("rejects incomplete or unsafe capability-bound patch suites", () => {
+    const valid = {
+      schema_version: CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION,
+      suite_id: "capability-patch-eval",
+      verifier_preflight: WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT,
+      toolchain_requirements: {
+        kind: "command-smoke/v1",
+        commands: [{ name: "node", argv: ["--version"] }],
+      },
+      cases: [{
+        id: "change-target",
+        prompt: "Change the target behavior.",
+        answer_schema: WORKSPACE_PATCH_SCHEMA,
+      }],
+    };
+    const rejected = [
+      { ...valid, verifier_preflight: undefined },
+      { ...valid, verifier_preflight: WORKSPACE_PATCH_VERIFIER_PREFLIGHT },
+      { ...valid, toolchain_requirements: undefined },
+      { ...valid, toolchain_requirements: { kind: "command-smoke/v2", commands: [] } },
+      { ...valid, toolchain_requirements: { kind: "command-smoke/v1", commands: [] } },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [{ name: "../node", argv: [] }],
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [
+            { name: "node", argv: [] },
+            { name: "node", argv: ["--version"] },
+          ],
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [{ name: "node", argv: ["bad\0argument"] }],
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [{ name: "node", argv: ["x".repeat(4097)] }],
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [{ name: "node", argv: Array.from({ length: 65 }, () => "x") }],
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: Array.from({ length: 17 }, (_, index) => ({
+            name: `command-${index}`,
+            argv: ["x".repeat(4096)],
+          })),
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          ...valid.toolchain_requirements,
+          extra: true,
+        },
+      },
+      {
+        ...valid,
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [{ name: "node", argv: [], extra: true }],
+        },
+      },
+      { ...valid, extra: true },
+    ];
+    for (const document of rejected) {
+      expect(() => normalizeSuite(document)).toThrowError(
+        expect.objectContaining({ code: "invalid_eval_suite" }),
+      );
+    }
+  });
+
+  it("preserves the normalized representation and digest of v1 and v2 suites", () => {
+    const v1 = normalizeSuite({
+      schema_version: 1,
+      suite_id: "code-navigation",
+      cases: [{
+        id: "locate-target",
+        prompt: "  Find the implementation.  ",
+        answer_schema: "source-location/v1",
+      }],
+    });
+    expect(v1).toEqual({
+      schema_version: 1,
+      suite_id: "code-navigation",
+      cases: [{
+        id: "locate-target",
+        prompt: "Find the implementation.",
+        answer_schema: "source-location/v1",
+        question_digest: "2c90c409991f33585c057eda7dc2f0878632f5b713ce028e57d40ff76b634f06",
+      }],
+    });
+    expect(canonicalHash(v1))
+      .toBe("acb129efaa869b22287c682246aa96138aab7c5c0d7925b86078e658f84641dd");
+
+    const v2 = normalizeSuite({
+      schema_version: 2,
+      suite_id: "patch-eval",
+      verifier_preflight: WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
+      cases: [{
+        id: "change-target",
+        prompt: "  Change the target behavior.  ",
+        answer_schema: WORKSPACE_PATCH_SCHEMA,
+      }],
+    });
+    expect(v2).toEqual({
+      schema_version: 2,
+      suite_id: "patch-eval",
+      verifier_preflight: "subject-reject-known-good-pass/v1",
+      cases: [{
+        id: "change-target",
+        prompt: "Change the target behavior.",
+        answer_schema: "workspace-patch/v1",
+        question_digest: "98ac7d24b5eea6f947b1ed95a0fb769550506eb78fb5f00d5c1a167d18f06d3d",
+      }],
+    });
+    expect(canonicalHash(v2))
+      .toBe("ae7d974a974e14ec68934d2bafc333a1ae24a426c2af35ebaa22c4554d9d6a14");
+  });
+
+  it("ships a suite v3 JSON schema matching the runtime contract", async () => {
+    const schema = JSON.parse(await fsp.readFile(
+      new URL("../schemas/agent-eval-suite-v3.schema.json", import.meta.url),
+      "utf8",
+    ));
+    expect(schema.properties.schema_version.const).toBe(3);
+    expect(schema.required).toContain("verifier_preflight");
+    expect(schema.required).toContain("toolchain_requirements");
+    expect(schema.properties.verifier_preflight.const)
+      .toBe(WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT);
+    expect(schema.properties.toolchain_requirements.properties.kind.const)
+      .toBe("command-smoke/v1");
+    expect(schema.properties.cases.items.properties.answer_schema.const)
+      .toBe(WORKSPACE_PATCH_SCHEMA);
   });
 
   it("accepts only a clean descendant worktree as the known-good workspace", async () => {

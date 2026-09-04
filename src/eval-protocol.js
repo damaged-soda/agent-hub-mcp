@@ -7,20 +7,29 @@ import { runCommand } from "./adapter-utils.js";
 export const EVAL_SUITE_RELATIVE_PATH = ".agenthub/evals.json";
 export const EVAL_SUITE_SCHEMA_VERSION = 1;
 export const PATCH_EVAL_SUITE_SCHEMA_VERSION = 2;
+export const CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION = 3;
 export const SOURCE_LOCATION_SCHEMA = "source-location/v1";
 export const SOURCE_LOCATION_GRADER_VERSION = "source-location/v1";
 export const WORKSPACE_PATCH_SCHEMA = "workspace-patch/v1";
 export const WORKSPACE_PATCH_GRADER_VERSION = "workspace-patch/v1";
 export const WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION = "workspace-patch/v2";
+export const WORKSPACE_PATCH_CAPABILITY_GRADER_VERSION = "workspace-patch/v3";
 export const WORKSPACE_PATCH_VERIFIER_PREFLIGHT = "subject-reject-known-good-pass/v1";
+export const WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT =
+  "subject-reject-known-good-pass/v2";
 export const READONLY_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
 export const PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v1";
+export const CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v2";
 export const EVAL_EXECUTION_PROFILE = READONLY_EVAL_EXECUTION_PROFILE;
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_CASES = 100;
 const MAX_PROMPT_BYTES = 64 * 1024;
 const MAX_VERIFIER_BYTES = 1024 * 1024;
+const MAX_TOOLCHAIN_COMMANDS = 64;
+const MAX_COMMAND_ARGS = 64;
+const MAX_COMMAND_ARG_BYTES = 4096;
+const MAX_TOOLCHAIN_ARGV_BYTES = 64 * 1024;
 
 export async function loadEvalSuite(cwd, suitePath = undefined) {
   const workspace = await realDirectory(cwd, "eval cwd");
@@ -49,20 +58,31 @@ export function normalizeSuite(value) {
   if (!plainObject(value)) {
     throw evalError("invalid_eval_suite", "Eval suite must be a JSON object");
   }
-  if (![EVAL_SUITE_SCHEMA_VERSION, PATCH_EVAL_SUITE_SCHEMA_VERSION].includes(
-    value.schema_version,
-  )) {
+  const supportedSchemaVersions = [
+    EVAL_SUITE_SCHEMA_VERSION,
+    PATCH_EVAL_SUITE_SCHEMA_VERSION,
+    CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION,
+  ];
+  if (!supportedSchemaVersions.includes(value.schema_version)) {
     throw evalError(
       "invalid_eval_suite",
       `Eval suite schema_version must be ${EVAL_SUITE_SCHEMA_VERSION} or ` +
-        `${PATCH_EVAL_SUITE_SCHEMA_VERSION}`,
+        `${PATCH_EVAL_SUITE_SCHEMA_VERSION} or ${CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION}`,
     );
   }
   const answerSchema = value.schema_version === EVAL_SUITE_SCHEMA_VERSION
     ? SOURCE_LOCATION_SCHEMA
     : WORKSPACE_PATCH_SCHEMA;
   let verifierPreflight;
-  if (value.verifier_preflight !== undefined) {
+  if (value.schema_version === CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION) {
+    if (value.verifier_preflight !== WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT) {
+      throw evalError(
+        "invalid_eval_suite",
+        `verifier_preflight must be ${WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT}`,
+      );
+    }
+    verifierPreflight = value.verifier_preflight;
+  } else if (value.verifier_preflight !== undefined) {
     if (value.schema_version !== PATCH_EVAL_SUITE_SCHEMA_VERSION) {
       throw evalError(
         "invalid_eval_suite",
@@ -77,6 +97,9 @@ export function normalizeSuite(value) {
     }
     verifierPreflight = value.verifier_preflight;
   }
+  const toolchainRequirements = value.schema_version === CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION
+    ? normalizeToolchainRequirements(value.toolchain_requirements)
+    : undefined;
   const suiteId = identifier(value.suite_id, "suite_id");
   if (!Array.isArray(value.cases) || value.cases.length === 0) {
     throw evalError("invalid_eval_suite", "Eval suite cases must be a non-empty array");
@@ -132,6 +155,10 @@ export function normalizeSuite(value) {
   if (value.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION) {
     supportedSuiteFields.add("verifier_preflight");
   }
+  if (value.schema_version === CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION) {
+    supportedSuiteFields.add("verifier_preflight");
+    supportedSuiteFields.add("toolchain_requirements");
+  }
   const unknown = Object.keys(value).filter((key) => !supportedSuiteFields.has(key));
   if (unknown.length > 0) {
     throw evalError(
@@ -143,7 +170,106 @@ export function normalizeSuite(value) {
     schema_version: value.schema_version,
     suite_id: suiteId,
     ...(verifierPreflight ? { verifier_preflight: verifierPreflight } : {}),
+    ...(toolchainRequirements ? { toolchain_requirements: toolchainRequirements } : {}),
     cases,
+  };
+}
+
+function normalizeToolchainRequirements(value) {
+  if (!plainObject(value)) {
+    throw evalError(
+      "invalid_eval_suite",
+      "toolchain_requirements must be an object",
+    );
+  }
+  const unknown = Object.keys(value).filter(
+    (key) => !new Set(["kind", "commands"]).has(key),
+  );
+  if (unknown.length > 0) {
+    throw evalError(
+      "invalid_eval_suite",
+      `toolchain_requirements contains unsupported fields: ${unknown.sort().join(", ")}`,
+    );
+  }
+  if (value.kind !== "command-smoke/v1") {
+    throw evalError(
+      "invalid_eval_suite",
+      "toolchain_requirements.kind must be command-smoke/v1",
+    );
+  }
+  if (!Array.isArray(value.commands) || value.commands.length === 0) {
+    throw evalError(
+      "invalid_eval_suite",
+      "toolchain_requirements.commands must be a non-empty array",
+    );
+  }
+  if (value.commands.length > MAX_TOOLCHAIN_COMMANDS) {
+    throw evalError(
+      "invalid_eval_suite",
+      `toolchain_requirements.commands may contain at most ${MAX_TOOLCHAIN_COMMANDS} commands`,
+    );
+  }
+
+  const seen = new Set();
+  let totalArgvBytes = 0;
+  const commands = value.commands.map((item, index) => {
+    const label = `toolchain_requirements.commands[${index}]`;
+    if (!plainObject(item)) {
+      throw evalError("invalid_eval_suite", `${label} must be an object`);
+    }
+    const itemUnknown = Object.keys(item).filter(
+      (key) => !new Set(["name", "argv"]).has(key),
+    );
+    if (itemUnknown.length > 0) {
+      throw evalError(
+        "invalid_eval_suite",
+        `${label} contains unsupported fields: ${itemUnknown.sort().join(", ")}`,
+      );
+    }
+    const name = identifier(item.name, `${label}.name`);
+    if (seen.has(name)) {
+      throw evalError("invalid_eval_suite", `Duplicate toolchain command name: ${name}`);
+    }
+    seen.add(name);
+    if (!Array.isArray(item.argv)) {
+      throw evalError("invalid_eval_suite", `${label}.argv must be an array`);
+    }
+    if (item.argv.length > MAX_COMMAND_ARGS) {
+      throw evalError(
+        "invalid_eval_suite",
+        `${label}.argv may contain at most ${MAX_COMMAND_ARGS} arguments`,
+      );
+    }
+    const argv = item.argv.map((argument, argumentIndex) => {
+      const argumentLabel = `${label}.argv[${argumentIndex}]`;
+      if (typeof argument !== "string") {
+        throw evalError("invalid_eval_suite", `${argumentLabel} must be a string`);
+      }
+      if (argument.includes("\0")) {
+        throw evalError("invalid_eval_suite", `${argumentLabel} must not contain NUL`);
+      }
+      const bytes = Buffer.byteLength(argument, "utf8");
+      if (bytes > MAX_COMMAND_ARG_BYTES) {
+        throw evalError(
+          "invalid_eval_suite",
+          `${argumentLabel} exceeds ${MAX_COMMAND_ARG_BYTES} bytes`,
+        );
+      }
+      totalArgvBytes += bytes;
+      return argument;
+    });
+    return { name, argv };
+  });
+  if (totalArgvBytes > MAX_TOOLCHAIN_ARGV_BYTES) {
+    throw evalError(
+      "invalid_eval_suite",
+      `toolchain_requirements command arguments exceed ${MAX_TOOLCHAIN_ARGV_BYTES} bytes`,
+    );
+  }
+  commands.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+  return {
+    kind: "command-smoke/v1",
+    commands,
   };
 }
 

@@ -10,6 +10,7 @@ import {
   PYTHON_RUNTIME_SELFTEST_ARGS,
   writePythonRuntimeCapsuleManifest,
 } from "../src/eval-runtime.js";
+import { writeEvalToolchainCapsuleManifest } from "../src/eval-toolchain.js";
 
 const execFileAsync = promisify(execFile);
 const CLI_PATH = path.resolve("src/cli.js");
@@ -26,8 +27,10 @@ describe("agenthub eval CLI", () => {
   let runtimeManifest;
   let modelMarker;
   let env;
+  let readonlyToolchainDirectories;
 
   beforeEach(async () => {
+    readonlyToolchainDirectories = [];
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-eval-cli-"));
     workspace = path.join(root, "workspace");
     runDir = path.join(root, "runs");
@@ -114,6 +117,9 @@ process.exitCode = await main(process.argv.slice(2), io);
   });
 
   afterEach(async () => {
+    for (const directory of readonlyToolchainDirectories) {
+      await makeTreeWritable(directory);
+    }
     await fsp.rm(root, { recursive: true, force: true });
   });
 
@@ -157,6 +163,306 @@ process.exitCode = await main(process.argv.slice(2), io);
       },
     });
   });
+
+  it("reports a generic toolchain capsule without exposing command paths", async () => {
+    const toolchain = await createCapabilityToolchain();
+    await fsp.chmod(toolchain.manifest, 0o644);
+    const { stdout: unsealedStdout } = await execFileAsync(
+      process.execPath,
+      [
+        env.AGENT_HUB_TEST_HELPER,
+        "eval",
+        "toolchain",
+        "status",
+        "--toolchain",
+        toolchain.manifest,
+      ],
+      {
+        cwd: path.dirname(CLI_PATH),
+        env: { ...env, AGENT_HUB_TEST_ANSWERS: "[]" },
+        timeout: 15000,
+      },
+    );
+    expect(JSON.parse(unsealedStdout)).toEqual({
+      status: "invalid",
+      error: {
+        code: "toolchain_capsule_invalid",
+        message: "Eval toolchain capsule is invalid",
+      },
+    });
+    expect(unsealedStdout).not.toContain(toolchain.directory);
+    await fsp.chmod(toolchain.manifest, 0o444);
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        env.AGENT_HUB_TEST_HELPER,
+        "eval",
+        "toolchain",
+        "status",
+        "--toolchain",
+        toolchain.manifest,
+      ],
+      {
+        cwd: path.dirname(CLI_PATH),
+        env: { ...env, AGENT_HUB_TEST_ANSWERS: "[]" },
+        timeout: 15000,
+      },
+    );
+    const status = JSON.parse(stdout);
+    expect(status).toMatchObject({
+      status: "ready",
+      toolchain: {
+        kind: "eval-toolchain-capsule/v1",
+        toolchain_id: "test-toolchain",
+        platform: process.platform,
+        arch: process.arch,
+        commands: ["git", "node", "python3"],
+      },
+    });
+    expect(JSON.stringify(status)).not.toContain(toolchain.directory);
+    expect(JSON.stringify(status)).not.toContain(await fsp.realpath(toolchain.directory));
+  });
+
+  it("binds a suite-v3 patch eval to one sandboxed Python/Node/Git capability plan", async () => {
+    const sandboxLog = path.join(root, "sandbox-invocations.jsonl");
+    const startupPoison = path.join(root, "poison-startup-file");
+    const nodePathPoison = path.join(root, "poison-node-path");
+    const pythonPathPoison = path.join(root, "poison-python-path");
+    await fsp.writeFile(startupPoison, "export AGENT_HUB_POISON_SOURCED=1\n");
+    await Promise.all([
+      fsp.mkdir(nodePathPoison),
+      fsp.mkdir(pythonPathPoison),
+      fsp.mkdir(path.join(workspace, "bin")),
+    ]);
+    await fsp.writeFile(
+      path.join(workspace, "bin", "cockpit-test"),
+      "#!/bin/sh\nset -eu\n" +
+        "python3 --version\n" +
+        "node -e 'process.exit(0)'\n" +
+        'git init -b main "$TMPDIR/model-repo"\n' +
+        "printf 'child-entrypoint-ok\\n'\n",
+      { mode: 0o755 },
+    );
+    await fsp.chmod(path.join(workspace, "bin", "cockpit-test"), 0o755);
+    await writeCapabilityPatchSuite();
+
+    const toolchain = await createCapabilityToolchain();
+    const knownGood = await createKnownGoodControl("suite-v3-known-good-secret");
+    const knownGoodCommit = (await git(knownGood, "rev-parse", "HEAD")).stdout.trim();
+    const verifier = await writeVerifier(
+      "suite-v3-verifier",
+      "#!/bin/sh\nset -eu\n" +
+        "python3 --version >/dev/null\n" +
+        "node -e 'process.exit(0)' >/dev/null\n" +
+        'git init -b main "$TMPDIR/verifier-repo" >/dev/null\n' +
+        "found=0\n" +
+        "while IFS= read -r line; do\n" +
+        '  case "$line" in *\'"changed"\'*) found=1 ;; esac\n' +
+        "done < src/app.js\n" +
+        '[ "$found" -eq 1 ]\n' +
+        'if [ -f runtime-result.txt ]; then [ -s runtime-result.txt ]; fi\n',
+    );
+    env = {
+      ...env,
+      AGENT_HUB_FORWARD_ENV:
+        "ZDOTDIR,FAKE_MODEL_MARKER,FAKE_SANDBOX_LOG,BASH_ENV,ENV,NODE_OPTIONS," +
+        "NODE_PATH,PYTHONEXECUTABLE,PYTHONHOME,PYTHONPATH,PYTHONPLATLIBDIR," +
+        "__PYVENV_LAUNCHER__",
+      FAKE_SANDBOX_LOG: sandboxLog,
+      BASH_ENV: startupPoison,
+      ENV: startupPoison,
+      NODE_OPTIONS: "--no-warnings",
+      NODE_PATH: nodePathPoison,
+      PYTHONEXECUTABLE: "/poison/python3",
+      PYTHONHOME: "/poison/python-home",
+      PYTHONPATH: pythonPathPoison,
+      PYTHONPLATLIBDIR: "poison-lib",
+      __PYVENV_LAUNCHER__: "/poison/python-launcher",
+    };
+
+    const result = await invokeCapabilityEval([verifier, knownGood], toolchain.manifest);
+
+    expect(result).toMatchObject({
+      schema_version: 5,
+      status: "completed",
+      grader_version: "workspace-patch/v3",
+      toolchain: {
+        kind: "eval-toolchain-capsule/v1",
+        toolchain_id: "test-toolchain",
+        content_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+        platform: process.platform,
+        arch: process.arch,
+        commands: ["git", "node", "python3"],
+      },
+      capability_plan: {
+        kind: "eval-capability-plan/v1",
+        status: "passed",
+        contract_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        requirements_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        required_commands: ["git", "node", "python3"],
+        verifier_enforcement: "codex-sandbox",
+      },
+      verifier_preflight: {
+        kind: "subject-reject-known-good-pass/v2",
+        status: "passed",
+        binding_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+      isolation: {
+        policy: "workspace-write/v2",
+        tool_network: false,
+        git_history: false,
+        memory: "off",
+      },
+      summary: { pass: 1, fail: 0, error: 0 },
+    });
+    expect(result.cases[0]).toMatchObject({
+      status: "pass",
+      reason: "verifier_passed",
+      metrics: { verifier: { status: "passed", exit_code: 0 } },
+    });
+    expect(result.subject).not.toHaveProperty("cwd");
+    expect(result.artifact).toEqual({
+      type: "eval-result",
+      eval_run_id: result.eval_run_id,
+    });
+
+    const events = (await fsp.readFile(sandboxLog, "utf8")).trim().split("\n")
+      .map((line) => JSON.parse(line));
+    const modelIndex = events.findIndex((event) => event.kind === "model");
+    const smokes = events.filter((event) => event.kind === "sandbox" &&
+      event.label === "agenthub-toolchain-smoke");
+    const verifiers = events.filter((event) => event.kind === "sandbox" &&
+      event.label === "agenthub-verifier");
+    expect(smokes, JSON.stringify(events, null, 2)).toHaveLength(6);
+    expect(smokes.filter((event) => event.code_home.endsWith("/preflight-codex-home")))
+      .toHaveLength(3);
+    expect(smokes.filter((event) => event.code_home.endsWith("/codex-home")))
+      .toHaveLength(3);
+    expect(modelIndex).toBeGreaterThanOrEqual(8);
+    expect(events.slice(0, modelIndex).filter((event) => event.kind === "sandbox"))
+      .toHaveLength(8);
+    expect(verifiers).toHaveLength(3);
+    expect(verifiers.filter((event) => events.indexOf(event) < modelIndex)).toHaveLength(2);
+    expect(verifiers.filter((event) => events.indexOf(event) > modelIndex)).toHaveLength(1);
+    for (const event of [...smokes, ...verifiers]) {
+      expect(event.profile).toBe("workspace-write/v2");
+      expect(event.network).toBe(false);
+      expect(event.parent_path).not.toContain("/runtime-bin");
+      expect(event.path).toMatch(/\/runtime-bin$/);
+      expect(event.home).toMatch(/\/task-home$/);
+      expect(event.git_config_global).toBe("/dev/null");
+      expect(event.git_config_system).toBe("/dev/null");
+      expect(event.git_config_nosystem).toBe("1");
+      expect(event.poison_present).toEqual([]);
+    }
+    expect(events[modelIndex]).toMatchObject({
+      kind: "model",
+      path: expect.stringMatching(/\/runtime-bin$/),
+    });
+    expect(events[modelIndex].parent_path).not.toContain("/runtime-bin");
+
+    const commandMetadata = JSON.parse(await fsp.readFile(path.join(
+      runDir,
+      result.cases[0].agent_run_ref.run_id,
+      "command.json",
+    ), "utf8"));
+    expect(commandMetadata.redactions).toEqual(["shell_environment_policy.set.*"]);
+    const recordedEnvironmentSettings = [
+      ...commandMetadata.argv,
+      ...commandMetadata.launcher,
+    ].filter((item) => typeof item === "string" &&
+      item.startsWith("shell_environment_policy.set."));
+    expect(recordedEnvironmentSettings.length).toBeGreaterThan(0);
+    expect(recordedEnvironmentSettings.every((item) => item.endsWith('="<redacted>"')))
+      .toBe(true);
+
+    const publicResult = JSON.stringify(result);
+    const persisted = await allText(evalDir);
+    const runs = await allText(runDir);
+    const capsulePaths = await canonicalPathVariants([
+      toolchain.directory,
+      toolchain.manifest,
+    ]);
+    const oracleAndPoisonPaths = await canonicalPathVariants([
+      verifier,
+      knownGood,
+      startupPoison,
+      nodePathPoison,
+      pythonPathPoison,
+    ]);
+    for (const secret of [
+      root,
+      workspace,
+      evalDir,
+      ...capsulePaths,
+      ...oracleAndPoisonPaths,
+      knownGoodCommit,
+      "suite-v3-known-good-secret",
+      "/poison/python-home",
+      "/poison/python-launcher",
+    ]) {
+      expect(publicResult).not.toContain(secret);
+      expect(persisted).not.toContain(secret);
+    }
+    for (const secret of [
+      ...oracleAndPoisonPaths,
+      knownGoodCommit,
+      "suite-v3-known-good-secret",
+      "/poison/python-home",
+      "/poison/python-launcher",
+    ]) {
+      expect(runs).not.toContain(secret);
+    }
+  }, 60000);
+
+  it("rejects a suite-v3 capsule missing a declared command before answers or dispatch", async () => {
+    await writeCapabilityPatchSuite();
+    const toolchain = await createCapabilityToolchain({ omit: ["node"] });
+
+    const failure = await invokeCapabilityEvalFailure([], toolchain.manifest);
+
+    expect(failure).toEqual({
+      error: {
+        code: "toolchain_unavailable",
+        message: "Declared toolchain command is unavailable: node",
+      },
+    });
+    await assertNoEvalExecution();
+  }, 20000);
+
+  it("rejects a suite-v3 capsule that overlaps a linked worktree Git common directory", async () => {
+    await writeCapabilityPatchSuite();
+    const linkedWorkspace = path.join(root, "linked-subject");
+    await git(workspace, "worktree", "add", "--detach", linkedWorkspace);
+    const toolchain = await createCapabilityToolchain({
+      directory: path.join(workspace, ".git", `private-toolchain-${crypto.randomUUID()}`),
+    });
+
+    const failure = await invokeRawFailure([
+      "eval", "run", "--agent", "codex",
+      "--model", "gpt-test", "--effort", "medium", "--cwd", linkedWorkspace,
+      "--toolchain", toolchain.manifest,
+    ]);
+
+    expect(failure.error).toMatchObject({ code: "toolchain_capsule_invalid" });
+    await assertNoEvalExecution();
+  }, 20000);
+
+  it("rejects a suite-v3 command smoke failure before answers or dispatch", async () => {
+    await writeCapabilityPatchSuite();
+    const toolchain = await createCapabilityToolchain({ failing: ["node"] });
+
+    const failure = await invokeCapabilityEvalFailure([], toolchain.manifest);
+
+    expect(failure).toEqual({
+      error: {
+        code: "toolchain_preflight_failed",
+        message: "Declared toolchain command failed in the final child profile: node",
+      },
+    });
+    await assertNoEvalExecution();
+  }, 20000);
 
   it("collects answers once, runs an isolated case, and persists only digests", async () => {
     const evaluatorSuite = path.join(root, "evaluator-suite.json");
@@ -933,6 +1239,145 @@ process.exitCode = await main(process.argv.slice(2), io);
     });
   });
 
+  async function writeCapabilityPatchSuite() {
+    await fsp.writeFile(
+      path.join(workspace, ".agenthub", "evals.json"),
+      `${JSON.stringify({
+        schema_version: 3,
+        suite_id: "capability-patch-eval",
+        verifier_preflight: "subject-reject-known-good-pass/v2",
+        toolchain_requirements: {
+          kind: "command-smoke/v1",
+          commands: [
+            { name: "python3", argv: ["--version"] },
+            { name: "node", argv: ["-e", "process.exit(0)"] },
+            { name: "git", argv: ["init", "-b", "main", "."] },
+          ],
+        },
+        cases: [{
+          id: "change-target-with-toolchain",
+          prompt: "Change locateTarget and run the repository test entrypoint.",
+          answer_schema: "workspace-patch/v1",
+        }],
+      }, null, 2)}\n`,
+    );
+    await git(workspace, "add", ".");
+    await git(workspace, "commit", "-m", "capability patch suite");
+  }
+
+  async function createCapabilityToolchain({ omit = [], failing = [], directory } = {}) {
+    const capsuleDirectory = directory ??
+      path.join(root, `toolchain-capsule-${crypto.randomUUID()}`);
+    const toolchainRoot = path.join(capsuleDirectory, "toolchain");
+    const commandDirectory = path.join(toolchainRoot, "bin");
+    await fsp.mkdir(commandDirectory, { recursive: true });
+    const definitions = {
+      python3:
+        "#!/bin/sh\nset -eu\n" +
+        'case "${PATH:-}" in */runtime-bin) ;; *) exit 80 ;; esac\n' +
+        '[ "${PYTHONDONTWRITEBYTECODE:-}" = 1 ] || exit 81\n' +
+        '[ "${PYTHONNOUSERSITE:-}" = 1 ] || exit 82\n' +
+        '[ -z "${PYTHONPATH+x}" ] || exit 83\n' +
+        '[ -z "${PYTHONHOME+x}" ] || exit 84\n' +
+        '[ -z "${PYTHONPLATLIBDIR+x}" ] || exit 85\n' +
+        '[ -z "${PYTHONEXECUTABLE+x}" ] || exit 86\n' +
+        '[ -z "${__PYVENV_LAUNCHER__+x}" ] || exit 87\n' +
+        'if [ "${1:-}" = --version ]; then printf \'Python fixture 3.12\\n\'; exit 0; fi\n' +
+        "exit 88\n",
+      node:
+        "#!/bin/sh\nset -eu\n" +
+        'case "${PATH:-}" in */runtime-bin) ;; *) exit 80 ;; esac\n' +
+        '[ -z "${NODE_OPTIONS+x}" ] || exit 81\n' +
+        '[ -z "${NODE_PATH+x}" ] || exit 82\n' +
+        (failing.includes("node") ? "exit 73\n" : "") +
+        'if [ "${1:-}" = -e ]; then printf \'toolchain-node\\n\'; exit 0; fi\n' +
+        'if [ "${1:-}" = --version ]; then printf \'v22.0.0-fixture\\n\'; exit 0; fi\n' +
+        "exit 83\n",
+      git:
+        "#!/bin/sh\nset -eu\n" +
+        'case "${PATH:-}" in */runtime-bin) ;; *) exit 80 ;; esac\n' +
+        '[ "${GIT_CONFIG_GLOBAL:-}" = /dev/null ] || exit 81\n' +
+        '[ "${GIT_CONFIG_SYSTEM:-}" = /dev/null ] || exit 82\n' +
+        '[ "${GIT_CONFIG_NOSYSTEM:-}" = 1 ] || exit 83\n' +
+        '[ -z "${GIT_DIR+x}" ] || exit 84\n' +
+        '[ -z "${GIT_EXEC_PATH+x}" ] || exit 85\n' +
+        '[ -z "${GIT_WORK_TREE+x}" ] || exit 86\n' +
+        'if [ "${1:-}" = init ]; then\n' +
+        '  target="${4:-.}"\n' +
+        '  /bin/mkdir -p "$target/.git"\n' +
+        "  printf 'Initialized fixture repository\\n'\n" +
+        "  exit 0\n" +
+        "fi\n" +
+        "exit 87\n",
+    };
+    const commands = {};
+    for (const [name, body] of Object.entries(definitions)) {
+      if (omit.includes(name)) continue;
+      const target = path.join(commandDirectory, name);
+      await fsp.writeFile(target, body, { mode: 0o755 });
+      await fsp.chmod(target, 0o755);
+      commands[name] = `bin/${name}`;
+    }
+    const manifest = await writeEvalToolchainCapsuleManifest(capsuleDirectory, {
+      toolchain_id: "test-toolchain",
+      platform: process.platform,
+      arch: process.arch,
+      root: "toolchain",
+      commands,
+    });
+    await sealTree(capsuleDirectory);
+    readonlyToolchainDirectories.push(capsuleDirectory);
+    return { directory: capsuleDirectory, root: toolchainRoot, manifest };
+  }
+
+  async function invokeCapabilityEval(answers, toolchain, suite = undefined) {
+    const args = [
+      env.AGENT_HUB_TEST_HELPER,
+      "eval",
+      "run",
+      "--agent",
+      "codex",
+      "--model",
+      "gpt-test",
+      "--effort",
+      "medium",
+      "--cwd",
+      workspace,
+      "--toolchain",
+      toolchain,
+      "--timeout-ms",
+      "10000",
+    ];
+    if (suite !== undefined) args.push("--suite", suite);
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      args,
+      {
+        cwd: path.dirname(CLI_PATH),
+        env: { ...env, AGENT_HUB_TEST_ANSWERS: JSON.stringify(answers) },
+        timeout: 60000,
+      },
+    );
+    expect(stderr).toContain("Declared toolchain is available; collecting standard answers.");
+    expect(stderr).toContain("sandboxed verifier preflight controls");
+    return JSON.parse(stdout);
+  }
+
+  function invokeCapabilityEvalFailure(answers, toolchain) {
+    return invokeRawFailure([
+      "eval", "run", "--agent", "codex",
+      "--model", "gpt-test", "--effort", "medium", "--cwd", workspace,
+      "--toolchain", toolchain,
+    ], answers);
+  }
+
+  async function assertNoEvalExecution() {
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
+    expect((await fsp.readdir(evalDir).catch(() => []))
+      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await expect(fsp.access(modelMarker)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   async function writePatchSuite({ verifier_preflight, cases }) {
     await fsp.writeFile(
       path.join(workspace, ".agenthub", "evals.json"),
@@ -1036,13 +1481,21 @@ const fs = require("node:fs");
 const childProcess = require("node:child_process");
 const args = process.argv.slice(2);
 const toolEnv = { ...process.env };
+const fixedEnvironment = new Map();
+const excludedEnvironment = new Set();
 for (let index = 0; index < args.length - 1; index += 1) {
   if (args[index] !== "-c") continue;
-  const match = args[index + 1].match(
+  const fixedMatch = args[index + 1].match(
     /^shell_environment_policy\\.set\\.([A-Za-z_][A-Za-z0-9_]*)=(.*)$/,
   );
-  if (match) toolEnv[match[1]] = JSON.parse(match[2]);
+  if (fixedMatch) fixedEnvironment.set(fixedMatch[1], JSON.parse(fixedMatch[2]));
+  const excludeMatch = args[index + 1].match(/^shell_environment_policy\\.exclude=(.*)$/);
+  if (excludeMatch) {
+    for (const key of JSON.parse(excludeMatch[1])) excludedEnvironment.add(key);
+  }
 }
+for (const key of excludedEnvironment) delete toolEnv[key];
+for (const [key, value] of fixedEnvironment) toolEnv[key] = value;
 if (process.env.FAKE_REQUIRE_REBOUND_NODE === "1" && process.env.FAKE_NODE_KIND !== "rebound") {
   process.exit(23);
 }
@@ -1051,7 +1504,7 @@ if (
   (args[0] === "sandbox" || args[0] === "exec") &&
   process.env.FAKE_SCRATCH_AT_BIRTH !== "1"
 ) process.exit(24);
-if (args.includes("--version")) {
+if (args.length === 1 && args[0] === "--version") {
   process.stdout.write("codex-cli 0.151.0\\n");
   process.exit(0);
 }
@@ -1080,6 +1533,31 @@ if (args[0] === "sandbox") {
   const separator = args.indexOf("--");
   if (separator < 0 || separator === args.length - 1) process.exit(18);
   const command = args.slice(separator + 1);
+  if (process.env.FAKE_SANDBOX_LOG) {
+    const permission = args.find((value) => value.startsWith("permissions.agenthub-eval=")) || "";
+    const poisonKeys = [
+      "BASH_ENV", "ENV", "GIT_DIR", "GIT_EXEC_PATH", "GIT_WORK_TREE", "NODE_OPTIONS",
+      "NODE_PATH", "PYTHONEXECUTABLE", "PYTHONHOME", "PYTHONPATH", "PYTHONPLATLIBDIR",
+      "__PYVENV_LAUNCHER__",
+    ];
+    fs.appendFileSync(process.env.FAKE_SANDBOX_LOG, JSON.stringify({
+      kind: "sandbox",
+      label: command[3] || null,
+      command_name: command[5] || null,
+      code_home: String(process.env.CODEX_HOME || ""),
+      profile: excludedEnvironment.size > 0 && permission.includes('\":workspace_roots\" = { \".\" = \"write\"')
+        ? "workspace-write/v2"
+        : "unknown",
+      network: !permission.includes("network = { enabled = false"),
+      parent_path: process.env.PATH || null,
+      path: toolEnv.PATH || null,
+      home: toolEnv.HOME || null,
+      git_config_global: toolEnv.GIT_CONFIG_GLOBAL || null,
+      git_config_system: toolEnv.GIT_CONFIG_SYSTEM || null,
+      git_config_nosystem: toolEnv.GIT_CONFIG_NOSYSTEM || null,
+      poison_present: poisonKeys.filter((key) => Object.prototype.hasOwnProperty.call(toolEnv, key)),
+    }) + "\\n");
+  }
   const child = childProcess.spawnSync(command[0], command.slice(1), {
     env: toolEnv,
     encoding: "utf8",
@@ -1091,6 +1569,14 @@ if (args[0] === "sandbox") {
     process.exit(19);
   }
   process.exit(Number.isInteger(child.status) ? child.status : 20);
+}
+if (process.env.FAKE_SANDBOX_LOG) {
+  fs.appendFileSync(process.env.FAKE_SANDBOX_LOG, JSON.stringify({
+    kind: "model",
+    code_home: String(process.env.CODEX_HOME || ""),
+    parent_path: process.env.PATH || null,
+    path: toolEnv.PATH || null,
+  }) + "\\n");
 }
 if (process.env.FAKE_MODEL_MARKER) {
   fs.writeFileSync(process.env.FAKE_MODEL_MARKER, "invoked\\n");
@@ -1184,6 +1670,37 @@ async function writeFakePython(target, { prefix, pythonVersion }) {
     { mode: 0o755 },
   );
   await fsp.chmod(target, 0o755);
+}
+
+async function sealTree(target) {
+  const stat = await fsp.lstat(target);
+  if (stat.isDirectory() && !stat.isSymbolicLink()) {
+    for (const entry of await fsp.readdir(target)) {
+      await sealTree(path.join(target, entry));
+    }
+    await fsp.chmod(target, 0o555);
+  } else if (stat.isFile()) {
+    await fsp.chmod(target, stat.mode & 0o111 ? 0o555 : 0o444);
+  }
+}
+
+async function makeTreeWritable(target) {
+  const stat = await fsp.lstat(target).catch(() => null);
+  if (!stat) return;
+  if (stat.isDirectory() && !stat.isSymbolicLink()) {
+    await fsp.chmod(target, 0o700);
+    for (const entry of await fsp.readdir(target)) {
+      await makeTreeWritable(path.join(target, entry));
+    }
+  } else if (stat.isFile()) {
+    await fsp.chmod(target, stat.mode & 0o111 ? 0o700 : 0o600);
+  }
+}
+
+async function canonicalPathVariants(values) {
+  const variants = new Set(values);
+  for (const value of values) variants.add(await fsp.realpath(value));
+  return Array.from(variants);
 }
 
 function shellQuote(value) {

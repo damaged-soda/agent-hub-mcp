@@ -207,8 +207,9 @@ credential 或 provider 原始响应。目录为 `0700`、文件为 `0600`，更
 Eval 是 CLI-only 的前台监督控制面，不进入普通 MCP run schema，也不改变普通 run 的
 prompt 原样透传约束。`agenthub eval run` 从评测者选择的 suite 读取问题；suite 可位于被测
 worktree 外且无需提交，supervisor 启动时一次性规范化并固定 digest。被测 worktree 自身仍须
-干净并由一个不可变 commit 定义。Eval 在 TTY 中先收齐当前 commit 的人工标准答案，然后为
-每个 case 创建一个普通 Agent Hub run。supervisor 只把“当前问题 + 固定结构化输出契约”交给
+干净并由一个不可变 commit 定义。suite v1/v2 在 TTY 中先收齐当前 commit 的人工标准答案；
+suite v3 则先在最终 capability profile 中验证声明工具，之后才收集标准。两条路径都只在所有
+前置条件通过后为每个 case 创建普通 Agent Hub run。supervisor 只把“当前问题 + 固定结构化输出契约”交给
 run，不向 child 暴露 suite 路径；标准答案及 verifier preflight 的 control identity 只留在
 supervisor 内存，完成后只保留不可反查 control 的 digest。
 model 与 effort 必须由调用者显式指定，不读取 catalog 推荐值或环境默认值。
@@ -262,6 +263,44 @@ suite 输入仍为 schema v2；普通 capsule-backed patch result 使用 schema 
 强制包含 toolchain，旧 result v2 契约保持不变。v4 只增加绑定 suite、question、verifier、
 subject、runtime、timeout 与执行契约的 opaque preflight digest，不保存 control 的 path、commit、
 content、output 或独立 digest；
+
+schema v3 是独立的 capability-bound patch 协议，不改变上述历史路径。它强制
+`verifier_preflight=subject-reject-known-good-pass/v2` 与
+`toolchain_requirements.kind=command-smoke/v1`，并要求调用者用 `--toolchain` 指向评测者事先
+准备的绝对 `eval-toolchain-capsule/v1` manifest。Agent Hub 没有 generic capsule catalog 或
+installer，也不会从 host PATH、系统 developer tools、语言安装、缓存或网络发现、下载、复制、
+fallback。manifest 将安全 command name 映射到 capsule root 内相对 executable；content digest
+绑定平台、架构、规范化 identity、排序 command map 与完整 tree。运行时还要求 manifest 父目录、
+manifest 与 root tree 无写位并拒绝 hardlink regular file，且在执行前后复核 identity。这里的
+sealed 是权限位 seal 与 digest 校验，不是内核 immutable mount。
+
+v3 supervisor 从固定 capsule、声明 requirements、Codex version 与
+`workspace-write/v2` 生成一个 `eval-capability-plan/v1`。所有声明 argv smoke 在收集 oracle 或
+启动首个 model run 前，经 no-model `codex sandbox` 在最终 permission profile 内执行；缺 command
+报 `toolchain_unavailable`，smoke 失败报 `toolchain_preflight_failed`，两者都不创建普通 run 或
+Eval artifact。child PATH 只含 private command overlay，不继承 host PATH fallback；HOME、ZDOTDIR、
+temp 与 Git config 固定到 private/neutral 位置，并过滤可劫持 Git/Node/Python/shell resolution 的
+环境变量。`.git`、command network、memory、session persistence 与 subagent 继续关闭。
+overlay `PATH` 只由 sandbox child 的 environment policy 注入，绝不 prepend 到启动 Codex CLI 的
+父进程，避免 Codex 启动期 workspace 探测在 sandbox 外调用 evaluator-supplied `git` 等命令。
+
+preflight/v2 verifier controls 与 final verifier 不再以前台权限执行：supervisor 校验并复制 verifier 到
+该 invocation 的 private scratch 后，以同一个 `workspace-write/v2` capability plan 调
+`codex sandbox`，仅显式增加 verifier copy 与对应 disposable workspace。这样 child、smoke、
+untouched subject、known-good 和最终 grader 共享声明能力世界，同时 oracle 仍不进入 child 或
+result。成功运行输出 result schema v5 / grader `workspace-patch/v3`，包含公开 toolchain identity、
+排序 command names、requirements/capability digest 与 opaque v2 preflight binding，不包含
+manifest/command path、control/verifier 内容或输出。v5 还不保存 subject `cwd`，CLI 只返回
+opaque `eval_run_id` artifact reference；capsule 与 worktree 或其 Git common dir 任一重叠均
+拒绝，避免 linked worktree 的共享 Git history 经只读 capability 暴露。实际启动参数仍由 runner
+使用，但 `command.json` 中 v2 profile 的 `shell_environment_policy.set.*` 值会被脱敏。
+
+这个不变量只证明 suite 声明且 smoke 实际覆盖的 capability 对称可用。通用 supervisor 无法静态
+推导任意程序按数据或分支动态选择的 plugin、shared library、helper 或 subprocess 闭包；tree
+digest 也不把未声明语义变成已验证语义。因此 evaluator 仍须设计有代表性的 argv smoke、审阅
+verifier，并把未覆盖动态依赖视为显式残余风险。suite v1/v2、`python-runtime-capsule/v1`、
+result v1-v4 与既有 grader 均冻结原义，不被 v3 结果追溯升级。
+
 普通 dispatch 完全不经过 capsule 选择或 provisioning。这样仓库测试既不必扩大到用户目录，
 也不会把 runtime 发现和修复成本计入 agent 指标；
 patch 正文不进入 eval result，

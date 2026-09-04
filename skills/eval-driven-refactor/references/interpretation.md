@@ -10,12 +10,23 @@
 - 预定的不可变 commit 与干净 worktree；
 - 一致的评测集和题目 digest；
 - 相同的 agent、model、effort、timeout、CLI 版本与隔离策略；
-- 代码修改题使用相同的 `toolchain.content_digest`，且结果都包含 `pinned-eval-toolchain`；
+- v3 代码修改题都产生 schema v5 / `workspace-patch/v3`，使用相同的
+  `toolchain.content_digest`，且 `capability_plan.status` 都是 `passed`、
+  `capability_plan.contract_digest` 相同；
 - 语义等价的人工标准答案或 patch verifier；
 - 未恢复旧上下文、没有额外可读目录的全新会话。
 
 任何实质性控制变量不同，都应把比较标记为无法判断。看到一侧结果后再单独调整配置，不能继续把
 这组运行描述为受控实验。
+
+v5 的 capability plan 证明 suite 声明的命令 smoke 在最终 `workspace-write/v2` profile 中通过，且
+control verifier、final verifier 与 child 由同一 Codex sandbox capability plan 约束。它不静态
+证明任意脚本、shebang、插件、绝对路径子进程或输入相关动态依赖的闭包。若任务实际依赖了未声明
+能力，应修正 suite/capsule 后重新建立整组成对结果，而不是把环境失败解释为结构差异。
+
+suite v1/v2、`python-runtime-capsule/v1` 和 result v1-v4 仍按旧语义解读。不要直接把 v5 与旧 patch
+result 合并计算：v2/v3/v4 与 v5 的 toolchain、verifier 执行边界和可比性证明不同；跨代结果最多
+作为定性背景。
 
 ## 按指标层级判断
 
