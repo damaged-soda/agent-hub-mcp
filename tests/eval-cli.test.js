@@ -24,6 +24,7 @@ describe("agenthub eval CLI", () => {
   let runtimeRoot;
   let runtimePython;
   let runtimeManifest;
+  let modelMarker;
   let env;
 
   beforeEach(async () => {
@@ -77,6 +78,7 @@ describe("agenthub eval CLI", () => {
       root: "python",
       commands: { python3: "bin/python3" },
     });
+    modelMarker = path.join(root, "model-invoked");
     const helper = path.join(root, "eval-helper.mjs");
     await fsp.writeFile(
       helper,
@@ -102,7 +104,8 @@ process.exitCode = await main(process.argv.slice(2), io);
       PATH: `${fakeBin}:${process.env.PATH}`,
       CODEX_HOME: fakeCodeHome,
       ZDOTDIR: defaultZdot,
-      AGENT_HUB_FORWARD_ENV: "ZDOTDIR",
+      AGENT_HUB_FORWARD_ENV: "ZDOTDIR,FAKE_MODEL_MARKER",
+      FAKE_MODEL_MARKER: modelMarker,
       AGENT_HUB_RUN_DIR: runDir,
       AGENT_HUB_EVAL_DIR: evalDir,
       AGENT_HUB_EVAL_RUNTIME_DIR: path.join(root, "runtime-store"),
@@ -282,6 +285,7 @@ process.exitCode = await main(process.argv.slice(2), io);
       },
       summary: { pass: 1, fail: 0, error: 0 },
     });
+    await expect(fsp.access(modelMarker)).resolves.toBeUndefined();
     expect(result.cases[0]).toMatchObject({
       status: "pass",
       reason: "verifier_passed",
@@ -315,6 +319,178 @@ process.exitCode = await main(process.argv.slice(2), io);
     expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
       .toEqual([]);
   }, 20000);
+
+  it("gates a patch eval on subject-reject and known-good-pass verifier controls", async () => {
+    await writePatchSuite({
+      verifier_preflight: "subject-reject-known-good-pass/v1",
+      cases: [{
+        id: "change-target",
+        prompt: "Change locateTarget so it returns the string changed.",
+        answer_schema: "workspace-patch/v1",
+      }],
+    });
+    const knownGood = await createKnownGoodControl("known-good-control-secret");
+    const knownGoodCommit = (await git(knownGood, "rev-parse", "HEAD")).stdout.trim();
+    const knownGoodDigest = crypto.createHash("sha256")
+      .update(JSON.stringify({ commit: knownGoodCommit, kind: "git-commit" }))
+      .digest("hex");
+    const verifier = await writeVerifier(
+      "calibrated-verifier",
+      "#!/bin/sh\n# calibrated-verifier-secret\ngrep -q '\"changed\"' src/app.js\n",
+    );
+
+    const result = await invokeEval([verifier, knownGood]);
+
+    expect(result).toMatchObject({
+      schema_version: 4,
+      grader_version: "workspace-patch/v2",
+      verifier_preflight: {
+        kind: "subject-reject-known-good-pass/v1",
+        status: "passed",
+        binding_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+      summary: { pass: 1, fail: 0, error: 0 },
+    });
+    await expect(fsp.access(modelMarker)).resolves.toBeUndefined();
+    expect((await fsp.readdir(runDir)).filter((name) => name !== ".internal"))
+      .toHaveLength(1);
+    const persisted = await allText(evalDir);
+    const runs = await allText(runDir);
+    const publicResult = JSON.stringify(result);
+    expect(persisted).not.toContain(knownGood);
+    expect(persisted).not.toContain("known-good-control-secret");
+    expect(persisted).not.toContain(knownGoodCommit);
+    expect(persisted).not.toContain(knownGoodDigest);
+    expect(publicResult).not.toContain(knownGood);
+    expect(publicResult).not.toContain(knownGoodCommit);
+    expect(publicResult).not.toContain(knownGoodDigest);
+    expect(publicResult).not.toContain("known-good-control-secret");
+    expect(persisted).not.toContain(verifier);
+    expect(persisted).not.toContain("calibrated-verifier-secret");
+    expect(runs).not.toContain(knownGood);
+    expect(runs).not.toContain("known-good-control-secret");
+    expect(runs).not.toContain(knownGoodCommit);
+    expect(runs).not.toContain(knownGoodDigest);
+    expect(runs).not.toContain(verifier);
+    expect(runs).not.toContain("calibrated-verifier-secret");
+    expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
+      .toEqual([]);
+  }, 40000);
+
+  it("aborts when a verifier or known-good control overlaps child runtime reads", async () => {
+    await writePatchSuite({
+      verifier_preflight: "subject-reject-known-good-pass/v1",
+      cases: [{
+        id: "change-target",
+        prompt: "Change locateTarget so it returns the string changed.",
+        answer_schema: "workspace-patch/v1",
+      }],
+    });
+    const externalVerifier = await writeVerifier(
+      "external-verifier",
+      "#!/bin/sh\ngrep -q '\"changed\"' src/app.js\n",
+    );
+    const readableControl = await createKnownGoodControl("readable-control-secret", fakeBin);
+
+    const controlFailure = await invokeEvalFailure([externalVerifier, readableControl]);
+    expect(controlFailure.error).toMatchObject({
+      code: "unsafe_eval_oracle",
+      message: "Known-good workspace overlaps a workspace or runtime path readable by the agent",
+    });
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
+    expect((await fsp.readdir(evalDir).catch(() => []))
+      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await expect(fsp.access(modelMarker)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const readableVerifier = await writeVerifier(
+      "readable-verifier",
+      "#!/bin/sh\nexit 1\n",
+      fakeBin,
+    );
+    const verifierFailure = await invokeEvalFailure([readableVerifier]);
+    expect(verifierFailure.error).toMatchObject({
+      code: "unsafe_eval_oracle",
+      message: "Standard verifier overlaps a workspace or runtime path readable by the agent",
+    });
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
+    expect((await fsp.readdir(evalDir).catch(() => []))
+      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await expect(fsp.access(modelMarker)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 20000);
+
+  it("rejects always-pass and always-fail verifiers before any model dispatch", async () => {
+    await writePatchSuite({
+      verifier_preflight: "subject-reject-known-good-pass/v1",
+      cases: [{
+        id: "change-target",
+        prompt: "Change locateTarget so it returns the string changed.",
+        answer_schema: "workspace-patch/v1",
+      }],
+    });
+    const knownGood = await createKnownGoodControl("known-good");
+    const alwaysPass = await writeVerifier("always-pass", "#!/bin/sh\nexit 0\n");
+    const alwaysFail = await writeVerifier("always-fail", "#!/bin/sh\nexit 1\n");
+
+    const passFailure = await invokeEvalFailure([alwaysPass, knownGood]);
+    expect(passFailure.error).toMatchObject({
+      code: "verifier_preflight_failed",
+    });
+    expect(passFailure.error.message).toContain("expected subject to fail");
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
+    expect((await fsp.readdir(evalDir).catch(() => []))
+      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await expect(fsp.access(modelMarker)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const failFailure = await invokeEvalFailure([alwaysFail, knownGood]);
+    expect(failFailure.error).toMatchObject({
+      code: "verifier_preflight_failed",
+    });
+    expect(failFailure.error.message).toContain("expected known-good control to pass");
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
+    expect((await fsp.readdir(evalDir).catch(() => []))
+      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await expect(fsp.access(modelMarker)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 40000);
+
+  it("preflights every patch case before dispatching the first model run", async () => {
+    await writePatchSuite({
+      verifier_preflight: "subject-reject-known-good-pass/v1",
+      cases: [
+        {
+          id: "first-change",
+          prompt: "Change the first target.",
+          answer_schema: "workspace-patch/v1",
+        },
+        {
+          id: "second-change",
+          prompt: "Change the second target.",
+          answer_schema: "workspace-patch/v1",
+        },
+      ],
+    });
+    const knownGood = await createKnownGoodControl("known-good");
+    const valid = await writeVerifier(
+      "valid-control",
+      "#!/bin/sh\ngrep -q '\"changed\"' src/app.js\n",
+    );
+    const invalid = await writeVerifier("second-always-fails", "#!/bin/sh\nexit 1\n");
+
+    const failure = await invokeEvalFailure([
+      valid,
+      knownGood,
+      invalid,
+      knownGood,
+    ]);
+
+    expect(failure.error).toMatchObject({ code: "verifier_preflight_failed" });
+    expect(failure.error.message).toContain("second-change");
+    expect(await fsp.readdir(runDir).catch(() => [])).toEqual([]);
+    expect((await fsp.readdir(evalDir).catch(() => []))
+      .filter((name) => name.endsWith(".json"))).toEqual([]);
+    await expect(fsp.access(modelMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fsp.readdir(root)).filter((name) => name.startsWith(".agenthub-eval-")))
+      .toEqual([]);
+  }, 40000);
 
   it("delivers one pinned Python capsule to the child and verifier", async () => {
     const brokenBin = path.join(root, "broken-system-bin");
@@ -757,6 +933,41 @@ process.exitCode = await main(process.argv.slice(2), io);
     });
   });
 
+  async function writePatchSuite({ verifier_preflight, cases }) {
+    await fsp.writeFile(
+      path.join(workspace, ".agenthub", "evals.json"),
+      `${JSON.stringify({
+        schema_version: 2,
+        suite_id: "verifier-preflight",
+        ...(verifier_preflight ? { verifier_preflight } : {}),
+        cases,
+      }, null, 2)}\n`,
+    );
+    await git(workspace, "add", ".");
+    await git(workspace, "commit", "-m", "verifier preflight suite");
+  }
+
+  async function createKnownGoodControl(secret, parent = root) {
+    const target = path.join(parent, `known-good-${crypto.randomUUID()}`);
+    const branch = `known-good-${crypto.randomUUID()}`;
+    await git(workspace, "worktree", "add", "-b", branch, target);
+    await fsp.writeFile(
+      path.join(target, "src", "app.js"),
+      `// ${secret}\nexport function locateTarget() { return "changed"; }\n`,
+    );
+    await git(target, "add", ".");
+    await git(target, "commit", "-m", "known good control");
+    return target;
+  }
+
+  async function writeVerifier(name, body, directory = path.join(root, "preflight-verifiers")) {
+    await fsp.mkdir(directory, { recursive: true });
+    const target = path.join(directory, name);
+    await fsp.writeFile(target, body, { mode: 0o700 });
+    await fsp.chmod(target, 0o700);
+    return target;
+  }
+
   async function invokeEval(answers, agent = "codex", suite = undefined) {
     const args = [
       env.AGENT_HUB_TEST_HELPER,
@@ -782,14 +993,14 @@ process.exitCode = await main(process.argv.slice(2), io);
       {
         cwd: path.dirname(CLI_PATH),
         env: { ...env, AGENT_HUB_TEST_ANSWERS: JSON.stringify(answers) },
-        timeout: 15000,
+        timeout: 30000,
       },
     );
     expect(stderr).toContain("Standard answers accepted");
     return JSON.parse(stdout);
   }
 
-  async function invokeEvalFailure(answers, agent) {
+  async function invokeEvalFailure(answers, agent = "codex") {
     return invokeRawFailure([
       "eval", "run", "--agent", agent,
       "--model", "gpt-test", "--effort", "medium", "--cwd", workspace,
@@ -805,12 +1016,14 @@ process.exitCode = await main(process.argv.slice(2), io);
         {
           cwd: path.dirname(CLI_PATH),
           env: { ...env, AGENT_HUB_TEST_ANSWERS: JSON.stringify(answers) },
-          timeout: 15000,
+          timeout: 30000,
         },
       );
       throw new Error("Eval unexpectedly succeeded");
     } catch (error) {
-      return JSON.parse(error.stderr);
+      const stderr = String(error.stderr ?? "");
+      const jsonStart = stderr.lastIndexOf('{\n  "error"');
+      return JSON.parse(jsonStart >= 0 ? stderr.slice(jsonStart) : stderr);
     }
   }
 });
@@ -878,6 +1091,9 @@ if (args[0] === "sandbox") {
     process.exit(19);
   }
   process.exit(Number.isInteger(child.status) ? child.status : 20);
+}
+if (process.env.FAKE_MODEL_MARKER) {
+  fs.writeFileSync(process.env.FAKE_MODEL_MARKER, "invoked\\n");
 }
 let input = "";
 process.stdin.on("data", (chunk) => { input += chunk; });

@@ -37,8 +37,10 @@ import {
   PATCH_EVAL_SUITE_SCHEMA_VERSION,
   READONLY_EVAL_EXECUTION_PROFILE,
   SOURCE_LOCATION_GRADER_VERSION,
+  WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION,
   WORKSPACE_PATCH_GRADER_VERSION,
   WORKSPACE_PATCH_SCHEMA,
+  WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
   answerDigest,
   buildEvalPrompt,
   canonicalizeExistingSourceLocation,
@@ -48,6 +50,7 @@ import {
   loadEvalSuite,
   normalizeExpectedVerifier,
   normalizeExpectedSourceLocation,
+  normalizeKnownGoodWorkspace,
   parseSourceLocationOutput,
   sameWorkspaceSnapshot,
   verifierUnchanged,
@@ -90,7 +93,11 @@ export async function runEval(input, io, internal = {}) {
   const cwd = path.resolve(input.cwd ?? process.cwd());
   const suite = await loadEvalSuite(cwd, input.suite_path);
   const subject = await cleanWorkspaceSnapshot(cwd);
-  const requestedProfile = suite.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION
+  const patchEval = suite.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION;
+  const verifierPreflightEnabled =
+    suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT;
+  const timeoutMs = input.timeout_ms ?? DEFAULT_CASE_TIMEOUT_MS;
+  const requestedProfile = patchEval
     ? PATCH_EVAL_EXECUTION_PROFILE
     : READONLY_EVAL_EXECUTION_PROFILE;
   const agent = await resolveEvalAgent(
@@ -99,13 +106,38 @@ export async function runEval(input, io, internal = {}) {
     internal.env ?? process.env,
     requestedProfile,
   );
-  const expected = await collectAnswers(suite, cwd, agent, io);
+  const expected = await collectAnswers(suite, subject, agent, io);
   const afterAnswers = await cleanWorkspaceSnapshot(cwd);
   if (!sameWorkspaceSnapshot(subject, afterAnswers)) {
     throw evalError(
       "eval_workspace_changed",
       "Eval workspace changed while standard answers were being collected",
     );
+  }
+  let verifierPreflight = null;
+  if (verifierPreflightEnabled) {
+    io.stderr(
+      "\nStandard answers accepted; running trusted foreground verifier preflight controls " +
+        "with current-user filesystem and network authority.\n",
+    );
+    verifierPreflight = await preflightVerifierControls({
+      suite,
+      expected,
+      subject,
+      agent,
+      env: internal.env ?? process.env,
+      timeoutMs,
+    });
+    const afterPreflight = await cleanWorkspaceSnapshot(cwd);
+    if (!sameWorkspaceSnapshot(subject, afterPreflight)) {
+      throw evalError(
+        "eval_workspace_changed",
+        "Eval workspace changed while verifier preflight controls were running",
+      );
+    }
+    io.stderr("Verifier preflight controls passed; starting isolated evaluation.\n");
+  } else {
+    io.stderr("\nStandard answers accepted; starting isolated evaluation.\n");
   }
 
   const evalRunId = crypto.randomUUID();
@@ -125,7 +157,7 @@ export async function runEval(input, io, internal = {}) {
         subject,
         agent,
         env: internal.env ?? process.env,
-        timeoutMs: input.timeout_ms ?? DEFAULT_CASE_TIMEOUT_MS,
+        timeoutMs,
       };
       caseResults.push(item.answer_schema === WORKSPACE_PATCH_SCHEMA
         ? await runPatchCase(runInput)
@@ -151,12 +183,11 @@ export async function runEval(input, io, internal = {}) {
 
   const completedAt = new Date();
   const summary = summarizeCases(caseResults, suite.cases.length);
-  const patchEval = suite.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION;
   const executionProfile = patchEval
     ? PATCH_EVAL_EXECUTION_PROFILE
     : READONLY_EVAL_EXECUTION_PROFILE;
   const result = {
-    schema_version: patchEval ? 3 : 1,
+    schema_version: patchEval ? (verifierPreflightEnabled ? 4 : 3) : 1,
     kind: "agent-eval-run",
     eval_run_id: evalRunId,
     status: "completed",
@@ -178,6 +209,7 @@ export async function runEval(input, io, internal = {}) {
       effort: agent.effort,
     },
     ...(patchEval ? { toolchain: publicEvalToolchain(agent.eval_toolchain) } : {}),
+    ...(verifierPreflight ? { verifier_preflight: verifierPreflight } : {}),
     isolation: {
       policy: executionProfile,
       enforcement: "codex-permission-profile",
@@ -198,7 +230,9 @@ export async function runEval(input, io, internal = {}) {
       subagents: false,
     },
     grader_version: patchEval
-      ? WORKSPACE_PATCH_GRADER_VERSION
+      ? (verifierPreflightEnabled
+          ? WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION
+          : WORKSPACE_PATCH_GRADER_VERSION)
       : SOURCE_LOCATION_GRADER_VERSION,
     cases: caseResults,
     summary,
@@ -496,7 +530,7 @@ function ancestorNamed(value, name) {
   }
 }
 
-async function collectAnswers(suite, cwd, agent, io) {
+async function collectAnswers(suite, subject, agent, io) {
   if (typeof io?.readLine !== "function") {
     throw evalError("interactive_eval_required", "Eval run requires an interactive terminal");
   }
@@ -507,17 +541,42 @@ async function collectAnswers(suite, cwd, agent, io) {
       try {
         if (item.answer_schema === WORKSPACE_PATCH_SCHEMA) {
           const verifierPath = await io.readLine("standard verifier path: ");
-          answers.set(
-            item.id,
-            await normalizeExpectedVerifier(verifierPath, cwd, agent.runtime_read_paths),
+          const verifier = await normalizeExpectedVerifier(
+            verifierPath,
+            subject.root,
+            agent.runtime_read_paths,
           );
+          if (suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT) {
+            const controlPath = await io.readLine("known-good control workspace: ");
+            const knownGood = await normalizeKnownGoodWorkspace(
+              controlPath,
+              subject,
+              agent.runtime_read_paths,
+            );
+            const controlVerifier = await normalizeExpectedVerifier(
+              verifierPath,
+              knownGood.root,
+              agent.runtime_read_paths,
+            );
+            if (
+              controlVerifier.path !== verifier.path ||
+              controlVerifier.content_digest !== verifier.content_digest
+            ) {
+              throw evalError(
+                "invalid_eval_answer",
+                "Standard verifier resolved differently for the known-good control",
+              );
+            }
+            verifier.known_good = knownGood;
+          }
+          answers.set(item.id, verifier);
         } else {
           const raw = {
             path: await io.readLine("standard path: "),
             symbol: await io.readLine("standard symbol: "),
             definition_line: Number(await io.readLine("standard definition line: ")),
           };
-          answers.set(item.id, await normalizeExpectedSourceLocation(raw, cwd));
+          answers.set(item.id, await normalizeExpectedSourceLocation(raw, subject.root));
         }
         break;
       } catch (error) {
@@ -526,8 +585,164 @@ async function collectAnswers(suite, cwd, agent, io) {
       }
     }
   }
-  io.stderr("\nStandard answers accepted; starting isolated evaluation.\n");
   return answers;
+}
+
+async function preflightVerifierControls({
+  suite,
+  expected,
+  subject,
+  agent,
+  env,
+  timeoutMs,
+}) {
+  const cases = [];
+  for (const item of suite.cases) {
+    const standard = expected.get(item.id);
+    if (!standard?.known_good) {
+      throw evalError(
+        "verifier_preflight_failed",
+        `Verifier preflight for ${item.id} is missing a known-good control`,
+      );
+    }
+    const currentKnownGood = await cleanWorkspaceSnapshot(standard.known_good.root);
+    if (!sameWorkspaceSnapshot(standard.known_good, currentKnownGood)) {
+      throw evalError(
+        "verifier_preflight_failed",
+        `Known-good control changed before verifier preflight for ${item.id}`,
+      );
+    }
+    if (!await verifierUnchanged(standard)) {
+      throw evalError(
+        "verifier_preflight_failed",
+        `Standard verifier changed before preflight for ${item.id}`,
+      );
+    }
+
+    const negative = await runVerifierControl({
+      expected: standard,
+      subject,
+      repositoryRoot: subject.root,
+      agent,
+      env,
+      timeoutMs,
+      preflightToolchain: true,
+    });
+    assertVerifierControl(item, "subject", "fail", negative);
+    await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+
+    const positive = await runVerifierControl({
+      expected: standard,
+      subject: standard.known_good,
+      repositoryRoot: subject.root,
+      agent,
+      env,
+      timeoutMs,
+      preflightToolchain: false,
+    });
+    assertVerifierControl(item, "known-good control", "pass", positive);
+    await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+
+    const afterKnownGood = await cleanWorkspaceSnapshot(standard.known_good.root);
+    if (!sameWorkspaceSnapshot(standard.known_good, afterKnownGood)) {
+      throw evalError(
+        "verifier_preflight_failed",
+        `Known-good control changed during verifier preflight for ${item.id}`,
+      );
+    }
+    cases.push({
+      case_id: item.id,
+      question_digest: item.question_digest,
+      answer_digest: answerDigest({
+        kind: WORKSPACE_PATCH_SCHEMA,
+        verifier_digest: standard.content_digest,
+      }),
+    });
+  }
+  return {
+    kind: WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
+    status: "passed",
+    binding_digest: answerDigest({
+      kind: WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
+      grader_version: WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION,
+      suite_digest: suite.digest,
+      subject_workspace_digest: subject.workspace_digest,
+      runtime_content_digest: agent.eval_toolchain.content_digest,
+      execution_profile: PATCH_EVAL_EXECUTION_PROFILE,
+      timeout_ms: timeoutMs,
+      cases,
+    }),
+  };
+}
+
+async function runVerifierControl({
+  expected,
+  subject,
+  repositoryRoot,
+  agent,
+  env,
+  timeoutMs,
+  preflightToolchain,
+}) {
+  const disposable = await createDisposableWorktree(subject, repositoryRoot);
+  const scratchPath = path.join(disposable.root, "scratch");
+  let runtimeBin = null;
+  try {
+    await fsp.mkdir(scratchPath, { mode: 0o700 });
+    await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+    try {
+      runtimeBin = await createRuntimeCommandBin(disposable.root, {
+        python3: agent.eval_toolchain.commands.python3,
+      });
+    } catch {
+      throw evalError(
+        "runtime_preflight_failed",
+        "Pinned Python runtime capsule could not be prepared for verifier preflight",
+      );
+    }
+    if (preflightToolchain) {
+      const schemaPath = path.join(scratchPath, "workspace-patch.schema.json");
+      await fsp.writeFile(schemaPath, `${JSON.stringify(WORKSPACE_PATCH_OUTPUT_SCHEMA)}\n`, {
+        mode: 0o600,
+      });
+      const executionProfile = patchExecutionProfile({
+        agent,
+        runtimeBin,
+        schemaPath,
+        scratchPath,
+      });
+      await preflightPatchExecution({
+        agent,
+        cwd: disposable.workspace,
+        disposable,
+        env,
+        executionProfile,
+      });
+      agent.eval_toolchain_ready = true;
+    }
+    return await runVerifier(
+      expected,
+      disposable.workspace,
+      env,
+      timeoutMs,
+      runtimeBin,
+    );
+  } finally {
+    if (runtimeBin) await fsp.chmod(runtimeBin, 0o700).catch(() => undefined);
+    await removeDisposableWorktree(repositoryRoot, disposable);
+  }
+}
+
+function assertVerifierControl(item, label, expectedStatus, actual) {
+  if (actual.status === expectedStatus) return;
+  const exit = actual.metrics?.exit_code === null || actual.metrics?.exit_code === undefined
+    ? "unknown"
+    : actual.metrics.exit_code;
+  throw evalError(
+    "verifier_preflight_failed",
+    `Verifier preflight for ${item.id} expected ${label} to ${expectedStatus}, ` +
+      `but got ${actual.status} (${actual.reason}, exit ${exit})`,
+  );
 }
 
 async function runSourceLocationCase({ item, expected, cwd, agent, timeoutMs }) {
@@ -638,40 +853,19 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
         "Pinned Python runtime capsule could not be prepared for the isolated child",
       );
     }
-    const executionProfile = {
-      kind: PATCH_EVAL_EXECUTION_PROFILE,
-      scratch_path: scratchPath,
-      output_schema_path: schemaPath,
-      agent_executable: agent.agent_executable,
-      agent_interpreter: agent.agent_interpreter,
-      runtime_read_paths: Array.from(new Set([
-        ...agent.runtime_read_paths,
-        runtimeBin,
-      ])).sort(),
-      path_prepend: [runtimeBin],
-    };
-    try {
-      const preflightCodexHome = path.join(disposable.root, "preflight-codex-home");
-      await fsp.mkdir(preflightCodexHome, { mode: 0o700 });
-      await preflightPatchToolchain({
-        codexHome: preflightCodexHome,
-        cwd: disposable.workspace,
-        env,
-        executionProfile,
-        runtime: agent.eval_toolchain,
-      });
-      if (agent.agent_code_home) {
-        await preflightPatchToolchain({
-          codexHome: agent.agent_code_home,
-          cwd: disposable.workspace,
-          env,
-          executionProfile,
-          runtime: agent.eval_toolchain,
-        });
-      }
-    } catch {
-      throw runtimePreflightError();
-    }
+    const executionProfile = patchExecutionProfile({
+      agent,
+      runtimeBin,
+      schemaPath,
+      scratchPath,
+    });
+    await preflightPatchExecution({
+      agent,
+      cwd: disposable.workspace,
+      disposable,
+      env,
+      executionProfile,
+    });
     agent.eval_toolchain_ready = true;
     accepted = await dispatchToAgent(
       {
@@ -754,6 +948,46 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
         message: error instanceof Error ? error.message : String(error),
       })}\n`);
     }
+  }
+}
+
+function patchExecutionProfile({ agent, runtimeBin, schemaPath, scratchPath }) {
+  return {
+    kind: PATCH_EVAL_EXECUTION_PROFILE,
+    scratch_path: scratchPath,
+    output_schema_path: schemaPath,
+    agent_executable: agent.agent_executable,
+    agent_interpreter: agent.agent_interpreter,
+    runtime_read_paths: Array.from(new Set([
+      ...agent.runtime_read_paths,
+      runtimeBin,
+    ])).sort(),
+    path_prepend: [runtimeBin],
+  };
+}
+
+async function preflightPatchExecution({ agent, cwd, disposable, env, executionProfile }) {
+  try {
+    const preflightCodexHome = path.join(disposable.root, "preflight-codex-home");
+    await fsp.mkdir(preflightCodexHome, { mode: 0o700 });
+    await preflightPatchToolchain({
+      codexHome: preflightCodexHome,
+      cwd,
+      env,
+      executionProfile,
+      runtime: agent.eval_toolchain,
+    });
+    if (agent.agent_code_home) {
+      await preflightPatchToolchain({
+        codexHome: agent.agent_code_home,
+        cwd,
+        env,
+        executionProfile,
+        runtime: agent.eval_toolchain,
+      });
+    }
+  } catch {
+    throw runtimePreflightError();
   }
 }
 
@@ -959,7 +1193,7 @@ function verifierEnvironment(source) {
   );
 }
 
-async function createDisposableWorktree(subject) {
+async function createDisposableWorktree(subject, repository = subject.root) {
   const prefix = `.agenthub-eval-${path.basename(subject.root)}-`;
   const root = await fsp.mkdtemp(path.join(path.dirname(subject.root), prefix));
   await fsp.chmod(root, 0o700).catch(() => undefined);
@@ -967,7 +1201,7 @@ async function createDisposableWorktree(subject) {
   const hooks = path.join(root, "empty-hooks");
   try {
     await fsp.mkdir(hooks, { mode: 0o700 });
-    await checkedGit(subject.root, [
+    await checkedGit(repository, [
       "-c",
       `core.hooksPath=${hooks}`,
       "worktree",

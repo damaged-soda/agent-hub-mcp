@@ -11,6 +11,8 @@ export const SOURCE_LOCATION_SCHEMA = "source-location/v1";
 export const SOURCE_LOCATION_GRADER_VERSION = "source-location/v1";
 export const WORKSPACE_PATCH_SCHEMA = "workspace-patch/v1";
 export const WORKSPACE_PATCH_GRADER_VERSION = "workspace-patch/v1";
+export const WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION = "workspace-patch/v2";
+export const WORKSPACE_PATCH_VERIFIER_PREFLIGHT = "subject-reject-known-good-pass/v1";
 export const READONLY_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
 export const PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v1";
 export const EVAL_EXECUTION_PROFILE = READONLY_EVAL_EXECUTION_PROFILE;
@@ -59,6 +61,22 @@ export function normalizeSuite(value) {
   const answerSchema = value.schema_version === EVAL_SUITE_SCHEMA_VERSION
     ? SOURCE_LOCATION_SCHEMA
     : WORKSPACE_PATCH_SCHEMA;
+  let verifierPreflight;
+  if (value.verifier_preflight !== undefined) {
+    if (value.schema_version !== PATCH_EVAL_SUITE_SCHEMA_VERSION) {
+      throw evalError(
+        "invalid_eval_suite",
+        "verifier_preflight is supported only by patch eval suites",
+      );
+    }
+    if (value.verifier_preflight !== WORKSPACE_PATCH_VERIFIER_PREFLIGHT) {
+      throw evalError(
+        "invalid_eval_suite",
+        `verifier_preflight must be ${WORKSPACE_PATCH_VERIFIER_PREFLIGHT}`,
+      );
+    }
+    verifierPreflight = value.verifier_preflight;
+  }
   const suiteId = identifier(value.suite_id, "suite_id");
   if (!Array.isArray(value.cases) || value.cases.length === 0) {
     throw evalError("invalid_eval_suite", "Eval suite cases must be a non-empty array");
@@ -110,9 +128,11 @@ export function normalizeSuite(value) {
       question_digest: canonicalHash(normalized),
     };
   });
-  const unknown = Object.keys(value).filter(
-    (key) => !new Set(["schema_version", "suite_id", "cases"]).has(key),
-  );
+  const supportedSuiteFields = new Set(["schema_version", "suite_id", "cases"]);
+  if (value.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION) {
+    supportedSuiteFields.add("verifier_preflight");
+  }
+  const unknown = Object.keys(value).filter((key) => !supportedSuiteFields.has(key));
   if (unknown.length > 0) {
     throw evalError(
       "invalid_eval_suite",
@@ -122,6 +142,7 @@ export function normalizeSuite(value) {
   return {
     schema_version: value.schema_version,
     suite_id: suiteId,
+    ...(verifierPreflight ? { verifier_preflight: verifierPreflight } : {}),
     cases,
   };
 }
@@ -134,9 +155,21 @@ export async function normalizeExpectedVerifier(value, cwd, deniedReadPaths = []
     throw evalError("invalid_eval_answer", "Standard verifier path must be absolute");
   }
   const workspace = await realDirectory(cwd, "eval cwd");
-  const verifier = await fsp.realpath(path.resolve(value.trim())).catch((error) => {
+  const lexicalVerifier = path.resolve(value.trim());
+  const deniedCapabilities = await canonicalCapabilityPaths(deniedReadPaths);
+  assertOracleOutsideCapabilities(
+    [lexicalVerifier],
+    [workspace, ...deniedCapabilities],
+    "Standard verifier",
+  );
+  const verifier = await fsp.realpath(lexicalVerifier).catch((error) => {
     throw evalError("invalid_eval_answer", `Standard verifier is unavailable: ${error.message}`);
   });
+  assertOracleOutsideCapabilities(
+    [lexicalVerifier, verifier],
+    [workspace, ...deniedCapabilities],
+    "Standard verifier",
+  );
   const stat = await fsp.stat(verifier).catch((error) => {
     throw evalError("invalid_eval_answer", `Standard verifier is unavailable: ${error.message}`);
   });
@@ -152,21 +185,6 @@ export async function normalizeExpectedVerifier(value, cwd, deniedReadPaths = []
   await fsp.access(verifier, fsConstants.X_OK).catch(() => {
     throw evalError("invalid_eval_answer", "Standard verifier must be executable");
   });
-  if (isInside(verifier, workspace)) {
-    throw evalError(
-      "invalid_eval_answer",
-      "Standard verifier must stay outside the evaluated workspace",
-    );
-  }
-  for (const item of deniedReadPaths) {
-    const readable = await fsp.realpath(path.resolve(item)).catch(() => path.resolve(item));
-    if (isInside(verifier, readable)) {
-      throw evalError(
-        "invalid_eval_answer",
-        "Standard verifier must stay outside agent runtime read capabilities",
-      );
-    }
-  }
   return {
     path: verifier,
     content_digest: crypto.createHash("sha256").update(await fsp.readFile(verifier)).digest("hex"),
@@ -275,18 +293,91 @@ export async function cleanWorkspaceSnapshot(cwd) {
   if (!/^[0-9a-f]{40,64}$/i.test(commit)) {
     throw evalError("invalid_eval_workspace", "Git HEAD did not resolve to a commit hash");
   }
+  const commonDirResult = await git(workspace, ["rev-parse", "--git-common-dir"]);
+  const gitCommonDir = await realDirectory(
+    path.resolve(workspace, commonDirResult.stdout.trim()),
+    "Git common directory",
+  );
   return {
     root: workspace,
     commit,
     workspace_digest: canonicalHash({ kind: "git-commit", commit }),
+    git_common_dir: gitCommonDir,
   };
+}
+
+export async function normalizeKnownGoodWorkspace(value, subject, deniedReadPaths = []) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw evalError("invalid_eval_answer", "Known-good workspace path must be non-empty");
+  }
+  if (!path.isAbsolute(value.trim())) {
+    throw evalError("invalid_eval_answer", "Known-good workspace path must be absolute");
+  }
+  if (typeof subject?.root !== "string") {
+    throw evalError("invalid_eval_answer", "Eval subject is missing its workspace identity");
+  }
+  const lexicalKnownGood = path.resolve(value.trim());
+  const deniedCapabilities = await canonicalCapabilityPaths(deniedReadPaths);
+  assertOracleOutsideCapabilities(
+    [lexicalKnownGood],
+    [subject.root, ...deniedCapabilities],
+    "Known-good workspace",
+  );
+  let knownGood;
+  try {
+    knownGood = await cleanWorkspaceSnapshot(lexicalKnownGood);
+  } catch (error) {
+    throw evalError(
+      "invalid_eval_answer",
+      `Known-good workspace is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  assertOracleOutsideCapabilities(
+    [lexicalKnownGood, knownGood.root],
+    [subject.root, ...deniedCapabilities],
+    "Known-good workspace",
+  );
+  if (typeof subject?.git_common_dir !== "string") {
+    throw evalError("invalid_eval_answer", "Eval subject is missing its Git repository identity");
+  }
+  if (knownGood.git_common_dir !== subject.git_common_dir) {
+    throw evalError(
+      "invalid_eval_answer",
+      "Known-good workspace must belong to the same Git repository as the eval subject",
+    );
+  }
+  if (knownGood.commit === subject.commit) {
+    throw evalError(
+      "invalid_eval_answer",
+      "Known-good workspace must use a different commit from the eval subject",
+    );
+  }
+  let derivedFromSubject;
+  try {
+    derivedFromSubject = await gitIsAncestor(subject.root, subject.commit, knownGood.commit);
+  } catch (error) {
+    throw evalError(
+      "invalid_eval_answer",
+      `Known-good workspace ancestry could not be verified: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (!derivedFromSubject) {
+    throw evalError(
+      "invalid_eval_answer",
+      "Known-good workspace commit must descend from the eval subject commit",
+    );
+  }
+  return knownGood;
 }
 
 export function sameWorkspaceSnapshot(left, right) {
   return (
     left?.root === right?.root &&
     left?.commit === right?.commit &&
-    left?.workspace_digest === right?.workspace_digest
+    left?.workspace_digest === right?.workspace_digest &&
+    left?.git_common_dir === right?.git_common_dir
   );
 }
 
@@ -365,6 +456,19 @@ async function git(cwd, args) {
   return result;
 }
 
+async function gitIsAncestor(cwd, ancestor, descendant) {
+  const result = await runCommand("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+    cwd,
+    env: process.env,
+    timeoutMs: 10000,
+    maxOutputBytes: 4 * 1024 * 1024,
+  });
+  if (!result.error && result.code === 0) return true;
+  if (!result.error && result.code === 1) return false;
+  const detail = result.error?.message ?? result.stderr.trim() ?? `exit ${result.code}`;
+  throw evalError("invalid_eval_workspace", `Git ancestry inspection failed: ${detail}`);
+}
+
 function identifier(value, label) {
   if (typeof value !== "string" || !ID_PATTERN.test(value)) {
     throw evalError(
@@ -400,6 +504,34 @@ async function realFile(target, label) {
 function isInside(candidate, root) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function canonicalCapabilityPaths(values) {
+  const result = new Set();
+  for (const value of values) {
+    if (typeof value !== "string" || !path.isAbsolute(value)) {
+      throw evalError(
+        "unsupported_isolation",
+        "Agent runtime read capabilities must be absolute paths",
+      );
+    }
+    const lexical = path.resolve(value);
+    result.add(lexical);
+    const real = await fsp.realpath(lexical).catch(() => null);
+    if (real) result.add(real);
+  }
+  return Array.from(result);
+}
+
+function assertOracleOutsideCapabilities(candidates, capabilities, label) {
+  if (candidates.some((candidate) => capabilities.some((capability) => (
+    isInside(candidate, capability) || isInside(capability, candidate)
+  )))) {
+    throw evalError(
+      "unsafe_eval_oracle",
+      `${label} overlaps a workspace or runtime path readable by the agent`,
+    );
+  }
 }
 
 function slashPath(value) {

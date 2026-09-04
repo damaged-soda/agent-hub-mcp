@@ -134,20 +134,32 @@ while `--suite` may select an uncommitted file outside the evaluated workspace. 
 and hashes its questions at startup; the evaluated worktree itself must remain clean and immutable.
 Schema v1 collects the current commit's standard source location and performs exact grading in the
 read-only workspace. Schema v2 collects an external executable verifier, lets the agent edit a
-disposable detached worktree, and runs the verifier only after the agent exits. Patch Eval uses an
-explicitly provisioned, self-contained Python runtime capsule selected by catalog ID or absolute
-manifest path. The built-in catalog pins a gzip artifact from
+disposable detached worktree, and runs the verifier only after the agent exits. A patch suite can
+opt into `verifier_preflight: "subject-reject-known-good-pass/v1"`; the evaluator then also supplies
+a clean committed same-repository known-good worktree at a descendant commit for each case. Before
+starting any model run, Agent Hub requires the verifier to reject an untouched disposable subject and accept the
+corresponding known-good disposable worktree. A failed preflight starts no agent run and writes no
+Eval result. Patch Eval uses an explicitly provisioned, self-contained Python runtime capsule
+selected by catalog ID or absolute manifest path. The built-in catalog pins a gzip artifact from
 [astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone);
 install is a separate operation, while `eval run` never
 downloads, probes, or falls back to a host Python. The capsule is content-addressed, exposed
 read-only, and reported by digest so baseline and candidate runs can require an exact runtime
-match. Patch inputs remain suite schema v2; capsule-backed patch results use result schema v3 with
-a required `toolchain` identity, while historical result schema v2 remains unchanged. Both suite
-versions keep standards and external suite paths out of child inputs, use fresh ephemeral sessions,
+match. Patch inputs remain suite schema v2; ordinary capsule-backed patch results use result schema
+v3, while preflighted results use v4 and `workspace-patch/v2`. Both carry the required `toolchain`
+identity; historical result schema v2 remains unchanged. Preflighted results retain only an opaque
+binding to the accepted suite, verifier, subject, runtime, and execution contract—not control
+paths, commits, contents, or verifier output. Both suite versions keep standards and external suite
+paths out of child inputs, use fresh ephemeral sessions,
 deny `.git` and command network, and disable memory, session persistence, and subagents. Eval
 requires an explicit model and effort plus Codex CLI 0.151.0 or newer; providers without an
 equivalent whitelist fail with `unsupported_isolation`. See the
 [evaluation contract](docs/evals.md).
+
+Verifier preflight is a two-sided oracle sanity check, not a hostile-code sandbox or proof that the
+verifier covers every required behavior. The foreground verifier retains the caller's filesystem
+and network authority and may run repository code; final grading may execute code produced by the
+agent. Use it only with trusted verifiers and repositories.
 
 For the machine-routed cross-review immediately after this process creates or updates a PR, use the
 persisted requester route instead of choosing an adapter ad hoc. A standalone review is performed by

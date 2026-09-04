@@ -205,7 +205,8 @@ prompt 原样透传约束。`agenthub eval run` 从评测者选择的 suite 读�
 worktree 外且无需提交，supervisor 启动时一次性规范化并固定 digest。被测 worktree 自身仍须
 干净并由一个不可变 commit 定义。Eval 在 TTY 中先收齐当前 commit 的人工标准答案，然后为
 每个 case 创建一个普通 Agent Hub run。supervisor 只把“当前问题 + 固定结构化输出契约”交给
-run，不向 child 暴露 suite 路径；标准答案只留在 supervisor 内存，完成后只保留 digest。
+run，不向 child 暴露 suite 路径；标准答案及 verifier preflight 的 control identity 只留在
+supervisor 内存，完成后只保留不可反查 control 的 digest。
 model 与 effort 必须由调用者显式指定，不读取 catalog 推荐值或环境默认值。
 
 每个 case 的普通 run 带内部 `execution_profile=workspace-readonly/v1`。该字段不在普通 CLI
@@ -233,16 +234,30 @@ runtime store 以绑定 manifest identity、command、source provenance 与 tree
 相对路径；catalog payload 在同父目录原子发布前递归去掉写位并以 sealed 状态完成 self-test，
 解析时复核 slot digest、pinned source、平台、架构、路径 containment 与 seal。
 
+schema v2 可选 `verifier_preflight=subject-reject-known-good-pass/v1`。启用后，每个 case 除
+verifier 外还由 TTY 收取一个 clean、committed、same-repository、descends-from-subject 的
+known-good worktree；
+supervisor 对 subject 与 known-good 的固定 commit 分别创建 disposable copy，以同一 pinned
+verifier 先确认 untouched subject 返回非零、再确认 known-good 返回零。所有 case 的双向检查
+必须在第一个普通 run 前完成；任一检查失败都作为命令级错误收束，不创建普通 run 或 Eval
+artifact。control 只参与 grader 输入校验，不产生 model turn、工作量指标或跨 commit 比较，
+因此一次 Eval 仍只有一个 subject。
+
 supervisor 只把 capsule root 作为 runtime capability，并在 disposable root 中构造只读 command
 overlay，于 cwd 重绑后前置到 child PATH；Codex tool child 只继承保留该 PATH 的 core 环境，
 不继承 provider 凭据或 namespace 记账变量。supervisor 用同一个已固定 Codex executable、
 空临时 CODEX_HOME，在 model turn 前以相同 permission profile 运行隔离的 Python/native stdlib
 sandbox preflight；agent 退出后，foreground verifier 的 PATH 也前置同一 capsule command
 overlay，使其普通 `python3` 入口与 child 使用同一解释器；verifier 使用私有 HOME/shell startup
-环境但仍保留前台权限，执行后 capsule 会再次校验，变化会终止剩余 case。
+环境但仍保留前台权限；verifier preflight 复用同一执行路径和 timeout，执行后 capsule 会再次
+校验，变化会终止流程。foreground verifier 能以当前用户权限访问文件和网络，并可能执行
+control 或 agent 产生的代码；preflight 不是 hostile-code sandbox，也不消除后台进程残留风险。
 capsule identity 与 content digest 写入结果，受控 baseline/candidate 必须相同；
-suite 输入仍为 schema v2，但 capsule-backed patch result 升为 schema v3 并强制包含 toolchain，
-旧 result v2 契约保持不变；
+suite 输入仍为 schema v2；普通 capsule-backed patch result 使用 schema v3 / grader
+`workspace-patch/v1`，preflighted result 使用 schema v4 / grader `workspace-patch/v2`，两者都
+强制包含 toolchain，旧 result v2 契约保持不变。v4 只增加绑定 suite、question、verifier、
+subject、runtime、timeout 与执行契约的 opaque preflight digest，不保存 control 的 path、commit、
+content、output 或独立 digest；
 普通 dispatch 完全不经过 capsule 选择或 provisioning。这样仓库测试既不必扩大到用户目录，
 也不会把 runtime 发现和修复成本计入 agent 指标；
 patch 正文不进入 eval result，
