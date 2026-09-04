@@ -7,7 +7,7 @@ This runbook covers the daemon-free CLI/Skills path and the optional MCP server.
 - Node.js 20 or newer.
 - Dependencies installed with `npm install`.
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
-- CLI authentication configured through environment variables or each CLI's own config (`claude` login; `codex login` or `OPENAI_API_KEY`, honoring `CODEX_HOME`; `kimi` login, honoring `KIMI_CODE_HOME`; `opencode auth login`).
+- CLI authentication configured through environment variables or each CLI's own config (`claude` login or a `claude setup-token` file; `codex login` or `OPENAI_API_KEY`, honoring `CODEX_HOME`; `kimi` login, honoring `KIMI_CODE_HOME`; `opencode auth login`).
 
 Validate the adapters:
 
@@ -179,6 +179,7 @@ endpoint, and API remain below the same canonical prefix.
 | `AGENT_HUB_REVIEW_CONFIG` | `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json` | Moves the versioned requester → reviewer/model override file. |
 | `AGENT_HUB_CATALOG_CACHE_DIR` | `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog` | Moves the private cross-process catalog cache used by `review status`. |
 | `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
+| `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` | unset | Absolute owner-only (`0600`) `claude setup-token` file used only by Claude model discovery and run processes. |
 | `AGENT_HUB_CODEX_MODEL` | unset | Default `--model` for Codex runs when the request omits `metadata.codex.model`. |
 | `AGENT_HUB_CLAUDE_EFFORT` | unset | Default `--effort` for Claude runs when the request omits `metadata.claude.effort`. |
 | `AGENT_HUB_CODEX_EFFORT` | unset | Default `model_reasoning_effort` for Codex runs when the request omits `metadata.codex.effort`. |
@@ -200,6 +201,17 @@ executable and hand the runner a validated post-birth environment overlay, inclu
 overlay only after namespace rebinding and unsets every handoff key before the agent CLI starts. The
 declared capability directories remain in the internal request/profile metadata, but composed PATH
 and environment values are never persisted.
+
+For unattended Claude requests, run `claude setup-token` interactively and save its one-line output
+to a private file without putting the token in shell startup files. Set
+`AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` to that file's absolute path. The runner requires a canonical
+non-symlink regular file owned by the current user with exact mode `0600`; it reads the file for each
+Claude model-discovery or run process. Actual runs use the birth shell to remove competing auth
+selectors and inject `CLAUDE_CODE_OAUTH_TOKEN` after cwd namespace rebinding. The token and configured
+path do not enter run artifacts or non-Claude child environments. Do not forward `CLAUDE_CODE_OAUTH_TOKEN` with
+`AGENT_HUB_FORWARD_ENV`. Because Claude tool subprocesses inherit the Claude process environment,
+enable this only for trusted workspaces. Atomically replace the same file to rotate it; new runs pick
+up the replacement. Ordinary `claude` login remains available for interactive account features.
 
 ## Run Storage
 

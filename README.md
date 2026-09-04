@@ -8,7 +8,7 @@ Prerequisites:
 
 - Node.js 20 or newer.
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
-- CLI authentication configured through each CLI's normal environment (`claude` login, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
+- CLI authentication configured through each CLI's normal environment (`claude` login or a `claude setup-token` file, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
 
 Install dependencies and link the local CLI:
 
@@ -319,6 +319,7 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_REVIEW_CONFIG` | Override the review-routing JSON path; defaults to `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. |
 | `AGENT_HUB_CATALOG_CACHE_DIR` | Override the private cross-process Agent catalog cache root; defaults to `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |
+| `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` | Absolute path to an owner-only (`0600`) `claude setup-token` file. Only Claude model discovery and run processes receive the bearer; actual runs inject it after cwd namespace rebinding. |
 | `AGENT_HUB_CODEX_MODEL` | Default `--model` for Codex runs when `metadata.codex.model` is not provided. |
 | `AGENT_HUB_CLAUDE_EFFORT` | Default `--effort` for Claude runs when `metadata.claude.effort` is not provided. |
 | `AGENT_HUB_CODEX_EFFORT` | Default `model_reasoning_effort` for Codex runs when `metadata.codex.effort` is not provided. |
@@ -326,6 +327,15 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_KIMI_EFFORT` | Default `KIMI_MODEL_THINKING_EFFORT` for Kimi runs when `metadata["kimi-code"].effort` is not provided. |
 | `AGENT_HUB_OPENCODE_MODEL` | Default `--model` for OpenCode runs when `metadata.opencode.model` is not provided. |
 | `AGENT_HUB_OPENCODE_EFFORT` | Default `--variant` for OpenCode runs when `metadata.opencode.effort` is not provided. |
+
+`AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` is intended for unattended model requests. The file must be a
+canonical, non-symlink regular file owned by the current user, contain one token line, and have mode
+`0600`. Its path and value are withheld from agent run artifacts and from non-Claude children. When
+enabled, the Claude adapter removes competing API, custom-base-URL, cloud-selector, and refresh-token
+variables before injecting the bearer. Do not globally export `CLAUDE_CODE_OAUTH_TOKEN` or add it to
+`AGENT_HUB_FORWARD_ENV`. Claude and any tool subprocess it launches can read the bearer, so use this
+mode only for trusted workspaces. Rotate by atomically replacing the configured file; the next run
+reloads it.
 
 Run directories are stored under `$XDG_CACHE_HOME/agent-hub-mcp/runs` or `~/.cache/agent-hub-mcp/runs` by default and are created with `0700` permissions. Discussion records are stored in the sibling `discussions` directory and retain linked run artifacts for the same seven-day terminal TTL.
 

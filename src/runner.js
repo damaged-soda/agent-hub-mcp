@@ -63,6 +63,8 @@ async function main() {
   if ((await readState(runDir).catch(() => null))?.status === "cancelled") {
     return;
   }
+  const launchEnvironment =
+    (await adapter.prepareLaunchEnvironment?.({ env: process.env })) ?? {};
   // 环境按白名单透传（会话轴状态 NS / NS_UNDO / PATH 整体在内），并置 NS_REBIND=1：
   // agent 经 zsh 起在 run 的 cwd，~/.zshenv 的 glue 先卸掉继承的域再按 cwd 绑定——和
   // 终端里敲命令同一条汇聚段，hub 不解析。command.env 是出生前覆盖；
@@ -73,10 +75,17 @@ async function main() {
     ...(request.review_context ? reviewContextEnv(request.review_context) : {}),
     ...command.env,
   };
+  for (const key of launchEnvironment.remove_env_keys ?? []) {
+    delete baseAgentEnv[key];
+  }
   const { env: agentEnv, launcher } = buildBirthLaunch(command, baseAgentEnv, {
     path_interpreter: command.path_interpreter,
     path_prepend: pathPrepend,
-    post_birth_env: command.post_birth_env,
+    post_birth_env: {
+      ...(command.post_birth_env ?? {}),
+      ...(launchEnvironment.post_birth_env ?? {}),
+    },
+    post_birth_unset: launchEnvironment.remove_env_keys,
   });
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,

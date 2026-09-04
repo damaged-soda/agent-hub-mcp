@@ -319,6 +319,7 @@ describe("agent catalog cache", () => {
       OPENAI_API_KEY: "required-provider-credential",
       UNRELATED_SECRET: "must-not-cross-worker-boundary",
       AGENT_HUB_CATALOG_CACHE_DIR: cacheRoot,
+      AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE: path.join(root, "setup-token"),
       AGENT_HUB_CWD_ALLOWLIST: cwd,
       AGENT_HUB_RUN_DIR: path.join(root, "runs"),
     });
@@ -326,6 +327,7 @@ describe("agent catalog cache", () => {
     expect(workerEnv.OPENAI_API_KEY).toBe("required-provider-credential");
     expect(workerEnv.UNRELATED_SECRET).toBeUndefined();
     expect(workerEnv.AGENT_HUB_CATALOG_CACHE_DIR).toBe(cacheRoot);
+    expect(workerEnv.AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE).toBe(path.join(root, "setup-token"));
     expect(workerEnv.AGENT_HUB_CWD_ALLOWLIST).toBe(cwd);
     expect(workerEnv.AGENT_HUB_RUN_DIR).toBe(path.join(root, "runs"));
   });

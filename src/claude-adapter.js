@@ -11,8 +11,14 @@ import {
   preflightClaudeSessionPersistence,
   verifyClaudeSessionPersistence,
 } from "./session-persistence.js";
+import {
+  CLAUDE_CREDENTIAL_ENV_KEYS,
+  CLAUDE_OAUTH_TOKEN_FILE_ENV_KEY,
+  prepareClaudeLaunchEnvironment,
+} from "./claude-auth.js";
 
 export const CLAUDE_AGENT_ID = "claude-code";
+export { CLAUDE_CREDENTIAL_ENV_KEYS, prepareClaudeLaunchEnvironment };
 export const CLAUDE_DISCUSSION_CAPABILITIES = Object.freeze({
   supported_permissions: ["read-only", "auto"],
   preferred_discussion_permission: "read-only",
@@ -39,7 +45,7 @@ const DEFAULT_OUTPUT_FORMAT = "stream-json";
 const DEFAULT_MODEL_ENV_KEY = "AGENT_HUB_CLAUDE_MODEL";
 const DEFAULT_EFFORT_ENV_KEY = "AGENT_HUB_CLAUDE_EFFORT";
 const MODEL_DISCOVERY_SOURCE = "claude-code-control";
-const MODEL_DISCOVERY_TIMEOUT_MS = 5000;
+const MODEL_DISCOVERY_TIMEOUT_MS = 15000;
 const MODEL_CATALOG_CACHE_MS = 30000;
 
 let availabilityCache = null;
@@ -409,13 +415,18 @@ export async function listClaudeAgent(options = {}) {
   };
 }
 
-export async function getClaudeModelCatalog({ cwd = process.cwd(), env = process.env } = {}) {
+export async function getClaudeModelCatalog({
+  cwd = process.cwd(),
+  env = process.env,
+  credential_env: credentialEnv = env,
+} = {}) {
   const cacheKey = [
     cwd,
     env.CLAUDE_CONFIG_DIR ?? "",
     env.ANTHROPIC_BASE_URL ?? "",
     env.CLAUDE_CODE_USE_BEDROCK ?? "",
     env.CLAUDE_CODE_USE_VERTEX ?? "",
+    credentialEnv[CLAUDE_OAUTH_TOKEN_FILE_ENV_KEY] ?? "",
   ].join("\0");
   const cached = modelCatalogCache.get(cacheKey);
   if (cached && Date.now() - cached.checkedAtMs < MODEL_CATALOG_CACHE_MS) {
@@ -428,6 +439,18 @@ export async function getClaudeModelCatalog({ cwd = process.cwd(), env = process
     request_id: requestId,
     request: { subtype: "list_models" },
   })}\n`;
+  let commandEnv = { ...env };
+  try {
+    const prepared = prepareClaudeLaunchEnvironment({ env: credentialEnv });
+    if (prepared) {
+      for (const key of prepared.remove_env_keys) delete commandEnv[key];
+      commandEnv = { ...commandEnv, ...prepared.post_birth_env };
+    }
+  } catch (error) {
+    const value = unavailableModelCatalog(error.message);
+    modelCatalogCache.set(cacheKey, { checkedAtMs: Date.now(), value });
+    return value;
+  }
   const result = await runCommand(
     "claude",
     [
@@ -442,7 +465,7 @@ export async function getClaudeModelCatalog({ cwd = process.cwd(), env = process
       "",
       "--no-session-persistence",
     ],
-    { cwd, env, input: request, timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS },
+    { cwd, env: commandEnv, input: request, timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS },
   );
 
   let value;

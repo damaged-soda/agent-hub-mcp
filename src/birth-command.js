@@ -5,9 +5,16 @@ export const BIRTH_SHELL = "/bin/zsh";
 const INTERNAL_ENV_PREFIX = "AGENT_HUB_INTERNAL_";
 const INTERNAL_PATH_PREPEND_ENV = "AGENT_HUB_INTERNAL_PATH_PREPEND";
 const INTERNAL_POST_BIRTH_ENV_PREFIX = "AGENT_HUB_INTERNAL_POST_BIRTH_";
-const ALLOWED_POST_BIRTH_ENV_KEYS = new Set(["CODEX_HOME", "TEMP", "TMP", "TMPDIR"]);
+const ALLOWED_POST_BIRTH_ENV_KEYS = new Set([
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CODEX_HOME",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+]);
 const DEFAULT_BIRTH_COMMAND = 'exec "$0" "$@"';
 const COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // zsh reads ~/.zshenv before this command body. The body therefore resolves any
 // PATH-based shebang interpreter first, applies private overlays after cwd-based
@@ -15,19 +22,21 @@ const COMMAND_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export function buildBirthLaunch(command, baseEnv, options = {}) {
   const pathPrepend = normalizePathPrepend(options.path_prepend);
   const postBirthEnv = normalizePostBirthEnv(options.post_birth_env);
-  const usesOverlay = pathPrepend.length > 0 || Object.keys(postBirthEnv).length > 0;
+  const postBirthUnset = normalizePostBirthUnset(options.post_birth_unset);
   const hasPinnedInterpreter = options.path_interpreter !== undefined &&
     options.path_interpreter !== null;
-  if ((usesOverlay || hasPinnedInterpreter) && !path.isAbsolute(command?.command)) {
-    throw new Error("Commands with a post-birth environment overlay must use an absolute executable");
+  const inspectsExecutable = pathPrepend.length > 0 || hasPinnedInterpreter;
+  if (inspectsExecutable && !path.isAbsolute(command?.command)) {
+    throw new Error("Commands with a PATH overlay or pinned interpreter must use an absolute executable");
   }
-  const interpreterName = usesOverlay || hasPinnedInterpreter
+  const interpreterName = inspectsExecutable
     ? pathResolvedShebangName(command.command)
     : null;
   const pathInterpreter = pinnedPathInterpreter(interpreterName, options.path_interpreter);
   const launcher = birthArgv(command, {
     pathInterpreter,
     postBirthEnvKeys: Object.keys(postBirthEnv),
+    postBirthUnset,
     prependPath: pathPrepend.length > 0,
   });
   const env = { ...baseEnv };
@@ -45,7 +54,7 @@ export function buildBirthLaunch(command, baseEnv, options = {}) {
 
 function birthArgv(
   command,
-  { pathInterpreter = null, postBirthEnvKeys = [], prependPath = false } = {},
+  { pathInterpreter = null, postBirthEnvKeys = [], postBirthUnset = [], prependPath = false } = {},
 ) {
   const steps = [];
   if (pathInterpreter) {
@@ -54,6 +63,9 @@ function birthArgv(
       '[[ "$__agent_hub_interpreter" = /* && -x "$__agent_hub_interpreter" ]] || exit 126',
       "shift",
     );
+  }
+  for (const key of postBirthUnset) {
+    steps.push(`unset ${key}`);
   }
   for (const [index, key] of postBirthEnvKeys.entries()) {
     const privateKey = `${INTERNAL_POST_BIRTH_ENV_PREFIX}${index}`;
@@ -81,6 +93,19 @@ function birthArgv(
     ...(pathInterpreter ? [pathInterpreter] : []),
     ...command.args,
   ];
+}
+
+function normalizePostBirthUnset(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Post-birth unset keys must be an array");
+  const seen = new Set();
+  for (const [index, key] of value.entries()) {
+    if (typeof key !== "string" || !ENV_NAME_PATTERN.test(key)) {
+      throw new Error(`Post-birth unset key ${index} must be an environment variable name`);
+    }
+    seen.add(key);
+  }
+  return Array.from(seen).sort();
 }
 
 function normalizePathPrepend(value) {

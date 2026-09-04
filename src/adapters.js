@@ -1,5 +1,6 @@
 import {
   CLAUDE_AGENT_ID,
+  CLAUDE_CREDENTIAL_ENV_KEYS,
   CLAUDE_DISCUSSION_CAPABILITIES,
   buildClaudeCommand,
   createClaudeSessionRef,
@@ -7,6 +8,7 @@ import {
   interpretClaudeExit,
   listClaudeAgent,
   preflightClaudeSession,
+  prepareClaudeLaunchEnvironment,
   verifyClaudeSession,
 } from "./claude-adapter.js";
 import {
@@ -46,10 +48,12 @@ const ADAPTERS = new Map([
       agentId: CLAUDE_AGENT_ID,
       displayName: "Claude Code",
       metadataKey: "claude",
+      credentialEnvKeys: CLAUDE_CREDENTIAL_ENV_KEYS,
       getAvailability: getClaudeAvailability,
       listAgent: listClaudeAgent,
       createSessionRef: createClaudeSessionRef,
       buildCommand: buildClaudeCommand,
+      prepareLaunchEnvironment: prepareClaudeLaunchEnvironment,
       interpretExit: interpretClaudeExit,
       preflightSession: preflightClaudeSession,
       verifySession: verifyClaudeSession,

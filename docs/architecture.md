@@ -527,6 +527,10 @@ runs/
 
 Runner 不把 MCP server 的完整环境原样传给目标 CLI。`src/env.js` 维护默认 allowlist，
 覆盖 Claude auth、云厂商 auth、终端行为、`PATH`、用户目录和 XDG 目录等运行所需键。
+`AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` 是控制面私有配置：父进程只把文件路径交给 detached
+runner 与模型目录 refresh worker；通用 allowlist 即使被 `AGENT_HUB_FORWARD_ENV` 点名也
+不会把路径或 `CLAUDE_CODE_OAUTH_TOKEN` 交给任一普通 agent child。只有 Claude adapter
+创建的模型目录控制进程或实际 run 会收到 bearer。
 
 调用方可以通过 `AGENT_HUB_FORWARD_ENV` 追加转发键名，格式为逗号分隔：
 
@@ -620,6 +624,15 @@ claude -p --input-format text --output-format stream-json --verbose
 - 两者都未设置时，Agent Hub 默认传入 `--permission-mode auto`。
 - Agent Hub 同时设置 `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`，确保从另一个 Claude
   会话启动时不会被 Claude 的嵌套会话判定排除。
+- 配置 `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` 时，Claude adapter 每次 run 重新读取该绝对
+  路径；文件须为无 symlink、当前 uid 所有、精确 `0600` 的单行 UTF-8 普通文件。读取在
+  runner 内完成，token 经私有 handoff 在 cwd namespace 重绑后才注入
+  `CLAUDE_CODE_OAUTH_TOKEN`；同时移除 API key、自定义 base URL、OAuth refresh/scopes 与
+  Bedrock/Vertex/Foundry selector。路径和值均不进入 run artifact，非 Claude child 不接收。
+  bearer 仍会进入 Claude 及其工具子进程环境，因此这里只提供凭据收口，不构成不可信代码
+  隔离；原子替换同一路径后下一次 run 生效。
+- Claude 模型目录控制请求同样临时读取并注入该 bearer，且以 `--tools ""`、
+  `--no-session-persistence` 运行；路径变化纳入目录 cache identity，token 内容不纳入。
 
 `dispatch_to_agent` 返回的 `cli_session_ref.native_session_id` 是本次传给 Claude 的
 session UUID。Runner 完成后，终态 `cli_session_ref.native_session_id` 使用 Claude
