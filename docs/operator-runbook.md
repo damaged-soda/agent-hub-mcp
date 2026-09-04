@@ -7,7 +7,7 @@ This runbook covers the daemon-free CLI/Skills path and the optional MCP server.
 - Node.js 20 or newer.
 - Dependencies installed with `npm install`.
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
-- CLI authentication configured through environment variables or each CLI's own config (`claude` login or a `claude setup-token` file; `codex login` or `OPENAI_API_KEY`, honoring `CODEX_HOME`; `kimi` login, honoring `KIMI_CODE_HOME`; `opencode auth login`).
+- CLI authentication configured for each CLI (`claude` login, or set `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` to an owner-only file containing `claude setup-token` output; `codex login` or `OPENAI_API_KEY`, honoring `CODEX_HOME`; `kimi` login, honoring `KIMI_CODE_HOME`; `opencode auth login`).
 
 Validate the adapters:
 
@@ -219,6 +219,9 @@ path do not enter run artifacts or non-Claude child environments. Do not forward
 enable this only for trusted workspaces. Atomically replace the same file to rotate it; new runs pick
 up the replacement. Ordinary `claude` login remains available for interactive account features.
 
+Configured token-file mode is fail-closed; see Troubleshooting for rejected-file diagnostics and
+recovery.
+
 ## Run Storage
 
 Each run gets its own `0700` directory under the run root:
@@ -374,6 +377,7 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `kimi-code` appears under `unavailable_agents` | `kimi --version` failed. | Fix PATH or Kimi Code CLI installation. |
 | `opencode` appears under `unavailable_agents` | Version probing failed or `opencode run` lacks one of the required non-interactive flags. | Install/update OpenCode and run `opencode auth login`. |
 | `review status` reports `model-discovery-unavailable` | A provider CLI could not produce its model catalog, often because its state/log directory is outside the caller's sandbox. | Inspect `error_detail`, then run `agenthub agents --cwd "$PWD"` in a context where the provider's state directory is writable. |
+| A Claude run fails with `claude_oauth_token_file_invalid`, or model discovery reports the corresponding file error | The configured setup-token path is missing, noncanonical/symlinked, not a current-user regular file with exact mode `0600`, or does not contain exactly one valid token line. | Repair or atomically replace the file. Configured token-file mode is fail-closed; unset `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` only when deliberately returning to normal Claude login. |
 | `nested_review_forbidden` | The current process is already an Agent Hub-selected reviewer. | Review directly in the current session; do not invoke `agenthub review dispatch` again. |
 | `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
 | `eval runtime status` reports `missing` / `runtime_capsule_missing` | The selected catalog runtime has not been installed in this capsule store. | Run `agenthub eval runtime install --runtime ID`, then inspect status again; do not point Eval at a host Python or widen its read profile. |

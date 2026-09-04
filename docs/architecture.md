@@ -151,7 +151,7 @@ Adapter 出现在列表中的条件：
 
 `list_agents` 还会 best-effort 探测每个可用 adapter 的可选模型，并返回统一的
 `models` 数组与 `model_discovery` 状态。调用方可传可选的绝对路径 `cwd`；它只是探测模型目录时的工作目录（缓存键为
-`cwd` + 配置根 / base URL），不选择任何 namespace。未传时使用 MCP server 的当前目录。
+`cwd` + adapter 配置与 credential-source identity），不选择任何 namespace。未传时使用 MCP server 的当前目录。
 
 - Claude Code：以 stream-json 启动无持久化、无工具会话，发送 SDK control
   `list_models` 请求；这与交互式 `/model` picker 使用同一份账号、provider 和策略目录。
@@ -162,7 +162,8 @@ Adapter 出现在列表中的条件：
 - OpenCode：读取 `opencode models` 的 `provider/model` 行；凭证存储不会进入 stdout、
   响应或持久化 artifact。
 
-探测并行执行，按 `cwd` + 配置根 / base URL 缓存 30 秒，单个命令通常限时 5 秒（OpenCode 10 秒）、输出限
+探测并行执行，按 `cwd` + adapter 配置与 credential-source identity 缓存 30 秒；Claude
+限时 30 秒、Codex/Kimi 5 秒、OpenCode 10 秒，输出限
 8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，并保留有界的
 命令诊断；不会改变 adapter 自身的 `available` 状态。Review 路由把这种状态与“成功探测但
 model 不存在”分开报告。
@@ -195,7 +196,8 @@ Cockpit 只能经
 `review status/set` 消费这份单写者状态。
 
 目录缓存默认位于 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog/`，可由
-`AGENT_HUB_CATALOG_CACHE_DIR` 覆盖。cache key 是 `cwd` 与已知非 secret 配置身份的 SHA-256；
+`AGENT_HUB_CATALOG_CACHE_DIR` 覆盖。cache key 是 `cwd` 与已知配置、credential-source
+identity（Claude 包含 setup-token 文件路径，不含 token 内容）的 SHA-256；
 文件只保存已经对外返回的规范化 catalog、观测时间和有界刷新错误，不保存 key 原文、环境值、
 credential 或 provider 原始响应。目录为 `0700`、文件为 `0600`，更新使用原子 rename。
 缓存只改变 status 的等待语义；set 的 live 校验承担路由写入边界，dispatch 不依赖 catalog。

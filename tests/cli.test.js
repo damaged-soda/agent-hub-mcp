@@ -38,7 +38,9 @@ describe("agenthub CLI", () => {
       AGENT_HUB_CWD_ALLOWLIST: workspace,
       CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
+    // Keep baseline fixtures independent from inherited review/auth control-plane state.
     delete env[REVIEW_DEPTH_ENV];
+    delete env.AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE;
     internalDispatchHelper = path.join(root, "internal-dispatch.mjs");
     await fsp.writeFile(
       internalDispatchHelper,

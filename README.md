@@ -8,7 +8,7 @@ Prerequisites:
 
 - Node.js 20 or newer.
 - Claude Code CLI available as `claude`, Codex CLI available as `codex`, Kimi Code CLI available as `kimi`, and/or OpenCode CLI available as `opencode`.
-- CLI authentication configured through each CLI's normal environment (`claude` login or a `claude setup-token` file, `codex login` or `OPENAI_API_KEY`, `kimi` login under `KIMI_CODE_HOME`, `opencode auth login`).
+- CLI authentication configured for each CLI (`claude` login, or set `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` to an owner-only file containing `claude setup-token` output; `codex login` or `OPENAI_API_KEY`; `kimi` login under `KIMI_CODE_HOME`; `opencode auth login`).
 
 Install dependencies and link the local CLI:
 
@@ -177,15 +177,16 @@ agenthub review dispatch --requester codex --cwd "$PWD" \
 `review set` accepts only a reviewer and model present in the live `agents` catalog, rejects
 self-review, and atomically stores overrides in
 `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. With no override, Codex uses
-Claude Code's `default` model (currently resolved by Claude Code to Opus 5); Claude Code and Kimi
-Code use Codex `gpt-5.6-sol`. `review dispatch` reads the configured route and hands its reviewer
-and model directly to the ordinary detached-run path without performing model-catalog discovery.
-The target CLI is authoritative if a saved model has since disappeared: dispatch still returns the
-ordinary run response, and `wait` reports any resulting provider failure. Agent Hub never silently
-falls back. The command wraps the request in the versioned reviewer-control prompt so the selected
-reviewer performs the review directly and does not dispatch another review; the original request
-remains embedded verbatim. This routed command is not a default for a review request merely because
-a PR, diff, or change is mentioned.
+Claude Code's `default` model alias; inspect `review status` field `resolved_model` for the concrete
+model selected by the current Claude Code catalog. Claude Code and Kimi Code use Codex
+`gpt-5.6-sol`. `review dispatch` reads the configured route and hands its reviewer and model directly
+to the ordinary detached-run path without performing model-catalog discovery. The target CLI is
+authoritative if a saved model has since disappeared: dispatch still returns the ordinary run
+response, and `wait` reports any resulting provider failure. Agent Hub never silently falls back.
+The command wraps the request in the versioned reviewer-control prompt so the selected reviewer
+performs the review directly and does not dispatch another review; the original request remains
+embedded verbatim. This routed command is not a default for a review request merely because a PR,
+diff, or change is mentioned.
 
 `review status` keeps its normalized Agent/model catalog in a private cross-process cache under
 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. A catalog is fresh for five minutes;
