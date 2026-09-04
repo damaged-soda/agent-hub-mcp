@@ -40,6 +40,9 @@ describe("Agent Hub Skill bundle", () => {
 
     expect(reviews).toContain("A request to review a diff, change, or existing PR is not by itself a trigger");
     expect(reviews).toMatch(/If the user names a\s+reviewer, use ordinary `agenthub dispatch --agent \.\.\.`/);
+    expect(reviews).toContain("without querying the model catalog");
+    expect(reviews).toContain("report the synchronous dispatch error");
+    expect(reviews).toContain("inspect the run's terminal error");
     expect(runs).toContain("The selected agent performs the request directly in its session");
     expect(runs).toMatch(/If the review request is addressed to the current process,\s+perform it directly/);
   });

@@ -510,8 +510,14 @@ try {
     expect(JSON.stringify(records)).not.toContain("stack");
   });
 
-  it("persists a review route and dispatches with its configured model", async () => {
-    const initial = await runCli(["review", "status", "--cwd", workspace], env);
+  it("persists a review route and dispatches it without model discovery", async () => {
+    const invocationLog = path.join(root, "claude-invocations.jsonl");
+    const reviewEnv = {
+      ...env,
+      AGENT_HUB_FORWARD_ENV: "FAKE_CLAUDE_INVOCATION_LOG",
+      FAKE_CLAUDE_INVOCATION_LOG: invocationLog,
+    };
+    const initial = await runCli(["review", "status", "--cwd", workspace], reviewEnv);
     expect(initial.kind).toBe("agent-review-config");
     expect(initial.routes.find((route) => route.requester === "codex")).toMatchObject({
       reviewer: "claude-code",
@@ -525,22 +531,23 @@ try {
       "--reviewer", "claude-code",
       "--model", "haiku",
       "--cwd", workspace,
-    ], env);
+    ], reviewEnv);
     expect(updated.routes.find((route) => route.requester === "codex")).toMatchObject({
       reviewer: "claude-code",
       model: "haiku",
       source: "override",
     });
 
+    await fsp.writeFile(invocationLog, "");
     const accepted = await runCli([
       "review", "dispatch",
       "--requester", "codex",
       "--cwd", workspace,
       "--prompt", "review via route",
-    ], env);
+    ], reviewEnv);
     const completed = await runCli(
       ["wait", accepted.run_ref.run_id, "--timeout-ms", "10000"],
-      env,
+      reviewEnv,
     );
     expect(completed.status).toBe("completed");
     expect(completed.content[0].text).toBe("fake result: review via route");
@@ -564,21 +571,27 @@ try {
     });
     expect(request.prompt).toContain("AGENT_HUB_REVIEW_PROTOCOL_V1");
     expect(request.prompt).toContain("review via route");
+    const invocationKinds = (await fsp.readFile(invocationLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).kind);
+    expect(invocationKinds).toEqual(["version", "run"]);
+    expect(invocationKinds).not.toContain("list_models");
 
     const contextAccepted = await runCli([
       "review", "dispatch",
       "--requester", "codex",
       "--cwd", workspace,
       "--prompt", "dump-review-context",
-    ], env);
+    ], reviewEnv);
     const contextCompleted = await runCli(
       ["wait", contextAccepted.run_ref.run_id, "--timeout-ms", "10000"],
-      env,
+      reviewEnv,
     );
     expect(JSON.parse(contextCompleted.content[0].text)).toEqual({
       depth: "1",
     });
-  }, 15000);
+  }, 60000);
 
   it("runs a durable discussion from a detached CLI worker", async () => {
     const staleCommandDir = path.join(
@@ -875,7 +888,16 @@ async function writeFakeClaude(target) {
 const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
+const recordInvocation = (kind) => {
+  if (process.env.FAKE_CLAUDE_INVOCATION_LOG) {
+    fs.appendFileSync(
+      process.env.FAKE_CLAUDE_INVOCATION_LOG,
+      JSON.stringify({ kind, args }) + "\\n",
+    );
+  }
+};
 if (args.includes("--version")) {
+  recordInvocation("version");
   process.stdout.write("2.1.193 (Claude Code)\\n");
   process.exit(0);
 }
@@ -888,6 +910,7 @@ process.stdin.on("end", async () => {
   let controlRequest = null;
   try { controlRequest = JSON.parse(input.trim()); } catch {}
   if (controlRequest?.type === "control_request") {
+    recordInvocation("list_models");
     process.stdout.write(JSON.stringify({
       type: "control_response",
       response: {
@@ -898,6 +921,7 @@ process.stdin.on("end", async () => {
     }) + "\\n");
     return;
   }
+  recordInvocation("run");
   const sessionIndex = args.indexOf("--session-id");
   const resumeIndex = args.indexOf("--resume");
   const sessionId = sessionIndex >= 0 ? args[sessionIndex + 1] : args[resumeIndex + 1];

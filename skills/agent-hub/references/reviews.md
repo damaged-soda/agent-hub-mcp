@@ -22,9 +22,11 @@ agenthub wait RUN_ID
 ```
 
 Use the current CLI's stable ID as `--requester`: `codex`, `claude-code`, or `kimi-code`. Cockpit may
-change the route between reviews; `review dispatch` reads and validates it at dispatch time. If the
-configured reviewer or model is unavailable, report the failure instead of choosing a fallback.
-Use `review status --cwd "$PWD"` only when the effective route needs to be shown or diagnosed.
+change the route between reviews; `review dispatch` reads it at dispatch time and passes the saved
+reviewer/model directly to the ordinary run path without querying the model catalog. If the reviewer
+CLI is unavailable, report the synchronous dispatch error. If that CLI rejects a saved model after
+the run is created, inspect the run's terminal error. Do not choose a fallback. Use
+`review status --cwd "$PWD"` only when the effective route needs to be shown or diagnosed.
 
 When Agent Hub has already selected the current process as the reviewer, perform the review directly
 in the current session; do not invoke `agenthub review dispatch` again.

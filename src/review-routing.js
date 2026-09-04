@@ -49,6 +49,7 @@ export async function setReviewRoute(input, internal = {}) {
   const reviewer = requiredString(input?.reviewer, "reviewer");
   const model = requiredString(input?.model, "model");
   assertRequester(requester);
+  assertReviewer(reviewer);
   if (reviewer === requester) {
     throw reviewRouteError("reviewer must differ from requester");
   }
@@ -87,14 +88,12 @@ export async function dispatchReview(input, internal = {}) {
   assertRequester(requester);
   const prompt = requiredString(input?.prompt, "prompt");
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
-  const cwd = await resolveReviewCwd(input.cwd);
-  const [catalog, config] = await Promise.all([
-    liveCatalog(cwd, internal),
-    readReviewConfig(configPath),
-  ]);
+  await resolveReviewCwd(input.cwd);
+  const config = await readReviewConfig(configPath);
   const route = effectiveRoute(requester, config);
-  assertAvailableRoute(route.reviewer, route.model, catalog);
-  await cacheLiveCatalog(cwd, catalog, internal);
+  assertReviewer(route.reviewer);
+  // Catalog validation belongs to review set/status. Dispatch uses the saved
+  // route directly so one review does not probe every installed provider.
   const reviewContext = createReviewContext({
     requester,
     reviewer: route.reviewer,
@@ -135,6 +134,7 @@ async function readReviewConfig(configPath) {
     }
     const reviewer = configString(route.reviewer, `routes.${requester}.reviewer`);
     const model = configString(route.model, `routes.${requester}.model`);
+    assertReviewer(reviewer, reviewConfigError);
     if (reviewer === requester) {
       throw reviewConfigError(`review route ${requester} cannot review itself`);
     }
@@ -145,9 +145,13 @@ async function readReviewConfig(configPath) {
 
 function buildStatus(config, catalog, cache = null) {
   const available = new Map((catalog.agents ?? []).map((agent) => [agent.agent_id, agent]));
+  const unavailable = new Map(
+    (catalog.unavailable_agents ?? []).map((agent) => [agent.agent_id, agent]),
+  );
   const routes = Object.keys(DEFAULT_REVIEW_ROUTES).map((requester) => {
     const route = effectiveRoute(requester, config);
     const agent = available.get(route.reviewer);
+    const unavailableAgent = unavailable.get(route.reviewer);
     const model = agent?.models?.find((item) => item.id === route.model);
     const discoveryUnavailable = agent?.model_discovery?.status === "unavailable";
     const error = !agent
@@ -168,6 +172,9 @@ function buildStatus(config, catalog, cache = null) {
     };
     if (discoveryUnavailable && typeof agent.model_discovery.reason === "string") {
       status.error_detail = agent.model_discovery.reason;
+    } else if (!agent && typeof unavailableAgent?.unavailable_reason === "string" &&
+        unavailableAgent.unavailable_reason.trim()) {
+      status.error_detail = unavailableAgent.unavailable_reason.trim();
     }
     return status;
   });
@@ -218,7 +225,16 @@ function effectiveRoute(requester, config) {
 
 function assertAvailableRoute(reviewer, model, catalog) {
   const agent = (catalog.agents ?? []).find((item) => item.agent_id === reviewer);
-  if (!agent) throw reviewRouteError(`reviewer is unavailable: ${reviewer}`);
+  if (!agent) {
+    const unavailableAgent = (catalog.unavailable_agents ?? [])
+      .find((item) => item.agent_id === reviewer);
+    const reason = unavailableAgent?.unavailable_reason;
+    throw reviewRouteError(
+      `reviewer is unavailable: ${reviewer}${
+        typeof reason === "string" && reason.trim() ? `: ${reason.trim()}` : ""
+      }`,
+    );
+  }
   if (agent.model_discovery?.status === "unavailable") {
     const reason = agent.model_discovery.reason;
     throw reviewRouteError(
@@ -237,6 +253,12 @@ function assertRequester(requester, errorFactory = reviewRouteError) {
   const requesters = new Set(allAdapters().map((adapter) => adapter.agentId));
   if (!requesters.has(requester) || !DEFAULT_REVIEW_ROUTES[requester]) {
     throw errorFactory(`unsupported requester: ${requester}`);
+  }
+}
+
+function assertReviewer(reviewer, errorFactory = reviewRouteError) {
+  if (!allAdapters().some((adapter) => adapter.agentId === reviewer)) {
+    throw errorFactory(`unsupported reviewer: ${reviewer}`);
   }
 }
 

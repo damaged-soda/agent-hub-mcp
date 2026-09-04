@@ -22,7 +22,7 @@ Key files:
 | `src/codex-adapter.js` | Codex CLI argv/session/result mapping. |
 | `src/kimi-adapter.js` | Kimi Code argv/session/result mapping. |
 | `src/opencode-adapter.js` | OpenCode argv/session/result/model-catalog mapping. |
-| `src/review-routing.js` | Requester-specific review routes, live model validation, and dispatch. |
+| `src/review-routing.js` | Requester-specific review configuration, status validation, and dispatch. |
 | `src/adapter-utils.js` | Shared adapter helpers (metadata assertions, version probe). |
 | `src/agent-session-core.js` | Provider-neutral session identity, provenance, and pure live-event projections. |
 | `src/agent-session-references.js` | Versioned stable native-event URI formatting, identity, and parsing. |
