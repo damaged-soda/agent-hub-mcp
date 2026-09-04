@@ -162,9 +162,9 @@ Adapter 出现在列表中的条件：
 - OpenCode：读取 `opencode models` 的 `provider/model` 行；凭证存储不会进入 stdout、
   响应或持久化 artifact。
 
-探测并行执行，按 `cwd` + adapter 配置与 credential-source identity 缓存 30 秒；Claude
-限时 30 秒、Codex/Kimi 5 秒、OpenCode 10 秒，输出限
-8 MiB。模型探测失败只会得到空 `models` 和 `model_discovery.status: "unavailable"`，并保留有界的
+探测并行执行，按 `cwd` + adapter 配置与 credential-source identity 缓存 30 秒；单个命令限时分别为 Claude Code 30 秒、
+Codex/Kimi Code 5 秒、OpenCode 10 秒，输出限 8 MiB。模型探测失败只会得到空 `models` 和
+`model_discovery.status: "unavailable"`，并保留有界的
 命令诊断；不会改变 adapter 自身的 `available` 状态。Review 路由把这种状态与“成功探测但
 model 不存在”分开报告。
 
