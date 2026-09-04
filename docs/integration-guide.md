@@ -21,6 +21,15 @@ agenthub dispatch --agent claude-code --cwd "$PWD" --prompt "Review the current 
 agenthub wait RUN_ID
 ```
 
+For unattended Claude runs, generate a token interactively with `claude setup-token`, save its
+single-line output in a canonical, non-symlink regular file owned by the current user with mode
+`0600`, and set `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` to its absolute path before invoking the CLI or
+starting the optional MCP server. Agent Hub reads that file only for Claude model discovery and
+Claude runs; actual runs inject the bearer after cwd namespace rebinding. The bearer and configured
+path are excluded from run artifacts and non-Claude children. Do not put
+`CLAUDE_CODE_OAUTH_TOKEN` in `AGENT_HUB_FORWARD_ENV`; Claude tool subprocesses inherit the bearer,
+so enable this mode only for trusted workspaces.
+
 Repository evaluations are a separate interactive CLI-only surface:
 
 ```sh
@@ -143,7 +152,7 @@ tool_timeout_sec = 660
 
 Returns available and unavailable local adapters together with their selectable models.
 The optional `cwd` must be an absolute directory; it is only the working directory for
-model-catalog probing（cache key: `cwd` + config root / base URL）and does not select a
+model-catalog probing（cache key: `cwd` + adapter config and credential-source identity）and does not select a
 namespace:
 
 ```json
@@ -165,7 +174,8 @@ Every adapter entry contains:
 
 Model discovery failure does not make the adapter unavailable. In that case `models` is an
 empty array, while normal dispatch remains usable. Results are cached for 30 seconds per
-`cwd` + config root / base URL.
+`cwd` + adapter config and credential-source identity. For Claude, that identity includes the
+configured setup-token file path but never the token contents.
 
 Namespaces are not resolved or enforced by Agent Hub: the caller's session-axis state is
 forwarded whole with `NS_REBIND=1`, the agent CLI is started through `zsh` at the run

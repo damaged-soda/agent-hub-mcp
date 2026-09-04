@@ -49,6 +49,8 @@ describe("MCP flow", () => {
       AGENT_HUB_CWD_ALLOWLIST: workspaceDir,
       CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
+    // Keep baseline fixtures independent from a machine-level unattended Claude credential.
+    delete env.AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE;
   });
 
   afterEach(async () => {

@@ -2,10 +2,6 @@
 
 状态：MVP 已实现（含 CLI 检索、失败因果、阶段诊断与冻结预算 profile）
 
-目标版本：MVP
-
-最后更新：2026-08-29
-
 ## 1. 背景
 
 Agent Hub 已经把 Claude Code、Codex、Kimi Code 和 OpenCode 统一为本地非交互 CLI
@@ -926,7 +922,9 @@ metadata 中，不能描述成强制只读。
 - `cwd` 和 `metadata.*.add_dirs` 复用现有目录校验。material file 需要新增普通文件版
   realpath/allowlist 校验，不能直接调用只接受目录的 `validateDirectory`。
 - Discussion 不能扩大现有 adapter 的可访问路径。
-- 环境变量继续使用现有 allowlist 转发机制。
+- 环境复用普通 run 的 allowlist 和 adapter 私有 credential overlay；配置 setup-token 时
+  仅 Claude 及其工具子进程继承 bearer，路径和值不进入 run/Discussion artifacts 或非
+  Claude participant，因此只在可信工作区启用。
 - command metadata 和 Discussion artifacts 不记录环境变量值。
 
 ### 12.4 消息完整性
@@ -1194,7 +1192,8 @@ deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline
 无法区分用户取消、provider 取消和阶段超时的通用 `cancelled`。attempt 还记录派发时的
 剩余阶段预算，便于 profile 调优与判断 repair 是否有完整窗口；这些字段只描述事实，
 真正的调度权威是 accepted 时冻结的 budget 与 deadline。
-本改动之前的持久化记录只留下同形 `cancelled`，无法与用户取消可靠区分，因此旧记录的
+缺少 `turn_deadline` 诊断字段的旧持久化记录只留下同形 `cancelled`，无法与用户取消可靠
+区分，因此其
 `timed_out` 只能保持 0，不能根据当前时间或 stderr 猜造历史。
 
 ## 16. 兼容性约束
@@ -1212,9 +1211,7 @@ deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline
 - 新功能不要求 Python、.NET、LangGraph、AutoGen 或 OpenAI Agents SDK runtime。
 - Node.js 版本要求继续为 20 或更新版本。
 
-## 17. 测试策略
-
-### 17.1 自动测试
+## 17. 自动测试
 
 普通 `npm test` 使用可脚本化 fake CLI/adapters，覆盖：
 
@@ -1258,19 +1255,6 @@ deadline 触发的 coordinator cancellation 在新事件中使用 `turn_deadline
 - phase deadline cancellation 保留为 `turn_deadline`，终态错误保留具体 cause。
 - worker JSONL 每条可解析、accepted 后带 discussion ID，且不含 prompt/material/output/stack。
 
-### 17.2 真实 CLI selftest
-
-真实 Claude/Codex/Kimi/OpenCode 测试不进入默认 `npm test`，新增显式
-`npm run selftest:discussion`，并作为发布前人工门槛：
-
-- 新 session 和 continuation。
-- Claude/Codex read-only 与 Kimi/OpenCode auto 的 capability 配置。
-- ParticipantMemo、ChallengeResponse、RevisionMemo、ModerationPlan、DecisionRecord
-  及 code fence 规范化。
-- Kimi argv prompt 大小边界。
-- 失败 session 重建和 follow-up lineage。
-- 两 participant 加主持人的 quick/standard/research 预算与完整流程。
-
 ## 18. 离线评测与发布门槛
 
 先用至少 20 个真实设计/评审问题做 pilot，只用于调 prompt 和发现失败模式，不作为
@@ -1305,63 +1289,25 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 未达到门槛时，不通过增加自由轮次来掩盖问题；应先分析是模型能力、角色定义、材料
 质量、主持 prompt 还是协议本身导致失败。
 
-## 19. 建议代码结构
-
-文件名可以在实现时微调，但职责应保持清晰：
+## 19. 实现代码结构
 
 | 文件 | 职责 |
 |---|---|
-| `src/discussions.js` | MCP-facing dispatch/query/wait/cancel 行为。 |
-| `src/discussion-manager.js` | 进程级 controller registry、状态机、恢复和取消。 |
+| `src/discussion-cli.js` | CLI dispatch/list/query/wait/cancel 与 worker 启动。 |
+| `src/discussion-worker.js` | Detached per-Discussion coordinator 进程。 |
+| `src/discussion-manager.js` | Controller registry、状态机、恢复和取消。 |
 | `src/discussion-budget.js` | 冻结 profile、未来阶段保留、阶段 deadline 和 repair 窗口。 |
 | `src/discussion-observability.js` | list 摘要、质量、阶段统计、预算状态和失败诊断。 |
 | `src/discussion-store.js` | Discussion 目录、事件、投影、锁、lease 和 TTL。 |
 | `src/discussion-protocol.js` | 五种结构化消息 schema、大小、解析和 provenance 验证。 |
+| `src/discussion-materials.js` | 材料冻结、路径校验、hash 和 handoff 数据。 |
 | `src/discussion-prompts.js` | 版本化 prompt 生成和不可信事件序列化。 |
 | `src/discussion-render.js` | DecisionRecord 到 Markdown 的确定性渲染。 |
-| `src/session-registry.js` | native session lease、generation、lineage claim 和恢复。 |
+| `src/session-registry.js` | Native session lease、generation、lineage claim 和恢复。 |
 | `src/server.js` | 仅在 HTTP 注册四个 tools，并持有 process-wide manager。 |
-| `src/runs.js` | 幂等派发、轻量快照、session fencing、usage 与错误分类增量。 |
+| `src/runs.js` | 幂等派发、轻量快照、session fencing、usage 与错误分类。 |
 
-## 20. 实现顺序
-
-### 阶段一：底层可靠性增量
-
-- 幂等派发键和 request hash 冲突检测。
-- 单 run 轻量快照、标准化 retryable/usage。
-- session lease、generation 和 lineage registry。
-- 对现有普通 run 行为的回归测试。
-
-### 阶段二：资源和协议
-
-- DiscussionRef 和 MCP schema。
-- Discussion store、state、event-first 提交、lock、lease、retention 和 TTL。
-- 五种结构化消息 schema 及 Markdown renderer。
-- 不启动真实 CLI 的状态机单元测试。
-
-### 阶段三：固定讨论状态机
-
-- 材料冻结。
-- 独立首轮。
-- 主持人 ModerationPlan。
-- 验证、修正和 DecisionRecord。
-- 重试、quorum、五阶段 deadline 和双维度结论质量。
-
-### 阶段四：Coordinator 生命周期
-
-- CLI detached worker 与 HTTP process-wide DiscussionManager。
-- 启动扫描/按 ID 恢复、幂等恢复和 running run 重新挂接。
-- wait/query/cancel、lease、shutdown 和崩溃边界测试。
-- Discussion CLI 主入口；MCP tools 仅 HTTP 注册。
-
-### 阶段五：follow-up 和评测
-
-- Parent handoff、线性 session lineage 和 sibling rebuild。
-- Fake-adapter 全链路测试。
-- `selftest:discussion`。
-- 20 题 pilot、50+ 题正式盲评和 go/no-go 报告。
-
-## 21. 后续 TODO：通用结构化输出
+## 20. 后续 TODO：通用结构化输出
 
 本次 Discussion MVP 不实现通用 structured output。后续在实际格式失败率和重试成本
 有足够 telemetry 后，评估为现有 run/dispatch API 增加可选 `response_format`：
@@ -1378,7 +1324,7 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
   schema 的 adapter 在 pilot 中仍持续产生显著重试成本，再评估同一 CLI run 内的
   一次性 `submit_turn` 校验工具。
 
-## 22. 已知限制
+## 21. 已知限制
 
 - capability 配置为 auto 的 adapter 仍可能产生副作用；MVP 只披露，不检测或回滚。
 - 没有全局并发限制，发起者可以创建过多 participant 或 Discussion。
@@ -1391,7 +1337,7 @@ unknown，不能当作零。usage 覆盖不足时只能报告成本区间，不�
 - 同一个底层模型的多个 session 可能产生相关判断；系统只披露，不阻止。
 - 原生 CLI session 能否在 7 天内 resume 仍取决于各 CLI；失败时按 handoff 重建。
 
-## 23. 参考
+## 22. 参考
 
 - [Microsoft Agent Framework Group Chat](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/group-chat)
 - [Microsoft Agent Framework Magentic](https://learn.microsoft.com/en-us/agent-framework/workflows/orchestrations/magentic)
