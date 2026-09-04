@@ -30,13 +30,21 @@ import {
   resolvePythonRuntimeCapsule,
   validatePythonRuntimeSelftest,
 } from "./eval-runtime.js";
+import {
+  EVAL_TOOLCHAIN_CAPSULE_KIND,
+  resolveEvalToolchainCapsule,
+} from "./eval-toolchain.js";
 import { projectLiveStream } from "./agent-session-core.js";
 import { readTextIfExists, runDirFor } from "./fs-store.js";
 import {
+  CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE,
+  CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION,
   PATCH_EVAL_EXECUTION_PROFILE,
   PATCH_EVAL_SUITE_SCHEMA_VERSION,
   READONLY_EVAL_EXECUTION_PROFILE,
   SOURCE_LOCATION_GRADER_VERSION,
+  WORKSPACE_PATCH_CAPABILITY_GRADER_VERSION,
+  WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT,
   WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION,
   WORKSPACE_PATCH_GRADER_VERSION,
   WORKSPACE_PATCH_SCHEMA,
@@ -84,6 +92,7 @@ const WORKSPACE_PATCH_OUTPUT_SCHEMA = Object.freeze({
 const MAX_PATCH_BYTES = 16 * 1024 * 1024;
 const MAX_CHANGED_FILES = 1000;
 const PATCH_RUNTIME_PREFLIGHT_TIMEOUT_MS = 15000;
+const TOOLCHAIN_SMOKE_TIMEOUT_MS = 30000;
 const CODEX_DISCOVERY_TIMEOUT_MS = 5000;
 
 export async function runEval(input, io, internal = {}) {
@@ -93,19 +102,51 @@ export async function runEval(input, io, internal = {}) {
   const cwd = path.resolve(input.cwd ?? process.cwd());
   const suite = await loadEvalSuite(cwd, input.suite_path);
   const subject = await cleanWorkspaceSnapshot(cwd);
-  const patchEval = suite.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION;
+  const capabilityPatchEval =
+    suite.schema_version === CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION;
+  const patchEval = capabilityPatchEval ||
+    suite.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION;
   const verifierPreflightEnabled =
-    suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT;
+    suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT ||
+    suite.verifier_preflight === WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT;
   const timeoutMs = input.timeout_ms ?? DEFAULT_CASE_TIMEOUT_MS;
-  const requestedProfile = patchEval
-    ? PATCH_EVAL_EXECUTION_PROFILE
-    : READONLY_EVAL_EXECUTION_PROFILE;
+  const requestedProfile = capabilityPatchEval
+    ? CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE
+    : patchEval
+      ? PATCH_EVAL_EXECUTION_PROFILE
+      : READONLY_EVAL_EXECUTION_PROFILE;
+  if (capabilityPatchEval) {
+    if (input.runtime !== undefined) {
+      throw evalError(
+        "invalid_eval_request",
+        "Eval suite schema v3 uses --toolchain, not the legacy --runtime option",
+      );
+    }
+    explicitEvalSetting(input.toolchain, "toolchain");
+  } else if (input.toolchain !== undefined) {
+    throw evalError(
+      "invalid_eval_request",
+      "The --toolchain option requires an Eval suite with schema_version 3",
+    );
+  }
   const agent = await resolveEvalAgent(
     { ...input, model: explicitModel, effort: explicitEffort },
     cwd,
     internal.env ?? process.env,
     requestedProfile,
+    capabilityPatchEval ? [subject.git_common_dir] : [],
   );
+  let capabilityPreflight = null;
+  if (capabilityPatchEval) {
+    io.stderr("\nValidating the declared toolchain in the final child capability profile.\n");
+    capabilityPreflight = await preflightCapabilityToolchain({
+      suite,
+      subject,
+      agent,
+      env: internal.env ?? process.env,
+    });
+    io.stderr("Declared toolchain is available; collecting standard answers.\n");
+  }
   const expected = await collectAnswers(suite, subject, agent, io);
   const afterAnswers = await cleanWorkspaceSnapshot(cwd);
   if (!sameWorkspaceSnapshot(subject, afterAnswers)) {
@@ -116,10 +157,10 @@ export async function runEval(input, io, internal = {}) {
   }
   let verifierPreflight = null;
   if (verifierPreflightEnabled) {
-    io.stderr(
-      "\nStandard answers accepted; running trusted foreground verifier preflight controls " +
-        "with current-user filesystem and network authority.\n",
-    );
+    io.stderr(capabilityPatchEval
+      ? "\nStandard answers accepted; running sandboxed verifier preflight controls.\n"
+      : "\nStandard answers accepted; running trusted foreground verifier preflight controls " +
+        "with current-user filesystem and network authority.\n");
     verifierPreflight = await preflightVerifierControls({
       suite,
       expected,
@@ -127,6 +168,7 @@ export async function runEval(input, io, internal = {}) {
       agent,
       env: internal.env ?? process.env,
       timeoutMs,
+      capabilityPatchEval,
     });
     const afterPreflight = await cleanWorkspaceSnapshot(cwd);
     if (!sameWorkspaceSnapshot(subject, afterPreflight)) {
@@ -158,6 +200,7 @@ export async function runEval(input, io, internal = {}) {
         agent,
         env: internal.env ?? process.env,
         timeoutMs,
+        capabilityPatchEval,
       };
       caseResults.push(item.answer_schema === WORKSPACE_PATCH_SCHEMA
         ? await runPatchCase(runInput)
@@ -178,16 +221,20 @@ export async function runEval(input, io, internal = {}) {
       };
       break;
     }
-    if (caseResults.at(-1)?.reason === "runtime_capsule_changed") break;
+    if (["runtime_capsule_changed", "toolchain_capsule_changed"].includes(
+      caseResults.at(-1)?.reason,
+    )) break;
   }
 
   const completedAt = new Date();
   const summary = summarizeCases(caseResults, suite.cases.length);
-  const executionProfile = patchEval
-    ? PATCH_EVAL_EXECUTION_PROFILE
-    : READONLY_EVAL_EXECUTION_PROFILE;
+  const executionProfile = requestedProfile;
   const result = {
-    schema_version: patchEval ? (verifierPreflightEnabled ? 4 : 3) : 1,
+    schema_version: capabilityPatchEval
+      ? 5
+      : patchEval
+        ? (verifierPreflightEnabled ? 4 : 3)
+        : 1,
     kind: "agent-eval-run",
     eval_run_id: evalRunId,
     status: "completed",
@@ -197,11 +244,16 @@ export async function runEval(input, io, internal = {}) {
       relative_path: suite.relative_path,
       case_count: suite.cases.length,
     },
-    subject: {
-      cwd: subject.root,
-      commit: subject.commit,
-      workspace_digest: subject.workspace_digest,
-    },
+    subject: capabilityPatchEval
+      ? {
+          commit: subject.commit,
+          workspace_digest: subject.workspace_digest,
+        }
+      : {
+          cwd: subject.root,
+          commit: subject.commit,
+          workspace_digest: subject.workspace_digest,
+        },
     agent: {
       agent_id: agent.agent_id,
       version: agent.version,
@@ -209,6 +261,7 @@ export async function runEval(input, io, internal = {}) {
       effort: agent.effort,
     },
     ...(patchEval ? { toolchain: publicEvalToolchain(agent.eval_toolchain) } : {}),
+    ...(capabilityPreflight ? { capability_plan: capabilityPreflight } : {}),
     ...(verifierPreflight ? { verifier_preflight: verifierPreflight } : {}),
     isolation: {
       policy: executionProfile,
@@ -229,11 +282,13 @@ export async function runEval(input, io, internal = {}) {
       session_persistence: false,
       subagents: false,
     },
-    grader_version: patchEval
-      ? (verifierPreflightEnabled
-          ? WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION
-          : WORKSPACE_PATCH_GRADER_VERSION)
-      : SOURCE_LOCATION_GRADER_VERSION,
+    grader_version: capabilityPatchEval
+      ? WORKSPACE_PATCH_CAPABILITY_GRADER_VERSION
+      : patchEval
+        ? (verifierPreflightEnabled
+            ? WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION
+            : WORKSPACE_PATCH_GRADER_VERSION)
+        : SOURCE_LOCATION_GRADER_VERSION,
     cases: caseResults,
     summary,
     created_at: createdAt.toISOString(),
@@ -243,11 +298,19 @@ export async function runEval(input, io, internal = {}) {
   const resultPath = await writeEvalResult(result, internal.env ?? process.env);
   return {
     ...result,
-    artifact: { type: "eval-result", path: resultPath },
+    artifact: capabilityPatchEval
+      ? { type: "eval-result", eval_run_id: evalRunId }
+      : { type: "eval-result", path: resultPath },
   };
 }
 
-async function resolveEvalAgent(input, cwd, env, executionProfile) {
+async function resolveEvalAgent(
+  input,
+  cwd,
+  env,
+  executionProfile,
+  additionalForbiddenRoots = [],
+) {
   if (input.agent_id !== CODEX_AGENT_ID) {
     throw evalError(
       "unsupported_isolation",
@@ -315,17 +378,26 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
       `Effort ${effort} is not supported by model ${model.id}`,
     );
   }
-  const evalToolchain = executionProfile === PATCH_EVAL_EXECUTION_PROFILE
-    ? await resolvePythonRuntimeCapsule(input.runtime ?? "default", env, {
-        forbidden_roots: [cwd],
-      })
-    : null;
+  let evalToolchain = null;
+  if (executionProfile === CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE) {
+    evalToolchain = await resolveEvalToolchainCapsule(input.toolchain, env, {
+      forbidden_roots: [cwd, ...additionalForbiddenRoots],
+      require_sealed: true,
+    });
+  } else if (executionProfile === PATCH_EVAL_EXECUTION_PROFILE) {
+    evalToolchain = await resolvePythonRuntimeCapsule(input.runtime ?? "default", env, {
+      forbidden_roots: [cwd],
+    });
+  }
   const runtime = await codexRuntimeReadPaths(
     birthContext.executable,
     birthContext.interpreter,
     evalToolchain,
     cwd,
   );
+  if (executionProfile === CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE) {
+    assertCapabilityPathsOutsideGitMetadata(runtime.paths, additionalForbiddenRoots);
+  }
   return {
     agent_id: input.agent_id,
     version,
@@ -338,6 +410,22 @@ async function resolveEvalAgent(input, cwd, env, executionProfile) {
     eval_toolchain: runtime.eval_toolchain,
     eval_toolchain_ready: false,
   };
+}
+
+function assertCapabilityPathsOutsideGitMetadata(runtimePaths, gitMetadataRoots) {
+  for (const runtimePath of runtimePaths) {
+    for (const gitMetadataRoot of gitMetadataRoots) {
+      if (
+        pathIsInside(runtimePath, gitMetadataRoot) ||
+        pathIsInside(gitMetadataRoot, runtimePath)
+      ) {
+        throw evalError(
+          "unsupported_isolation",
+          "Codex runtime capability overlaps evaluated Git metadata",
+        );
+      }
+    }
+  }
 }
 
 function explicitEvalSetting(value, name) {
@@ -546,7 +634,10 @@ async function collectAnswers(suite, subject, agent, io) {
             subject.root,
             agent.runtime_read_paths,
           );
-          if (suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT) {
+          if (
+            suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT ||
+            suite.verifier_preflight === WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT
+          ) {
             const controlPath = await io.readLine("known-good control workspace: ");
             const knownGood = await normalizeKnownGoodWorkspace(
               controlPath,
@@ -595,6 +686,7 @@ async function preflightVerifierControls({
   agent,
   env,
   timeoutMs,
+  capabilityPatchEval = false,
 }) {
   const cases = [];
   for (const item of suite.cases) {
@@ -626,7 +718,8 @@ async function preflightVerifierControls({
       agent,
       env,
       timeoutMs,
-      preflightToolchain: true,
+      preflightToolchain: !capabilityPatchEval,
+      capabilityPatchEval,
     });
     assertVerifierControl(item, "subject", "fail", negative);
     await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
@@ -639,6 +732,7 @@ async function preflightVerifierControls({
       env,
       timeoutMs,
       preflightToolchain: false,
+      capabilityPatchEval,
     });
     assertVerifierControl(item, "known-good control", "pass", positive);
     await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
@@ -659,16 +753,30 @@ async function preflightVerifierControls({
       }),
     });
   }
+  const preflightKind = capabilityPatchEval
+    ? WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT
+    : WORKSPACE_PATCH_VERIFIER_PREFLIGHT;
+  const graderVersion = capabilityPatchEval
+    ? WORKSPACE_PATCH_CAPABILITY_GRADER_VERSION
+    : WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION;
+  const executionProfile = capabilityPatchEval
+    ? CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE
+    : PATCH_EVAL_EXECUTION_PROFILE;
   return {
-    kind: WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
+    kind: preflightKind,
     status: "passed",
     binding_digest: answerDigest({
-      kind: WORKSPACE_PATCH_VERIFIER_PREFLIGHT,
-      grader_version: WORKSPACE_PATCH_PREFLIGHT_GRADER_VERSION,
+      kind: preflightKind,
+      grader_version: graderVersion,
       suite_digest: suite.digest,
       subject_workspace_digest: subject.workspace_digest,
-      runtime_content_digest: agent.eval_toolchain.content_digest,
-      execution_profile: PATCH_EVAL_EXECUTION_PROFILE,
+      ...(capabilityPatchEval
+        ? {
+            toolchain_content_digest: agent.eval_toolchain.content_digest,
+            capability_contract_digest: agent.capability_contract_digest,
+          }
+        : { runtime_content_digest: agent.eval_toolchain.content_digest }),
+      execution_profile: executionProfile,
       timeout_ms: timeoutMs,
       cases,
     }),
@@ -683,34 +791,44 @@ async function runVerifierControl({
   env,
   timeoutMs,
   preflightToolchain,
+  capabilityPatchEval = false,
 }) {
   const disposable = await createDisposableWorktree(subject, repositoryRoot);
   const scratchPath = path.join(disposable.root, "scratch");
   let runtimeBin = null;
   try {
     await fsp.mkdir(scratchPath, { mode: 0o700 });
+    if (capabilityPatchEval) {
+      await fsp.mkdir(path.join(scratchPath, "task-home"), { mode: 0o700 });
+    }
     await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
     try {
-      runtimeBin = await createRuntimeCommandBin(disposable.root, {
-        python3: agent.eval_toolchain.commands.python3,
-      });
+      runtimeBin = await createRuntimeCommandBin(
+        disposable.root,
+        capabilityPatchEval
+          ? agent.eval_toolchain.commands
+          : { python3: agent.eval_toolchain.commands.python3 },
+      );
     } catch {
       throw evalError(
-        "runtime_preflight_failed",
-        "Pinned Python runtime capsule could not be prepared for verifier preflight",
+        capabilityPatchEval ? "toolchain_preflight_failed" : "runtime_preflight_failed",
+        capabilityPatchEval
+          ? "Pinned Eval toolchain could not be prepared for verifier preflight"
+          : "Pinned Python runtime capsule could not be prepared for verifier preflight",
       );
     }
+    const schemaPath = path.join(scratchPath, "workspace-patch.schema.json");
+    await fsp.writeFile(schemaPath, `${JSON.stringify(WORKSPACE_PATCH_OUTPUT_SCHEMA)}\n`, {
+      mode: 0o600,
+    });
+    const executionProfile = patchExecutionProfile({
+      agent,
+      runtimeBin,
+      schemaPath,
+      scratchPath,
+      capabilityPatchEval,
+    });
     if (preflightToolchain) {
-      const schemaPath = path.join(scratchPath, "workspace-patch.schema.json");
-      await fsp.writeFile(schemaPath, `${JSON.stringify(WORKSPACE_PATCH_OUTPUT_SCHEMA)}\n`, {
-        mode: 0o600,
-      });
-      const executionProfile = patchExecutionProfile({
-        agent,
-        runtimeBin,
-        schemaPath,
-        scratchPath,
-      });
       await preflightPatchExecution({
         agent,
         cwd: disposable.workspace,
@@ -726,6 +844,7 @@ async function runVerifierControl({
       env,
       timeoutMs,
       runtimeBin,
+      capabilityPatchEval ? { agent, executionProfile } : undefined,
     );
   } finally {
     if (runtimeBin) await fsp.chmod(runtimeBin, 0o700).catch(() => undefined);
@@ -824,7 +943,15 @@ async function runSourceLocationCase({ item, expected, cwd, agent, timeoutMs }) 
   }
 }
 
-async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) {
+async function runPatchCase({
+  item,
+  expected,
+  subject,
+  agent,
+  env,
+  timeoutMs,
+  capabilityPatchEval = false,
+}) {
   const disposable = await createDisposableWorktree(subject);
   const scratchPath = path.join(disposable.root, "scratch");
   const schemaPath = path.join(scratchPath, "workspace-patch.schema.json");
@@ -832,6 +959,9 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
   let runtimeBin = null;
   try {
     await fsp.mkdir(scratchPath, { mode: 0o700 });
+    if (capabilityPatchEval) {
+      await fsp.mkdir(path.join(scratchPath, "task-home"), { mode: 0o700 });
+    }
     await fsp.writeFile(schemaPath, `${JSON.stringify(WORKSPACE_PATCH_OUTPUT_SCHEMA)}\n`, {
       mode: 0o600,
     });
@@ -842,15 +972,40 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
         metrics: { telemetry_status: "not-run" },
       });
     }
-    await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
     try {
-      runtimeBin = await createRuntimeCommandBin(disposable.root, {
-        python3: agent.eval_toolchain.commands.python3,
+      await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+    } catch (error) {
+      if (!capabilityPatchEval) throw error;
+      return baseCaseResult(item, expected, null, {
+        status: "invalid",
+        reason: "toolchain_capsule_changed",
+        metrics: { telemetry_status: "not-run" },
       });
+    }
+    try {
+      runtimeBin = await createRuntimeCommandBin(
+        disposable.root,
+        capabilityPatchEval
+          ? agent.eval_toolchain.commands
+          : { python3: agent.eval_toolchain.commands.python3 },
+      );
     } catch {
+      if (capabilityPatchEval) {
+        try {
+          await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+        } catch {
+          return baseCaseResult(item, expected, null, {
+            status: "invalid",
+            reason: "toolchain_capsule_changed",
+            metrics: { telemetry_status: "not-run" },
+          });
+        }
+      }
       throw evalError(
-        "runtime_preflight_failed",
-        "Pinned Python runtime capsule could not be prepared for the isolated child",
+        capabilityPatchEval ? "toolchain_preflight_failed" : "runtime_preflight_failed",
+        capabilityPatchEval
+          ? "Pinned Eval toolchain could not be prepared for the isolated child"
+          : "Pinned Python runtime capsule could not be prepared for the isolated child",
       );
     }
     const executionProfile = patchExecutionProfile({
@@ -858,14 +1013,28 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       runtimeBin,
       schemaPath,
       scratchPath,
+      capabilityPatchEval,
     });
-    await preflightPatchExecution({
-      agent,
-      cwd: disposable.workspace,
-      disposable,
-      env,
-      executionProfile,
-    });
+    if (!capabilityPatchEval) {
+      await preflightPatchExecution({
+        agent,
+        cwd: disposable.workspace,
+        disposable,
+        env,
+        executionProfile,
+      });
+    }
+    if (capabilityPatchEval) {
+      try {
+        await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+      } catch {
+        return baseCaseResult(item, expected, null, {
+          status: "invalid",
+          reason: "toolchain_capsule_changed",
+          metrics: { telemetry_status: "not-run" },
+        });
+      }
+    }
     agent.eval_toolchain_ready = true;
     accepted = await dispatchToAgent(
       {
@@ -919,6 +1088,7 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
       env,
       timeoutMs,
       runtimeBin,
+      capabilityPatchEval ? { agent, executionProfile } : undefined,
     );
     metrics.verifier = verification.metrics;
     try {
@@ -926,7 +1096,9 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
     } catch {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "invalid",
-        reason: "runtime_capsule_changed",
+        reason: capabilityPatchEval
+          ? "toolchain_capsule_changed"
+          : "runtime_capsule_changed",
         metrics,
       });
     }
@@ -951,9 +1123,17 @@ async function runPatchCase({ item, expected, subject, agent, env, timeoutMs }) 
   }
 }
 
-function patchExecutionProfile({ agent, runtimeBin, schemaPath, scratchPath }) {
+function patchExecutionProfile({
+  agent,
+  runtimeBin,
+  schemaPath,
+  scratchPath,
+  capabilityPatchEval = false,
+}) {
   return {
-    kind: PATCH_EVAL_EXECUTION_PROFILE,
+    kind: capabilityPatchEval
+      ? CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE
+      : PATCH_EVAL_EXECUTION_PROFILE,
     scratch_path: scratchPath,
     output_schema_path: schemaPath,
     agent_executable: agent.agent_executable,
@@ -964,6 +1144,166 @@ function patchExecutionProfile({ agent, runtimeBin, schemaPath, scratchPath }) {
     ])).sort(),
     path_prepend: [runtimeBin],
   };
+}
+
+async function preflightCapabilityToolchain({ suite, subject, agent, env }) {
+  await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+  const requirements = suite.toolchain_requirements;
+  for (const item of requirements.commands) {
+    if (!Object.hasOwn(agent.eval_toolchain.commands, item.name)) {
+      throw evalError(
+        "toolchain_unavailable",
+        `Declared toolchain command is unavailable: ${item.name}`,
+      );
+    }
+  }
+
+  const requirementsDigest = answerDigest(requirements);
+  const capabilityContractDigest = answerDigest({
+    kind: "eval-capability-plan/v1",
+    execution_profile: CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE,
+    sandbox_enforcement: "codex-permission-profile",
+    sandbox_engine: { agent_id: agent.agent_id, version: agent.version },
+    toolchain: {
+      kind: agent.eval_toolchain.kind,
+      toolchain_id: agent.eval_toolchain.toolchain_id,
+      content_digest: agent.eval_toolchain.content_digest,
+      platform: agent.eval_toolchain.platform,
+      arch: agent.eval_toolchain.arch,
+      commands: Object.keys(agent.eval_toolchain.commands).sort(),
+    },
+    requirements_digest: requirementsDigest,
+  });
+
+  const disposable = await createDisposableWorktree(subject);
+  const scratchPath = path.join(disposable.root, "scratch");
+  const schemaPath = path.join(scratchPath, "workspace-patch.schema.json");
+  let runtimeBin = null;
+  try {
+    await fsp.mkdir(scratchPath, { mode: 0o700 });
+    await fsp.mkdir(path.join(scratchPath, "task-home"), { mode: 0o700 });
+    await fsp.writeFile(schemaPath, `${JSON.stringify(WORKSPACE_PATCH_OUTPUT_SCHEMA)}\n`, {
+      mode: 0o600,
+    });
+    try {
+      runtimeBin = await createRuntimeCommandBin(disposable.root, agent.eval_toolchain.commands);
+    } catch {
+      throw evalError(
+        "toolchain_preflight_failed",
+        "Pinned Eval toolchain could not be prepared for capability preflight",
+      );
+    }
+    const executionProfile = patchExecutionProfile({
+      agent,
+      runtimeBin,
+      schemaPath,
+      scratchPath,
+      capabilityPatchEval: true,
+    });
+    const preflightCodexHome = path.join(disposable.root, "preflight-codex-home");
+    await fsp.mkdir(preflightCodexHome, { mode: 0o700 });
+    const codexHomes = [preflightCodexHome];
+    if (agent.agent_code_home && agent.agent_code_home !== preflightCodexHome) {
+      codexHomes.push(agent.agent_code_home);
+    }
+    for (const [homeIndex, codexHome] of codexHomes.entries()) {
+      for (const [commandIndex, item] of requirements.commands.entries()) {
+        const smokeCwd = path.join(scratchPath, `smoke-${homeIndex}-${commandIndex}`);
+        await fsp.mkdir(smokeCwd, { mode: 0o700 });
+        const result = await runCodexSandboxCommand({
+          agent,
+          codexHome,
+          cwd: disposable.workspace,
+          env,
+          executionProfile,
+          argv: [
+            "/bin/sh",
+            "-c",
+            'cd "$1" && shift && exec "$@"',
+            "agenthub-toolchain-smoke",
+            smokeCwd,
+            item.name,
+            ...item.argv,
+          ],
+          timeoutMs: TOOLCHAIN_SMOKE_TIMEOUT_MS,
+        });
+        if (result.error || result.code !== 0) {
+          throw evalError(
+            "toolchain_preflight_failed",
+            `Declared toolchain command failed in the final child profile: ${item.name}`,
+          );
+        }
+      }
+    }
+    await assertPinnedEvalToolchain(agent.eval_toolchain, env, subject.root);
+    agent.eval_toolchain_ready = true;
+    agent.capability_contract_digest = capabilityContractDigest;
+    return {
+      kind: "eval-capability-plan/v1",
+      status: "passed",
+      contract_digest: capabilityContractDigest,
+      requirements_digest: requirementsDigest,
+      required_commands: requirements.commands.map((item) => item.name),
+      verifier_enforcement: "codex-sandbox",
+    };
+  } finally {
+    if (runtimeBin) await fsp.chmod(runtimeBin, 0o700).catch(() => undefined);
+    await removeDisposableWorktree(subject.root, disposable);
+  }
+}
+
+async function runCodexSandboxCommand({
+  agent,
+  codexHome,
+  cwd,
+  env,
+  executionProfile,
+  argv,
+  timeoutMs,
+  captureOutput = true,
+}) {
+  const command = {
+    command: executionProfile.agent_executable,
+    args: [
+      "sandbox",
+      "--include-managed-config",
+      "-P",
+      CODEX_EVAL_PERMISSION_PROFILE_NAME,
+      "-C",
+      cwd,
+      ...codexEvalPermissionArgs(executionProfile),
+      "--",
+      ...argv,
+    ],
+  };
+  const birth = buildBirthLaunch(command, {
+    ...birthEnvironment(env),
+    TMPDIR: executionProfile.scratch_path,
+    TMP: executionProfile.scratch_path,
+    TEMP: executionProfile.scratch_path,
+  }, {
+    path_interpreter: executionProfile.agent_interpreter,
+    path_prepend: executionProfile.kind === CAPABILITY_PATCH_EVAL_EXECUTION_PROFILE
+      ? undefined
+      : executionProfile.path_prepend,
+    post_birth_env: {
+      CODEX_HOME: codexHome,
+      TMPDIR: executionProfile.scratch_path,
+      TMP: executionProfile.scratch_path,
+      TEMP: executionProfile.scratch_path,
+    },
+  });
+  try {
+    return await runCommand(birth.launcher[0], birth.launcher.slice(1), {
+      cwd,
+      env: birth.env,
+      timeoutMs,
+      maxOutputBytes: 64 * 1024,
+      captureOutput,
+    });
+  } catch (error) {
+    return { code: null, signal: null, error, stdout: "", stderr: "" };
+  }
 }
 
 async function preflightPatchExecution({ agent, cwd, disposable, env, executionProfile }) {
@@ -1051,7 +1391,41 @@ function runtimePreflightError() {
   );
 }
 
+function toolchainPreflightError() {
+  return evalError(
+    "toolchain_preflight_failed",
+    "Pinned Eval toolchain is unavailable in the isolated capability profile",
+  );
+}
+
 async function assertPinnedEvalToolchain(expected, env, forbiddenRoot) {
+  if (expected.kind === EVAL_TOOLCHAIN_CAPSULE_KIND) {
+    let current;
+    try {
+      current = await resolveEvalToolchainCapsule(expected.manifest_path, env, {
+        forbidden_roots: [forbiddenRoot],
+        require_sealed: expected.sealed === true,
+      });
+    } catch {
+      throw toolchainPreflightError();
+    }
+    const projection = (toolchain) => ({
+      kind: toolchain.kind,
+      toolchain_id: toolchain.toolchain_id,
+      platform: toolchain.platform,
+      arch: toolchain.arch,
+      content_digest: toolchain.content_digest,
+      manifest_path: toolchain.manifest_path,
+      root: toolchain.root,
+      commands: Object.fromEntries(Object.entries(toolchain.commands).sort(([left], [right]) =>
+        left.localeCompare(right))),
+      sealed: toolchain.sealed === true,
+    });
+    if (JSON.stringify(projection(current)) !== JSON.stringify(projection(expected))) {
+      throw toolchainPreflightError();
+    }
+    return;
+  }
   let current;
   try {
     current = await resolvePythonRuntimeCapsule(expected.manifest_path, env, {
@@ -1095,8 +1469,11 @@ async function patchEvalMetrics(runRef, snapshot, cwd) {
   }
 }
 
-async function runVerifier(expected, cwd, env, timeoutMs, runtimeBin) {
-  const verificationParent = path.join(getEvalRoot(env), ".verifier-scratch");
+async function runVerifier(expected, cwd, env, timeoutMs, runtimeBin, options = {}) {
+  const sandboxed = Boolean(options.agent && options.executionProfile);
+  const verificationParent = sandboxed
+    ? options.executionProfile.scratch_path
+    : path.join(getEvalRoot(env), ".verifier-scratch");
   await fsp.mkdir(verificationParent, { recursive: true, mode: 0o700 });
   await fsp.chmod(verificationParent, 0o700).catch(() => undefined);
   const realVerificationParent = await fsp.realpath(verificationParent);
@@ -1126,29 +1503,53 @@ async function runVerifier(expected, cwd, env, timeoutMs, runtimeBin) {
     await fsp.writeFile(verifierPath, body, { mode: 0o700 });
     await fsp.chmod(verifierPath, 0o700);
     const startedAt = Date.now();
-    const verifierEnv = verifierEnvironment(env);
-    verifierEnv.PATH = [runtimeBin, verifierEnv.PATH || "/usr/bin:/bin"].join(path.delimiter);
-    const result = await runCommand(verifierPath, [], {
-      cwd,
-      env: {
-        ...verifierEnv,
-        AGENT_HUB_EVAL_WORKSPACE: cwd,
-        HOME: verifierHome,
-        PYTHONDONTWRITEBYTECODE: "1",
-        PYTHONEXECUTABLE: "",
-        PYTHONHOME: "",
-        PYTHONNOUSERSITE: "1",
-        PYTHONPATH: "",
-        PYTHONPLATLIBDIR: "",
-        TMPDIR: verifierTmp,
-        TMP: verifierTmp,
-        TEMP: verifierTmp,
-        ZDOTDIR: verifierHome,
-        __PYVENV_LAUNCHER__: "",
-      },
-      timeoutMs,
-      captureOutput: false,
-    });
+    let result;
+    if (sandboxed) {
+      result = await runCodexSandboxCommand({
+        agent: options.agent,
+        codexHome: options.agent.agent_code_home,
+        cwd,
+        env,
+        executionProfile: options.executionProfile,
+        argv: [
+          "/bin/sh",
+          "-c",
+          'export AGENT_HUB_EVAL_WORKSPACE="$1" HOME="$2" ZDOTDIR="$2" ' +
+            'TMPDIR="$3" TMP="$3" TEMP="$3"; unset BASH_ENV ENV; shift 3; exec "$@"',
+          "agenthub-verifier",
+          cwd,
+          verifierHome,
+          verifierTmp,
+          verifierPath,
+        ],
+        timeoutMs,
+        captureOutput: false,
+      });
+    } else {
+      const verifierEnv = verifierEnvironment(env);
+      verifierEnv.PATH = [runtimeBin, verifierEnv.PATH || "/usr/bin:/bin"].join(path.delimiter);
+      result = await runCommand(verifierPath, [], {
+        cwd,
+        env: {
+          ...verifierEnv,
+          AGENT_HUB_EVAL_WORKSPACE: cwd,
+          HOME: verifierHome,
+          PYTHONDONTWRITEBYTECODE: "1",
+          PYTHONEXECUTABLE: "",
+          PYTHONHOME: "",
+          PYTHONNOUSERSITE: "1",
+          PYTHONPATH: "",
+          PYTHONPLATLIBDIR: "",
+          TMPDIR: verifierTmp,
+          TMP: verifierTmp,
+          TEMP: verifierTmp,
+          ZDOTDIR: verifierHome,
+          __PYVENV_LAUNCHER__: "",
+        },
+        timeoutMs,
+        captureOutput: false,
+      });
+    }
     const metrics = {
       status: result.error ? "error" : result.code === 0 ? "passed" : "failed",
       exit_code: Number.isInteger(result.code) ? result.code : null,
@@ -1166,6 +1567,16 @@ async function runVerifier(expected, cwd, env, timeoutMs, runtimeBin) {
 }
 
 function publicEvalToolchain(runtime) {
+  if (runtime.kind === EVAL_TOOLCHAIN_CAPSULE_KIND) {
+    return {
+      kind: runtime.kind,
+      toolchain_id: runtime.toolchain_id,
+      content_digest: runtime.content_digest,
+      platform: runtime.platform,
+      arch: runtime.arch,
+      commands: Object.keys(runtime.commands).sort(),
+    };
+  }
   return {
     kind: runtime.kind,
     runtime_id: runtime.runtime_id,

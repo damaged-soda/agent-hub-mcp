@@ -25,6 +25,7 @@ import {
   installPythonRuntimeCapsule,
   pythonRuntimeCapsuleStatus,
 } from "./eval-runtime.js";
+import { evalToolchainCapsuleStatus } from "./eval-toolchain.js";
 
 const HELP = `agenthub — run local coding agents without a resident daemon
 
@@ -40,7 +41,8 @@ Usage:
   agenthub review dispatch --requester ID [--cwd DIR] (--prompt TEXT | --prompt-file FILE)
   agenthub eval runtime install [--runtime ID]
   agenthub eval runtime status [--runtime ID]
-  agenthub eval run --agent ID --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST] [--cwd DIR] [--suite FILE] [--timeout-ms MS]
+  agenthub eval toolchain status --toolchain ABSOLUTE_MANIFEST
+  agenthub eval run --agent ID --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST | --toolchain ABSOLUTE_MANIFEST] [--cwd DIR] [--suite FILE] [--timeout-ms MS]
   agenthub discussion dispatch (--json JSON | --json-file FILE)
   agenthub discussion list [--status STATUS[,STATUS]] [--since 7d] [--cwd DIR] [--limit N]
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
@@ -133,10 +135,13 @@ async function executeEval(args, io) {
     return { usage: HELP };
   }
   if (command === "runtime") return executeEvalRuntime(args);
+  if (command === "toolchain") return executeEvalToolchain(args);
   if (command !== "run") throw usageError(`Unknown eval command: ${command}`);
   const parsed = parseArgs(
     args,
-    new Set(["agent", "cwd", "suite", "model", "effort", "runtime", "timeout-ms"]),
+    new Set([
+      "agent", "cwd", "suite", "model", "effort", "runtime", "toolchain", "timeout-ms",
+    ]),
   );
   rejectPositionals(parsed);
   const input = {
@@ -147,12 +152,30 @@ async function executeEval(args, io) {
   };
   if (parsed.options.suite !== undefined) input.suite_path = parsed.options.suite;
   if (parsed.options.runtime !== undefined) input.runtime = parsed.options.runtime;
+  if (parsed.options.toolchain !== undefined) input.toolchain = parsed.options.toolchain;
   setOptionalNumber(input, "timeout_ms", parsed.options["timeout-ms"], { positive: true });
   try {
     return await runEval(input, io);
   } finally {
     io.closeInput?.();
   }
+}
+
+async function executeEvalToolchain(args) {
+  const command = args.shift();
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    return { usage: HELP };
+  }
+  if (command !== "status") {
+    throw usageError(`Unknown eval toolchain command: ${command}`);
+  }
+  const parsed = parseArgs(args, new Set(["toolchain"]));
+  rejectPositionals(parsed);
+  return evalToolchainCapsuleStatus(
+    required(parsed.options.toolchain, "--toolchain is required"),
+    process.env,
+    { require_sealed: true },
+  );
 }
 
 async function executeEvalRuntime(args) {

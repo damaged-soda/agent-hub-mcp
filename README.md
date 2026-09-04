@@ -156,10 +156,40 @@ requires an explicit model and effort plus Codex CLI 0.151.0 or newer; providers
 equivalent whitelist fail with `unsupported_isolation`. See the
 [evaluation contract](docs/evals.md).
 
-Verifier preflight is a two-sided oracle sanity check, not a hostile-code sandbox or proof that the
-verifier covers every required behavior. The foreground verifier retains the caller's filesystem
-and network authority and may run repository code; final grading may execute code produced by the
-agent. Use it only with trusted verifiers and repositories.
+Schema v3 is the capability-bound patch contract. It requires
+`verifier_preflight: "subject-reject-known-good-pass/v2"` plus argv-only
+`toolchain_requirements`, and uses an evaluator-provisioned generic capsule selected only by an
+absolute manifest path:
+
+```sh
+agenthub eval toolchain status --toolchain /absolute/capsule/manifest.json
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals-v3.json \
+  --model gpt-5.6-sol --effort medium \
+  --toolchain /absolute/capsule/manifest.json
+```
+
+The `eval-toolchain-capsule/v1` manifest maps public command names to executable paths contained in
+its platform-bound, content-digested root. Both `eval toolchain status` and `eval run` require the
+manifest directory, manifest, and capsule tree to have no write bits and reject hardlinked regular files. Agent Hub
+does not install generic capsules and never discovers, downloads, copies, or falls back to host
+tools for schema v3. Before it collects standards or starts the first model run, it executes every
+declared smoke through the final `workspace-write/v2` Codex sandbox. The subject/known-good controls
+and final verifier then consume the same capability plan, including a capsule-only command `PATH`,
+filtered language/tool variables, private home/temp directories, denied command network, and the
+same filesystem policy. The overlay is injected only into sandbox children, never the Codex parent
+process. Successful v3 runs emit result schema v5 with grader
+`workspace-patch/v3`, a public toolchain identity, and capability/preflight binding digests; command
+paths, verifier material, controls, smoke output, subject `cwd`, and artifact storage paths remain
+private. Capsules that overlap either the evaluated worktree or its Git common directory are
+rejected, including linked-worktree layouts.
+
+The two-sided verifier check and command smokes establish parity for the capabilities that the
+suite declared and exercised. They are not a hostile-code guarantee, a proof that the verifier
+covers every required behavior, or a static proof of every dependency an arbitrary command may
+select dynamically. Evaluators must supply representative smokes and audit trusted verifiers.
+Legacy schema-v2 verifier execution remains foreground with current-user authority; suite schemas
+v1/v2, Python runtime capsule v1, and result schemas v1-v4 are unchanged rather than reinterpreted.
 
 For the machine-routed cross-review immediately after this process creates or updates a PR, use the
 persisted requester route instead of choosing an adapter ad hoc. A standalone review is performed by

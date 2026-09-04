@@ -87,19 +87,35 @@ async function main() {
     },
     post_birth_unset: launchEnvironment.remove_env_keys,
   });
+  const metadataArgv = commandArgvForMetadata(command.argv, request.execution_profile);
+  const metadataLauncher = commandArgvForMetadata(launcher, request.execution_profile);
   await atomicWriteJson(path.join(runDir, "command.json"), {
     schema_version: 1,
     adapter_id: command.adapter_id,
-    argv: command.argv,
-    launcher,   // 实际 spawn 的 argv（经 zsh 出生）；argv 是 adapter 视角
+    argv: metadataArgv,
+    launcher: metadataLauncher,
     output_format: command.output_format,
     cwd: request.cwd,
     env_keys: currentEnvKeys(agentEnv),
+    redactions: request.execution_profile?.kind === "workspace-write/v2"
+      ? ["shell_environment_policy.set.*"]
+      : undefined,
     runner_pid: process.pid,
     created_at: nowIso(),
   });
 
   await runCommand(runDir, request, adapter, command, agentEnv, launcher);
+}
+
+function commandArgvForMetadata(argv, executionProfile) {
+  if (executionProfile?.kind !== "workspace-write/v2") return argv;
+  return argv.map((item) => {
+    if (typeof item !== "string") return item;
+    const match = item.match(
+      /^(shell_environment_policy\.set\.[A-Za-z_][A-Za-z0-9_]*=)/,
+    );
+    return match ? `${match[1]}"<redacted>"` : item;
+  });
 }
 
 function normalizedCommandPathPrepend(value) {

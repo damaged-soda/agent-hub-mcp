@@ -4,19 +4,21 @@ For an individual repository navigation or patch evaluation, run the interactive
 clean target worktree root:
 
 ```sh
-agenthub eval runtime install --runtime default
-agenthub eval runtime status --runtime default
+agenthub eval toolchain status --toolchain /absolute/path/to/toolchain/manifest.json
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
   --model gpt-5.6-sol --effort medium \
-  --runtime default
+  --toolchain /absolute/path/to/toolchain/manifest.json
 ```
+
+This is the preferred schema-v3 patch flow. For a source-location suite, omit `--toolchain`; for a
+legacy schema-v2 patch suite, keep using its existing `--runtime` flow.
 
 For a paired baseline/candidate experiment, follow the separate `eval-driven-refactor` Skill; Agent
 Hub itself still produces one result for one immutable commit.
 
-The repository may provide `.agenthub/evals.json` as a question-only sample with an optional public
-verifier-preflight policy, but the evaluator owns
+The repository may provide `.agenthub/evals.json` as a question-only sample with its versioned
+public verifier/toolchain policy, but the evaluator owns
 the selected suite. `--suite` may select an uncommitted file outside the clean subject worktree; do
 not place an evaluator-owned suite in that worktree merely to run it. Agent Hub snapshots and
 digests the external suite at startup. Model and effort are mandatory and never come from defaults.
@@ -30,25 +32,53 @@ digests the external suite at startup. Model and effort are mandatory and never 
   Agent Hub first requires the verifier to reject an untouched subject copy and accept the known-good copy for
   every case, completing the whole suite preflight before its first dispatch; failure starts no
   agent run and writes no Eval artifact.
+- Schema v3 remains a `workspace-patch/v1` answer contract, but requires
+  `verifier_preflight: "subject-reject-known-good-pass/v2"` and a non-empty
+  `toolchain_requirements` of `command-smoke/v1` commands. It runs every declared smoke under the
+  final `workspace-write/v2` Codex capability profile, then runs untouched-subject and known-good
+  controls before the first model dispatch. Control verifiers, final verifiers, and the child all
+  consume the same versioned Codex sandbox capability plan. Any smoke or control failure creates
+  neither an ordinary run nor an Eval artifact. Successful runs produce result schema v5 with
+  grader `workspace-patch/v3` and a passed `eval-capability-plan/v1`.
 
-Patch Eval requires a pre-provisioned `python-runtime-capsule/v1`. `--runtime` accepts `default`, a
-catalog runtime ID, or an absolute evaluator-owned manifest path. The built-in catalog pins a gzip
-artifact from [astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone);
-only `eval runtime install` may download it.
-`eval run` never downloads, discovers, copies, or falls back to a host Python. It validates the
-content-addressed capsule, exposes only the capsule root read-only, gives the foreground verifier
-the same capsule-first `PATH`, and records its content digest.
-Patch inputs remain suite schema v2. Capsule-backed results without verifier preflight use result
-schema v3 / `workspace-patch/v1`; preflighted results use v4 / `workspace-patch/v2`. Both require a
-`toolchain`; historical result schema v2 remains unchanged. V4 stores an opaque preflight binding,
-not control paths, commits, contents, outputs, or separate control digests. Require the toolchain
-content digest to match across every controlled baseline/candidate pair.
+Schema v3 requires an evaluator-provisioned `eval-toolchain-capsule/v1` selected by an absolute
+manifest path. The manifest maps stable command names to executables under one content-digested
+capsule root outside both the subject worktree and its Git common directory. Before `eval run`,
+remove all write permission bits from the manifest directory,
+manifest, and full capsule tree; regular files must not be hard-linked. `eval toolchain status`
+validates the same seal and reports the public identity without exposing local paths. There is
+deliberately no toolchain install command, host discovery, download,
+copy, or fallback. The evaluator owns capsule construction and distribution.
+
+The schema-v3 `PATH` contains only the capsule command overlay, and the task gets a deterministic
+HOME/temp and scrubbed language/VCS startup environment with network disabled. A smoke should
+exercise the command mode actually needed by the child and verifier, not merely `--version` when
+that would miss material behavior. This contract proves symmetry only for declared, successfully
+smoked capabilities. Agent Hub does not statically infer closure over shebang interpreters, dynamic
+plugins, absolute-path subprocesses, or input-dependent dependencies; include such requirements in
+the capsule and suite when they matter.
+The overlay is injected only into sandbox children and is never prepended to the Codex parent
+process that performs startup or workspace discovery.
+
+Compatibility is unchanged: suite v1/v2, `python-runtime-capsule/v1`, and result v1-v4 retain their
+existing behavior. For schema v2, `--runtime` accepts `default`, a catalog runtime ID, or an absolute
+evaluator-owned manifest path; only `eval runtime install` may download the pinned catalog Python,
+and `eval run` never discovers or falls back to host Python. Capsule-backed schema-v2 results without
+verifier preflight use result v3 / `workspace-patch/v1`; preflighted results use v4 /
+`workspace-patch/v2`; historical result v2 remains unchanged. V4 stores an opaque preflight binding,
+not control paths, commits, contents, outputs, or separate control digests.
+
+For controlled schema-v3 pairs, require the same suite and question digests,
+`toolchain.content_digest`, and `capability_plan.contract_digest`, with both plans marked `passed`.
+Do not aggregate result v5 with older patch results as if they shared the same verifier trust boundary.
+V5 omits the subject `cwd` and returns only an opaque `eval_run_id` artifact reference, so public
+and persisted Eval results contain no private absolute path.
 
 Standards and external suite paths stay outside child prompts and artifacts. Do not create an
 answer file or work around `unsupported_isolation`; Eval requires Codex CLI 0.151.0 or newer.
 Verifier and known-good lexical/real paths must stay outside the subject and all child-readable
-runtime paths. `unsafe_eval_oracle` is fatal rather than retryable because a later prompt cannot
+runtime/toolchain paths. `unsafe_eval_oracle` is fatal rather than retryable because a later prompt cannot
 revoke an already readable oracle path.
-Verifier preflight is not a hostile-code sandbox or proof of semantic completeness: the trusted
-foreground verifier retains the current user's filesystem and network authority and may execute
-control or agent-produced code.
+Schema-v3 sandboxing is not a formal hostile-code proof or proof of verifier semantic completeness;
+the verifier may still execute control or agent-produced code within its bounded capability plan.
+Legacy schema-v2 verifiers retain the old foreground current-user filesystem and network authority.

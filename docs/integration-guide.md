@@ -44,8 +44,15 @@ per case, and prints one `agent-eval-run` JSON document. Repositories may provid
 `.agenthub/evals.json` as the default sample, but `--suite` may point outside the clean evaluated
 worktree and does not need to be committed. Source-location suites use the original worktree
 read-only; patch suites edit disposable detached worktrees and execute an external verifier after
-the agent exits. Model and effort are required and never resolved from defaults. Eval intentionally
-has no MCP tool, no prepare command, and no non-interactive answer-file input. See
+the agent exits. Schema-v3 patch suites additionally require `--toolchain` with an evaluator-owned
+absolute sealed `eval-toolchain-capsule/v1` manifest. They execute declared argv smokes before
+collecting standards, then run verifier controls and final grading through the same
+`workspace-write/v2` Codex sandbox capability plan as the child. Agent Hub has no generic capsule
+installer and does not discover, download, copy, or fall back to host tools; this proves parity only
+for declared, exercised capabilities, not an arbitrary dynamic dependency closure. Suite v1/v2,
+Python runtime capsule v1, and result v1-v4 behavior is unchanged. Model and effort are required and
+never resolved from defaults. Eval intentionally has no MCP tool, no prepare command, and no
+non-interactive answer-file input. See
 [Repository evaluations](evals.md) for the suite and result contracts.
 
 Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenthub.local/schemas/agent-eval-toolchain-capsule-v1.schema.json",
+  "title": "Agent Hub evaluation toolchain capsule v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "toolchain_id",
+    "platform",
+    "arch",
+    "root",
+    "commands",
+    "content_digest"
+  ],
+  "properties": {
+    "kind": { "const": "eval-toolchain-capsule/v1" },
+    "toolchain_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"
+    },
+    "platform": {
+      "enum": ["darwin", "linux"]
+    },
+    "arch": {
+      "enum": ["arm64", "x64"]
+    },
+    "root": { "$ref": "#/$defs/relativePath" },
+    "commands": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      },
+      "additionalProperties": { "$ref": "#/$defs/relativePath" }
+    },
+    "content_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\u0000]+(?:/[^/\\u0000]+)*$"
+    }
+  }
+}

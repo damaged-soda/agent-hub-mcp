@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_EVAL_PERMISSION_PROFILE_NAME,
@@ -206,6 +207,55 @@ describe("codex adapter", () => {
       env: {},
     });
 
+    expect(command.argv).toEqual([
+      "/opt/homebrew/bin/codex",
+      "exec",
+      "--json",
+      "--skip-git-repo-check",
+      "--model",
+      "gpt-visible",
+      "-c",
+      'model_reasoning_effort="medium"',
+      "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--strict-config",
+      "--disable",
+      "memories",
+      "--disable",
+      "external_agent_memory_import",
+      "--disable",
+      "multi_agent",
+      "--disable",
+      "multi_agent_v2",
+      "--output-schema",
+      "/private/tmp/agenthub-eval-patch-test/schema.json",
+      "-c",
+      'default_permissions="agenthub-eval"',
+      "-c",
+      'approval_policy="never"',
+      "-c",
+      'shell_environment_policy.inherit="core"',
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      'shell_environment_policy.set.PYTHONNOUSERSITE="1"',
+      "-c",
+      'shell_environment_policy.set.PYTHONDONTWRITEBYTECODE="1"',
+      "-c",
+      'shell_environment_policy.set.PYTHONPATH=""',
+      "-c",
+      'shell_environment_policy.set.PYTHONHOME=""',
+      "-c",
+      'shell_environment_policy.set.PYTHONPLATLIBDIR=""',
+      "-c",
+      'shell_environment_policy.set.PYTHONEXECUTABLE=""',
+      "-c",
+      'shell_environment_policy.set.__PYVENV_LAUNCHER__=""',
+      "-c",
+      'permissions.agenthub-eval={ description = "Agent Hub workspace-only evaluation", filesystem = { ":minimal" = "read", ":workspace_roots" = { "." = "write", ".git" = "deny", ".git/**" = "deny" }, "/opt/homebrew/bin/codex" = "read", "/private/tmp/agenthub-eval-patch-test" = "write" }, network = { enabled = false } }',
+      "-",
+    ]);
     const profile = command.argv.find((item) => item.startsWith("permissions.agenthub-eval="));
     expect(profile).toContain('":workspace_roots" = { "." = "write"');
     expect(profile).toContain('".git" = "deny"');
@@ -223,6 +273,99 @@ describe("codex adapter", () => {
     expect(command.argv).not.toContain(
       'shell_environment_policy.set.PATH="/private/tmp/agenthub-eval-runtime-bin"',
     );
+  });
+
+  it("builds workspace-write/v2 with deterministic toolchain environment settings", () => {
+    const executionProfile = {
+      kind: "workspace-write/v2",
+      scratch_path: "/private/tmp/agenthub-eval-patch-v2-test",
+      output_schema_path: "/private/tmp/agenthub-eval-patch-v2-test/schema.json",
+      agent_executable: "/opt/toolchain/bin/codex",
+      runtime_read_paths: ["/opt/toolchain", "/opt/codex-runtime"],
+      path_prepend: ["/opt/toolchain/bin", "/opt/toolchain/extra-bin"],
+    };
+    const command = buildCodexCommand({
+      request: {
+        prompt: "change it",
+        metadata: { model: "gpt-visible", codex: { effort: "medium" } },
+        resolved_metadata: {
+          model: "gpt-visible",
+          codex: { effort: "medium", add_dirs: [] },
+        },
+        execution_profile: executionProfile,
+      },
+      effectiveCliSessionRef: createCodexSessionRef(null),
+      env: {},
+    });
+    const permissionArgs = codexEvalPermissionArgs(executionProfile);
+
+    expect(command.argv.slice(-(permissionArgs.length + 1), -1)).toEqual(permissionArgs);
+    expect(command.path_prepend).toBeUndefined();
+    expect(permissionArgs).toContain(
+      `shell_environment_policy.set.PATH=${JSON.stringify(
+        ["/opt/toolchain/bin", "/opt/toolchain/extra-bin"].join(path.delimiter),
+      )}`,
+    );
+    expect(permissionArgs).toContain('shell_environment_policy.inherit="core"');
+    expect(permissionArgs).toContain("allow_login_shell=false");
+    for (const setting of [
+      'shell_environment_policy.set.GIT_CONFIG_GLOBAL="/dev/null"',
+      'shell_environment_policy.set.GIT_CONFIG_NOSYSTEM="1"',
+      'shell_environment_policy.set.GIT_CONFIG_SYSTEM="/dev/null"',
+      'shell_environment_policy.set.HOME="/private/tmp/agenthub-eval-patch-v2-test/task-home"',
+      'shell_environment_policy.set.PYTHONDONTWRITEBYTECODE="1"',
+      'shell_environment_policy.set.PYTHONNOUSERSITE="1"',
+      'shell_environment_policy.set.TEMP="/private/tmp/agenthub-eval-patch-v2-test"',
+      'shell_environment_policy.set.TMP="/private/tmp/agenthub-eval-patch-v2-test"',
+      'shell_environment_policy.set.TMPDIR="/private/tmp/agenthub-eval-patch-v2-test"',
+      'shell_environment_policy.set.ZDOTDIR="/private/tmp/agenthub-eval-patch-v2-test/task-home"',
+    ]) {
+      expect(permissionArgs).toContain(setting);
+    }
+    expect(permissionArgs).toContain(
+      'shell_environment_policy.exclude=["BASH_ENV","ENV","GIT_CONFIG_GLOBAL","GIT_CONFIG_SYSTEM","GIT_DIR","GIT_EXEC_PATH","GIT_WORK_TREE","NODE_OPTIONS","NODE_PATH","PYTHONEXECUTABLE","PYTHONHOME","PYTHONPATH","PYTHONPLATLIBDIR","ZDOTDIR","__PYVENV_LAUNCHER__"]',
+    );
+    expect(permissionArgs.join("\n")).not.toContain(
+      'shell_environment_policy.set.GIT_DIR=""',
+    );
+    expect(permissionArgs.join("\n")).not.toContain(
+      'shell_environment_policy.set.GIT_WORK_TREE=""',
+    );
+    const profile = permissionArgs.find((item) =>
+      item.startsWith("permissions.agenthub-eval="),
+    );
+    expect(profile).toContain('":workspace_roots" = { "." = "write"');
+    expect(profile).toContain('".git" = "deny"');
+    expect(profile).toContain('"/private/tmp/agenthub-eval-patch-v2-test" = "write"');
+    expect(profile).toContain('"/opt/toolchain" = "read"');
+    expect(profile).toContain('"/opt/codex-runtime" = "read"');
+    expect(profile).toContain("network = { enabled = false }");
+  });
+
+  it("rejects unknown eval execution profiles", () => {
+    const executionProfile = {
+      kind: "workspace-write/v3",
+      scratch_path: "/private/tmp/agenthub-eval-patch-test",
+      output_schema_path: "/private/tmp/agenthub-eval-patch-test/schema.json",
+      agent_executable: "/opt/homebrew/bin/codex",
+      runtime_read_paths: ["/opt/homebrew/bin/codex"],
+      path_prepend: [],
+    };
+
+    expect(() => codexEvalPermissionArgs(executionProfile)).toThrow(
+      "Unsupported Codex execution profile: workspace-write/v3",
+    );
+    expect(() =>
+      buildCodexCommand({
+        request: {
+          metadata: {},
+          resolved_metadata: { codex: { add_dirs: [] } },
+          execution_profile: executionProfile,
+        },
+        effectiveCliSessionRef: createCodexSessionRef(null),
+        env: {},
+      }),
+    ).toThrow("Unsupported Codex execution profile: workspace-write/v3");
   });
 
   it("exposes reusable eval permission args without exec-only profile selection", () => {

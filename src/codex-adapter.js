@@ -12,11 +12,13 @@ export const CODEX_AGENT_ID = "codex";
 export const CODEX_EVAL_MIN_VERSION = Object.freeze([0, 151, 0]);
 export const CODEX_READONLY_EVAL_EXECUTION_PROFILE = "workspace-readonly/v1";
 export const CODEX_PATCH_EVAL_EXECUTION_PROFILE = "workspace-write/v1";
+export const CODEX_PATCH_EVAL_EXECUTION_PROFILE_V2 = "workspace-write/v2";
 export const CODEX_EVAL_EXECUTION_PROFILE = CODEX_READONLY_EVAL_EXECUTION_PROFILE;
 export const CODEX_EVAL_PERMISSION_PROFILE_NAME = "agenthub-eval";
 const CODEX_EVAL_EXECUTION_PROFILES = new Set([
   CODEX_READONLY_EVAL_EXECUTION_PROFILE,
   CODEX_PATCH_EVAL_EXECUTION_PROFILE,
+  CODEX_PATCH_EVAL_EXECUTION_PROFILE_V2,
 ]);
 export const CODEX_DISCUSSION_CAPABILITIES = Object.freeze({
   supported_permissions: ["read-only", "auto"],
@@ -141,6 +143,9 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     throw new Error("Eval execution profile cannot resume a Codex session");
   }
   const evalPathPrepend = evalProfile ? normalizedEvalPathPrepend(evalProfile.path_prepend) : null;
+  const evalBirthPathPrepend = evalProfile?.kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE_V2
+    ? null
+    : evalPathPrepend;
   const evalAgentExecutable = evalProfile
     ? normalizedEvalAgentExecutable(evalProfile.agent_executable)
     : null;
@@ -251,7 +256,7 @@ export function buildCodexCommand({ request, effectiveCliSessionRef, env = proce
     argv,
     output_format: "jsonl",
     ...(evalAgentInterpreter ? { path_interpreter: evalAgentInterpreter } : {}),
-    ...(evalPathPrepend ? { path_prepend: evalPathPrepend } : {}),
+    ...(evalBirthPathPrepend ? { path_prepend: evalBirthPathPrepend } : {}),
     ...(evalProfile
       ? {
           post_birth_env: {
@@ -321,7 +326,7 @@ export function codexEvalPermissionArgs(profile) {
     );
     return `${JSON.stringify(runtimePath)} = "read"`;
   });
-  const workspaceAccess = profile.kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE
+  const workspaceAccess = isCodexPatchEvalExecutionProfile(profile.kind)
     ? "write"
     : "read";
   const permissionProfile = [
@@ -332,24 +337,7 @@ export function codexEvalPermissionArgs(profile) {
     `${JSON.stringify(scratchPath)} = "write" }`,
     "network = { enabled = false } }",
   ].join(", ");
-  const toolchainEnvironment = profile.kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE
-    ? [
-        "-c",
-        'shell_environment_policy.set.PYTHONNOUSERSITE="1"',
-        "-c",
-        'shell_environment_policy.set.PYTHONDONTWRITEBYTECODE="1"',
-        "-c",
-        'shell_environment_policy.set.PYTHONPATH=""',
-        "-c",
-        'shell_environment_policy.set.PYTHONHOME=""',
-        "-c",
-        'shell_environment_policy.set.PYTHONPLATLIBDIR=""',
-        "-c",
-        'shell_environment_policy.set.PYTHONEXECUTABLE=""',
-        "-c",
-        'shell_environment_policy.set.__PYVENV_LAUNCHER__=""',
-      ]
-    : [];
+  const toolchainEnvironment = evalToolchainEnvironmentArgs(profile, scratchPath);
   return [
     "-c",
     'shell_environment_policy.inherit="core"',
@@ -359,6 +347,71 @@ export function codexEvalPermissionArgs(profile) {
     "-c",
     `permissions.${CODEX_EVAL_PERMISSION_PROFILE_NAME}=${permissionProfile}`,
   ];
+}
+
+function isCodexPatchEvalExecutionProfile(kind) {
+  return kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE ||
+    kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE_V2;
+}
+
+function evalToolchainEnvironmentArgs(profile, scratchPath) {
+  const { kind } = profile;
+  if (!isCodexPatchEvalExecutionProfile(kind)) return [];
+  if (kind === CODEX_PATCH_EVAL_EXECUTION_PROFILE) {
+    return [
+      ["PYTHONNOUSERSITE", "1"],
+      ["PYTHONDONTWRITEBYTECODE", "1"],
+      ["PYTHONPATH", ""],
+      ["PYTHONHOME", ""],
+      ["PYTHONPLATLIBDIR", ""],
+      ["PYTHONEXECUTABLE", ""],
+      ["__PYVENV_LAUNCHER__", ""],
+    ].flatMap(([key, value]) => [
+      "-c",
+      `shell_environment_policy.set.${key}=${JSON.stringify(value)}`,
+    ]);
+  }
+  const toolchainPath = normalizedEvalPathPrepend(profile.path_prepend);
+  const taskHome = path.join(scratchPath, "task-home");
+  const fixedValues = [
+    ["GIT_CONFIG_GLOBAL", "/dev/null"],
+    ["GIT_CONFIG_NOSYSTEM", "1"],
+    ["GIT_CONFIG_SYSTEM", "/dev/null"],
+    ["HOME", taskHome],
+    ["PATH", toolchainPath.join(path.delimiter)],
+    ["PYTHONDONTWRITEBYTECODE", "1"],
+    ["PYTHONNOUSERSITE", "1"],
+    ["TEMP", scratchPath],
+    ["TMP", scratchPath],
+    ["TMPDIR", scratchPath],
+    ["ZDOTDIR", taskHome],
+  ];
+  const args = fixedValues.flatMap(([key, value]) => [
+    "-c",
+    `shell_environment_policy.set.${key}=${JSON.stringify(value)}`,
+  ]);
+  const excludedVariables = [
+    "BASH_ENV",
+    "ENV",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_DIR",
+    "GIT_EXEC_PATH",
+    "GIT_WORK_TREE",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PYTHONEXECUTABLE",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONPLATLIBDIR",
+    "ZDOTDIR",
+    "__PYVENV_LAUNCHER__",
+  ];
+  args.push(
+    "-c",
+    `shell_environment_policy.exclude=${JSON.stringify(excludedVariables)}`,
+  );
+  return args;
 }
 
 function normalizedEvalPathPrepend(value) {

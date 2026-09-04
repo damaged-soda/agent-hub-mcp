@@ -293,9 +293,9 @@ Use the returned run ID with `agenthub wait RUN_ID`, or `agenthub query RUN_ID` 
 
 ## Eval Smoke Test
 
-Prepare a question-only suite, optionally with the public verifier-preflight policy, anywhere
-readable by the foreground evaluator, verify the subject
-worktree is clean, provision the default capsule once, then run:
+Prepare a question-only suite anywhere readable by the foreground evaluator and verify the subject
+worktree is clean. For legacy schema-v2 patch suites, provision the default Python capsule once,
+then run:
 
 ```sh
 agenthub eval runtime install --runtime default
@@ -331,12 +331,45 @@ that error with a broader permission mode. Omitting `--model` or `--effort` must
 first standard prompt. An external suite may change between separate eval commands, but the
 normalized suite and question digests are fixed for each accepted command.
 
-Verifier preflight runs the trusted verifier two extra times per case with foreground user
-filesystem and network authority. The disposable worktrees and private `HOME`/temp directories
-protect the source worktrees and keep controls out of the child, but they do not sandbox the
-verifier or make later execution of agent-produced code safe. Use an idempotent verifier, audit it
-independently, and test representative partial-bad mutations; subject-fail plus known-good-pass is
-only a minimum sanity check.
+For schema v3, prepare an evaluator-owned generic capsule outside both the worktree and its Git
+common directory. Its absolute
+`eval-toolchain-capsule/v1` manifest must map every required command name to a contained executable,
+match the current platform/architecture and content digest, contain no hardlinked regular files,
+and be permission-bit sealed: remove write bits from the manifest directory, manifest, and complete
+root tree. Agent Hub does not build or install this artifact. Inspect it without exposing paths,
+then run the suite with `--toolchain` instead of `--runtime`:
+
+```sh
+agenthub eval toolchain status --toolchain /absolute/capsule/manifest.json
+AGENT_HUB_EVAL_DIR=/tmp/agent-hub-evals \
+agenthub eval run --agent codex --cwd "$PWD" \
+  --suite /absolute/path/to/evals-v3.json \
+  --model gpt-5.6-sol --effort medium \
+  --toolchain /absolute/capsule/manifest.json
+```
+
+The schema-v3 suite must use `subject-reject-known-good-pass/v2` and declare non-empty
+`command-smoke/v1` requirements. Confirm each smoke runs before the first answer prompt and that a
+missing/failing command leaves no ordinary run or Eval artifact. Then supply the verifier and clean
+same-repository descendant known-good worktree for each case. Both controls and final verification
+must appear as no-model Codex sandbox invocations using the same `workspace-write/v2` plan as the
+child. A successful result is schema v5 / `workspace-patch/v3` and includes a passed
+`eval-capability-plan/v1`, matching requirement/capability digests, public capsule identity and
+sorted command names, and the opaque v2 preflight binding. It must not expose capsule command paths,
+smoke output, verifier material, control identity, subject `cwd`, or artifact storage paths.
+
+`eval run` must never discover, download, copy, or fall back to host tools for schema v3. Test this
+with a deliberately absent declared command and with poisoned `PATH`/Git/Node/Python override
+variables. A passing smoke proves that declared argv worked under the final plan; it cannot
+statically prove every dynamic dependency or conditional helper the command may use. Include
+representative modes such as repository initialization rather than only `--version`, independently
+audit the verifier, and exercise partial-bad mutations.
+
+Legacy schema-v2 verifier preflight still runs the trusted verifier two extra times per case with
+foreground user filesystem and network authority. The disposable worktrees and private
+`HOME`/temp directories protect the source worktrees and keep controls out of the child, but they do
+not sandbox that legacy verifier or make later execution of agent-produced code safe. Suite v1/v2,
+Python runtime capsule v1, and result schemas v1-v4 keep their existing behavior.
 
 ## Discussion Smoke Test
 
@@ -382,10 +415,13 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
 | `eval runtime status` reports `missing` / `runtime_capsule_missing` | The selected catalog runtime has not been installed in this capsule store. | Run `agenthub eval runtime install --runtime ID`, then inspect status again; do not point Eval at a host Python or widen its read profile. |
 | Eval rejects a capsule digest, platform, architecture, or contained path | The installed object or custom manifest is damaged, incompatible, or violates capsule containment. | Reinstall the pinned catalog ID or repair the separately provisioned custom capsule; `eval run` deliberately has no host fallback. |
+| `eval toolchain status` reports `missing`, `unsupported`, or `invalid` | The absolute generic manifest is absent, malformed, for another platform/architecture, outside containment rules, or disagrees with its tree digest. | Repair or re-provision the evaluator-owned capsule. Do not point schema v3 at a host executable or add host directories to the profile. |
+| Schema v3 reports `toolchain_unavailable` / `toolchain_preflight_failed` | A declared command is not mapped by the capsule, or its argv smoke fails under the final `workspace-write/v2` sandbox and sanitized environment. | Add the command and its dependencies to a new sealed capsule, or correct the representative smoke; never add a host fallback. The failed command has no model run or Eval artifact. |
 | Eval reports `unsafe_eval_oracle` | A verifier or known-good lexical/real path overlaps the subject or a runtime path readable by the child. | Move the oracle outside every child-readable capability and start a new command; reprompting cannot revoke an already readable path. |
 | Verifier preflight rejects the untouched subject | The task is already satisfied or the verifier accepts a no-op/always passes. | Fix the case or verifier; do not start a controlled run until the unchanged subject is rejected. |
 | Verifier preflight rejects the known-good control | The control is not a clean committed same-repository descendant worktree, does not satisfy the case, or the verifier/runtime cannot execute it. | Repair the control or verifier and rerun; a subject failure alone is not sufficient calibration. |
 | A case reports `invalid` / `runtime_capsule_changed` | The foreground verifier or another same-user process changed the selected capsule after the case started. | Reinstall or replace the capsule, inspect the verifier, and rerun the entire comparison; later cases are intentionally left unrun. |
+| A schema-v3 case reports `invalid` / `toolchain_capsule_changed` | The generic capsule no longer matches its pinned identity after smoke, child, or sandboxed verification. | Quarantine and re-provision the capsule, then rerun the entire comparison; do not compare the partial result. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`, or an OpenCode JSON `error` event: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
 | `outside AGENT_HUB_CWD_ALLOWLIST` | `cwd` or `add_dirs` is outside the configured allowlist. | Add the project root to `AGENT_HUB_CWD_ALLOWLIST` or change the request path. |
