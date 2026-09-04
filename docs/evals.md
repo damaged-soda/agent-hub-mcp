@@ -8,6 +8,11 @@ committed. Agent Hub runs and grades one suite; it does not compare commits, ran
 a long-term benchmark. A consumer such as Cockpit may ingest the resulting facts and choose its own
 comparison cohorts.
 
+An optional verifier preflight may execute the evaluator-trusted grader against disposable control
+worktrees before dispatch. Those controls are input validation, not additional Eval subjects: no
+model runs against them, no work metrics or ranking are produced for them, and one completed Eval
+result still describes exactly one subject commit.
+
 The versioned `eval-driven-refactor` Skill provides an opinionated workflow for designing controlled
 before/after cases and interpreting paired results without changing this single-run boundary. The
 target repository may provide sample questions, while evaluator-selected suites, comparisons, and
@@ -31,8 +36,9 @@ Repositories may version `.agenthub/evals.json` as the default sample suite:
 }
 ```
 
-Suites contain questions only. Oracle fields, expected paths, immutable source comments, and grader
-scripts are rejected. The evaluated worktree must be clean and committed, but the selected suite
+Suites contain questions plus an optional public verifier-preflight policy, never oracle material.
+Expected paths, control identities, immutable source comments, and grader scripts are rejected.
+The evaluated worktree must be clean and committed, but the selected suite
 does not need to be. `--suite` may select an absolute file anywhere readable by the foreground
 evaluator; a relative path resolves from the evaluated worktree root. External suite paths are not
 added to the child agent's readable capabilities. The normalized suite is held in supervisor memory,
@@ -63,6 +69,7 @@ Suite schema v2 accepts only `workspace-patch/v1`:
 {
   "schema_version": 2,
   "suite_id": "resource-parser-changes",
+  "verifier_preflight": "subject-reject-known-good-pass/v1",
   "cases": [
     {
       "id": "recognize-another-reader",
@@ -84,6 +91,25 @@ drained without retention or a grading size limit. The verifier path, contents, 
 persisted in the eval result. Only the verifier digest, bounded change metrics, and patch digest are
 retained. The verifier may inject hidden tests before invoking the repository's ordinary test
 entrypoint.
+
+`verifier_preflight` is optional and accepts only
+`subject-reject-known-good-pass/v1`. When enabled, the interactive standard for each case also
+includes a different clean, committed worktree from the same Git repository whose different
+descendant commit is known to satisfy that case. The supervisor pins the suite, verifier, runtime,
+subject, and known-good worktree before executing the verifier on fresh disposable copies. It first
+requires a nonzero exit against the
+untouched subject and then a zero exit against the known-good control. Every case must pass both
+directions before the first agent run is dispatched. An always-passing verifier, an always-failing
+verifier, an already-satisfied subject, or a known-good control that cannot run in the selected
+environment therefore fails before model cost is incurred.
+The public policy is part of the normalized suite and its digest.
+
+The two checks are a minimum operational sanity test, not proof that the verifier implements the
+prompt's complete semantics. They do not show that the subject failed for the intended reason or
+that important partial implementations are rejected. Evaluators should still review the verifier
+independently and exercise representative partial-bad mutations before a controlled experiment.
+The preflight is part of the same foreground `eval run`; it does not create an answer file,
+reusable receipt, second Eval result, or cross-commit comparison.
 
 Schema v1 and v2 cases cannot be mixed in one suite. Use separate suite files and `--suite` when
 both kinds are needed.
@@ -126,9 +152,11 @@ not authorize an implicit install or a host-runtime fallback.
 
 The selected runtime ID, Python version, platform, architecture, and content digest are part of the Eval facts.
 Controlled baseline/candidate comparisons must require the same runtime content digest in addition
-to matching suite, question, model, and effort inputs. The patch suite remains suite schema v2, but
-capsule-backed patch runs emit result schema v3 with a required `toolchain` object. Historical
-result schema v2 remains unchanged rather than being reinterpreted as capsule-backed.
+to matching suite, question, model, and effort inputs. The patch suite remains suite schema v2.
+Capsule-backed patch runs without verifier preflight emit result schema v3 with a required
+`toolchain` object; preflighted runs emit result schema v4 with grader version
+`workspace-patch/v2`. Historical result schema v2 remains unchanged rather than being
+reinterpreted as capsule-backed.
 
 ## Run flow
 
@@ -161,14 +189,25 @@ agenthub eval run \
 prompts to stderr, reads all human standards from the interactive terminal, and prints one final
 JSON result to stdout. It collects every standard before starting the first agent case. Location
 suites ask for `path`, `symbol`, and `definition_line`; patch suites ask for an executable verifier
-path. Runtime installation is separate from collecting
+path. A preflight-enabled patch suite additionally asks for one clean committed same-repository
+descendant known-good worktree per case, runs every two-sided check, and only then starts agent
+cases. Runtime installation is separate from collecting
 answers; there is no answer prepare command or answer file. Missing model or effort fails before the
 first standard prompt.
 
-The standards remain in the foreground Eval supervisor's memory. They are never included in
-the agent prompt, argv, child environment, ordinary run request, or eval result. Only a canonical
-`answer_digest` is retained. If the supervisor exits before completion, rerun the evaluation; Eval
-does not recover an in-memory oracle after interruption.
+The standards and known-good control identities remain in the foreground Eval supervisor's memory.
+They are never included in the agent prompt, argv, child environment, ordinary run request, or eval
+result. Only canonical answer digests and, for a successful preflighted run, an opaque binding of
+the suite, questions, verifier, subject, runtime, timeout, isolation contract, and preflight version
+are retained. The binding contains no control path, commit, content, output, or independently
+linkable control digest. If the supervisor exits before completion, rerun the evaluation; Eval does
+not recover an in-memory oracle or preflight receipt after interruption.
+
+The verifier and known-good lexical paths and their resolved real paths must stay outside the
+subject and every runtime capability readable by the child. An overlap fails the entire command
+with `unsafe_eval_oracle` rather than asking again: once oracle material is present under a future
+child capability, reprompting cannot revoke that readability. No agent run or Eval artifact is
+created.
 
 ## Isolation contract
 
@@ -229,24 +268,36 @@ Disposable worktree creation overrides `core.hooksPath` with a private empty dir
 checkout hooks cannot publish the temporary path or mutate external state. Agent Hub records the
 patch before verifier execution and removes the worktree afterward.
 
+When verifier preflight is enabled, the supervisor applies the same empty-hook and disposable-copy
+discipline to the untouched subject and known-good controls. It invokes the same pinned verifier
+with the same capsule-first `PATH`, filtered environment, private `HOME`/`ZDOTDIR`, private temp
+directories, and timeout used for final grading. It revalidates pinned inputs around execution and
+discards every control copy before dispatch. A preflight failure is a command-level error: Agent Hub
+starts no ordinary run and writes no Eval result artifact.
+
 Patch metric collection is best-effort telemetry: an oversized or otherwise unprojectable patch is
 reported as `patch.status = "unavailable"` but does not skip or override verifier grading. Worktree
 cleanup always attempts both Git deregistration and filesystem removal; a cleanup failure is
 reported to the foreground stderr without replacing the completed case result.
 
-The agent sandbox does not extend to verifier execution. The verifier is evaluator-trusted and may
-execute code written by the agent with the foreground user's filesystem and network authority when
-it invokes repository tests. Its `PATH` starts with the same capsule command overlay, so an ordinary
+The agent sandbox does not extend to verifier execution, including its preflight invocations. The
+verifier is evaluator-trusted and may read or change user-accessible files, use the network, and
+execute code from a control worktree or code written by the agent with the foreground user's
+authority when it invokes repository tests. Its `PATH` starts with the same capsule command overlay,
+so an ordinary
 `python3` test entrypoint uses the recorded toolchain even though the verifier retains foreground
 authority. Verifier startup uses a private `HOME`/`ZDOTDIR` and does not inherit `BASH_ENV` or
 namespace rebinding state, preventing its shebang shell from replacing that PATH first. Agent Hub
 revalidates the capsule after verification; a mutation makes the case
 `invalid/runtime_capsule_changed` and leaves later cases unrun. A background process deliberately
-left by the agent is another known
+left by the agent or verifier is another known
 residual risk: Agent Hub does not kill a persisted process group from stored pid metadata because of
 pid-reuse/incorrect-target risk. The verifier copy stays outside the agent permission profile, but
-patch eval is not a hostile-code sandbox. Run it only on repositories and tasks for which executing
-the resulting tests as the current user is acceptable.
+patch eval and verifier preflight are not hostile-code sandboxes. Preflight increases the number of
+foreground verifier executions and does not eliminate the risk of running agent-produced code.
+Use only trusted, preferably idempotent verifiers and repositories for which executing the tests as
+the current user is acceptable. Agent Hub prevents oracle disclosure through its managed child and
+result channels; it cannot constrain a malicious foreground verifier from publishing its own data.
 
 ## Result and retention
 
@@ -258,6 +309,8 @@ Every completed eval command stores one private `0600` JSON result under
 - the exact commit, agent version, model, effort, and isolation policy;
 - for patch suites, the selected runtime ID, Python version, platform, architecture, and capsule
   content digest;
+- for preflighted patch suites, the preflight policy and an opaque digest binding the accepted
+  suite, questions, verifier, subject, runtime, timeout, and execution contract;
 - per-case pass/fail/invalid/error status and the backing ordinary `agent_run_ref`;
 - elapsed time, usage, turn/tool counts, and high-confidence observed file-read counts;
 - for patch suites, observed write counts, bounded change statistics, patch digest, and verifier
@@ -268,9 +321,13 @@ for evaluator-owned external input. The result never stores suite question text.
 cross-commit comparisons should require matching suite, question, and runtime content digests; if
 the evaluator modifies or extrapolates questions between runs, the consumer should treat them as
 exploratory new cases rather than paired efficiency measurements.
+Preflighted comparisons must also match verifier digest, policy/version, timeout, and isolation
+contract. Their opaque preflight bindings include the subject identity and therefore are expected
+to differ across baseline and candidate.
 
 The eval result does not contain question text, standard answers/verifiers, parsed agent answers,
-patch bodies, or verifier output. The backing ordinary run keeps the ordinary provider-native
+patch bodies, verifier output, or preflight control paths, commits, contents, outputs, or separate
+control digests. The backing ordinary run keeps the ordinary provider-native
 prompt and tool transcript under the existing run TTL, so commands and code excerpts observed by
 the agent may still be present there; verifier identity, contents, and output never enter that run.
 
@@ -279,7 +336,9 @@ The machine-readable result contracts are
 [`schemas/agent-eval-result-v2.schema.json`](../schemas/agent-eval-result-v2.schema.json) for
 historical runs, plus
 [`schemas/agent-eval-result-v3.schema.json`](../schemas/agent-eval-result-v3.schema.json) for
-capsule-backed patch runs.
+ordinary capsule-backed patch runs and
+[`schemas/agent-eval-result-v4.schema.json`](../schemas/agent-eval-result-v4.schema.json) for
+preflighted patch runs.
 
 Eval results default to the ordinary seven-day run TTL. Override storage or retention with:
 

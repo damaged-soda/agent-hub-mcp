@@ -10,7 +10,8 @@
 
 如果假设是新结构能让真实修改更简单或更安全，用 `workspace-patch/v1`。判断是否继续大型重构时
 优先使用它，因为外部 verifier 可以检查行为与意外修改范围。verifier 必须位于所有 agent 可读
-路径之外，并通过交互输入。
+路径之外，并通过交互输入。受控重构必须在 suite 根启用
+`verifier_preflight: "subject-reject-known-good-pass/v1"`。
 
 同一评测集不得混用两种答案 schema。两者都有价值时，分别建立只含问题的评测集，各自独立运行
 成对实验。
@@ -44,14 +45,38 @@
 不要规定固定题数。每道题都必须有影响决策的独立理由；删除重复或含糊的题目，不要为了数量填充
 评测集。
 
+## 在模型运行前校准 verifier
+
+为每个 patch case 准备一个 clean、committed、same-repository、descends-from-subject 的
+known-good worktree，并在
+`eval run` 的 TTY 中与 verifier 一起提供。Agent Hub 会在 disposable copy 上先要求 verifier
+拒绝 untouched subject，再接受 known-good；所有 case 都通过后才 dispatch。不要用任意
+known-bad fixture 代替当前 subject，也不要把“当前 baseline 如预期失败”单独当成校准成功：
+always-fail verifier 或缺依赖同样会给出非零退出。
+
+verifier 与 known-good 的输入路径和 realpath 都必须位于 subject 与 child 可读 runtime
+capability 之外；一旦重叠，`unsafe_eval_oracle` 会终止整条命令而非允许重输，因为后续 prompt
+无法撤回已经授予的可读范围。
+
+双向 preflight 只能排除最粗的 always-pass、always-fail 和环境不通，不能证明 verifier 覆盖题目
+语义。冻结前仍须让独立 reviewer 对照自然语言意图审阅断言，并对至少一个会保留关键缺陷的
+partial-bad mutation 运行 verifier；它必须失败。known-good、mutation patch、verifier 路径与
+正文都是评测者持有的 oracle，不得写入 suite 或被测 worktree。
+
+verifier preflight 和最终判分均以前台用户权限运行，可能访问文件、网络并执行仓库或 agent
+产生的代码。disposable worktree 与私有 HOME/temp 保护原 worktree，但不是 hostile-code sandbox；
+只使用可信、最好幂等的 verifier。
+
 ## 标准答案不得进入评测集
 
-仓库可以提供只含题目与公开答案 schema 的样例，但评测者持有运行时 suite，并可在被测 worktree
-之外修改或类推。定位题要分别检查每个 commit，并在运行时输入当时的 `path`、`symbol` 和
+仓库可以提供只含题目、公开答案 schema 与公开 preflight policy 的样例，但评测者持有运行时
+suite，并可在被测 worktree 之外修改或类推。定位题要分别检查每个 commit，并在运行时输入当时的 `path`、`symbol` 和
 `definition_line`。答案在 baseline 与 candidate 之间移动是正常现象，本身不构成失败。
 
 受控比较必须让两侧使用相同的规范化问题与 digest。根据某一侧结构单独改写的问题属于探索性
 新用例，不能把结果差异归因于重构。
 
-代码修改题使用外部可执行 verifier，且两个 commit 上的断言语义必须等价。它可以注入隐藏测试并
-调用仓库正常测试入口，但除非文件布局本身就是用户需求，否则不得断言预设布局。
+代码修改题使用外部可执行 verifier，且两个 commit 上的断言、preflight policy 与 known-good
+行为语义必须等价。它可以注入隐藏测试并调用仓库正常测试入口，但除非文件布局本身就是用户需求，
+否则不得断言预设布局。两侧 v4 结果的 opaque preflight binding 会因 subject 不同而不同；比较
+时要求相同 suite、question、verifier、runtime、policy 与执行配置，不要求 binding 本身相同。

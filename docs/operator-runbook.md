@@ -272,7 +272,8 @@ Use the returned run ID with `agenthub wait RUN_ID`, or `agenthub query RUN_ID` 
 
 ## Eval Smoke Test
 
-Prepare a question-only suite anywhere readable by the foreground evaluator, verify the subject
+Prepare a question-only suite, optionally with the public verifier-preflight policy, anywhere
+readable by the foreground evaluator, verify the subject
 worktree is clean, provision the default capsule once, then run:
 
 ```sh
@@ -290,9 +291,17 @@ any case. Confirm the result reports `isolation.policy = "workspace-readonly/v1"
 suite, supply an executable verifier outside the evaluated repository and confirm the result reports
 `schema_version = 3`, `workspace-write/v1`, the installed capsule's required `toolchain`
 content digest, `pinned-eval-toolchain` in `isolation.data_read`, a patch digest, and verifier exit
-status while the original worktree remains clean.
+status while the original worktree remains clean. To exercise the verifier gate, add
+`"verifier_preflight": "subject-reject-known-good-pass/v1"` at the suite root and prepare, for each
+case, a different clean committed descendant worktree in the same repository whose code is known
+to pass. The CLI asks for that path after the verifier, verifies the untouched subject fails and known-good passes for
+every case before dispatch, and returns schema v4 / `workspace-patch/v2`. Confirm the result exposes
+only the opaque preflight binding—not control paths, commits, contents, outputs, or separate
+digests. If either direction fails, confirm there is no ordinary run and no Eval artifact.
 Historical patch result schema v2 remains unchanged. A controlled baseline/candidate pair must report
-the same capsule digest. `eval run` must fail before prompting when the capsule is absent or invalid;
+the same suite, question, verifier, preflight policy/version, and capsule digests; the opaque
+preflight binding itself is subject-specific and need not match. `eval run` must fail before
+prompting when the capsule is absent or invalid;
 it must never download, inspect host Python, or fall back to a host interpreter. In both modes, the
 backing run's `command.json` must contain `--ephemeral` and a
 `permissions.agenthub-eval` inline profile, and it must not contain `--sandbox`. A non-Codex
@@ -300,6 +309,13 @@ provider or Codex older than 0.151.0 must fail with `unsupported_isolation`; do 
 that error with a broader permission mode. Omitting `--model` or `--effort` must fail before the
 first standard prompt. An external suite may change between separate eval commands, but the
 normalized suite and question digests are fixed for each accepted command.
+
+Verifier preflight runs the trusted verifier two extra times per case with foreground user
+filesystem and network authority. The disposable worktrees and private `HOME`/temp directories
+protect the source worktrees and keep controls out of the child, but they do not sandbox the
+verifier or make later execution of agent-produced code safe. Use an idempotent verifier, audit it
+independently, and test representative partial-bad mutations; subject-fail plus known-good-pass is
+only a minimum sanity check.
 
 ## Discussion Smoke Test
 
@@ -344,6 +360,9 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
 | `eval runtime status` reports `missing` / `runtime_capsule_missing` | The selected catalog runtime has not been installed in this capsule store. | Run `agenthub eval runtime install --runtime ID`, then inspect status again; do not point Eval at a host Python or widen its read profile. |
 | Eval rejects a capsule digest, platform, architecture, or contained path | The installed object or custom manifest is damaged, incompatible, or violates capsule containment. | Reinstall the pinned catalog ID or repair the separately provisioned custom capsule; `eval run` deliberately has no host fallback. |
+| Eval reports `unsafe_eval_oracle` | A verifier or known-good lexical/real path overlaps the subject or a runtime path readable by the child. | Move the oracle outside every child-readable capability and start a new command; reprompting cannot revoke an already readable path. |
+| Verifier preflight rejects the untouched subject | The task is already satisfied or the verifier accepts a no-op/always passes. | Fix the case or verifier; do not start a controlled run until the unchanged subject is rejected. |
+| Verifier preflight rejects the known-good control | The control is not a clean committed same-repository descendant worktree, does not satisfy the case, or the verifier/runtime cannot execute it. | Repair the control or verifier and rerun; a subject failure alone is not sufficient calibration. |
 | A case reports `invalid` / `runtime_capsule_changed` | The foreground verifier or another same-user process changed the selected capsule after the case started. | Reinstall or replace the capsule, inspect the verifier, and rerun the entire comparison; later cases are intentionally left unrun. |
 | `agent_error` | The agent CLI reported a model-side failure (Claude `is_error`, Codex `turn.failed`, kimi `failed to run prompt`, or an OpenCode JSON `error` event: auth, model, or execution error). | Read `result.txt` and `events.jsonl`; check the CLI's login status and the requested model. |
 | `cwd must be an absolute path` | Request used a relative working directory. | Send an absolute existing directory. |
