@@ -162,12 +162,22 @@ Schema v3 is the capability-bound patch contract. It requires
 absolute manifest path:
 
 ```sh
+agenthub eval toolchain manifest \
+  --directory /absolute/capsule \
+  --json '{"toolchain_id":"repo-tools","root":"toolchain","commands":{"git":"bin/git","node":"bin/node","python3":"bin/python3"}}'
+chmod -R a-w /absolute/capsule
 agenthub eval toolchain status --toolchain /absolute/capsule/manifest.json
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals-v3.json \
   --model gpt-5.6-sol --effort medium \
   --toolchain /absolute/capsule/manifest.json
 ```
+
+The evaluator first assembles the self-contained `toolchain/` tree. The `manifest` command only
+validates that existing tree and command map, computes Agent Hub's exact content digest, and writes
+`manifest.json`; it does not discover, install, copy, or seal tools. `platform` and `arch` default
+to the current host and may be supplied in the JSON input. Remove write bits only after the
+manifest is written, then require `status: "ready"` before running a suite.
 
 The `eval-toolchain-capsule/v1` manifest maps public command names to executable paths contained in
 its platform-bound, content-digested root. Both `eval toolchain status` and `eval run` require the
@@ -234,9 +244,10 @@ Agent Hub does not resolve namespaces. It forwards the caller's session-axis sta
 （`NS`、`NS_UNDO`、`PATH`…）, sets `NS_REBIND=1`, and starts the agent CLI through
 `zsh -c 'exec …'` at the run `cwd`, so `~/.zshenv`（charter's glue）unloads the inherited
 domain and binds by `cwd`——exactly as a command typed in a terminal there would.
-Internal Eval profiles additionally pin the Codex executable resolved by that cwd-bound shell and
-apply a validated capsule PATH/temp overlay after that rebind; ordinary dispatches keep the
-behavior above unchanged.
+Internal Eval profiles additionally pin the Codex executable resolved by that cwd-bound shell.
+Legacy `workspace-write/v1` may apply a validated capsule PATH/temp overlay to the born Codex
+process; `workspace-write/v2` instead injects its capsule-only command PATH into sandbox children
+and never the Codex parent. Ordinary dispatches keep the behavior above unchanged.
 
 ## Structured Discussions
 

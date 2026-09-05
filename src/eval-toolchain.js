@@ -56,7 +56,14 @@ export async function writeEvalToolchainCapsuleManifest(manifestDirectory, field
   const contentDigest = evalToolchainCapsuleDigest(normalized, treeDigest);
   const manifest = { ...normalized, content_digest: contentDigest };
   const manifestPath = path.join(realManifestDirectory, EVAL_TOOLCHAIN_MANIFEST_NAME);
-  await atomicWriteFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 0o600);
+  const manifestContents = `${JSON.stringify(manifest, null, 2)}\n`;
+  if (Buffer.byteLength(manifestContents, "utf8") > MAX_MANIFEST_BYTES) {
+    throw toolchainError(
+      "toolchain_capsule_invalid",
+      "Eval toolchain capsule manifest must be a small regular file",
+    );
+  }
+  await atomicWriteFile(manifestPath, manifestContents, 0o600);
   return manifestPath;
 }
 

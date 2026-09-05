@@ -55,6 +55,13 @@ never resolved from defaults. Eval intentionally has no MCP tool, no prepare com
 non-interactive answer-file input. See
 [Repository evaluations](evals.md) for the suite and result contracts.
 
+After an evaluator assembles a generic capsule tree, the public
+`agenthub eval toolchain manifest --directory ABSOLUTE_DIR --json JSON` command validates its
+relative command map and writes the exact content digest. It does not provision or seal tools; the
+evaluator removes write bits, checks `eval toolchain status`, and only then runs schema v3.
+Successful schema-v3 stdout conforms to result schema v5 and may include the optional CLI-only
+`artifact` locator keyed by `eval_run_id`; the persisted private result omits that locator.
+
 Use `--json` or `--json-file` to pass the same request objects documented below. CLI wait commands additionally accept `--timeout-ms`. A timed-out wait leaves the detached run active.
 
 ## Provider-native Session Inspector

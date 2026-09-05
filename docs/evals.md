@@ -214,8 +214,22 @@ platform and pass its absolute manifest path. `eval run` will not search `PATH`,
 tools, download packages, copy an installation, or use a host command as a fallback.
 
 ```sh
+agenthub eval toolchain manifest \
+  --directory /absolute/capsule \
+  --json '{"toolchain_id":"repo-tools","root":"toolchain","commands":{"git":"bin/git","node":"bin/node","python3":"bin/python3"}}'
+chmod -R a-w /absolute/capsule
 agenthub eval toolchain status --toolchain /absolute/capsule/manifest.json
 ```
+
+Before this sequence, the evaluator creates `/absolute/capsule/toolchain` and places every command
+and dependency it intends to expose below that root. `eval toolchain manifest` is the supported
+manifest writer: it validates the existing relative command map, defaults omitted `platform` and
+`arch` to the current host, computes the implementation's byte-exact tree and capsule digests, and
+atomically writes `manifest.json`. It does not find, install, download, copy, or seal tool files.
+The input accepts only `toolchain_id`, optional `platform`/`arch`, `root`, and `commands`; `kind` and
+`content_digest` are generated. After writing, remove write bits from the dedicated capsule
+directory and use `eval toolchain status` as the fail-closed readiness check. Re-run the writer only
+after deliberately making that directory writable and changing its contents.
 
 An `eval-toolchain-capsule/v1` manifest contains `toolchain_id`, `platform`, `arch`, a contained
 relative `root`, a non-empty map from safe public command names to contained relative executable
@@ -334,7 +348,8 @@ The profile currently requires `codex-cli` 0.151.0 or newer. Other Agent Hub pro
 session-persistence contract. Agent Hub never silently falls back to an adapter's broader normal
 permission mode.
 
-Patch suites use the companion `workspace-write/v1` profile. It keeps every restriction above but
+Legacy schema-v2 patch suites use the companion `workspace-write/v1` profile. It keeps every
+restriction above but
 changes the current workspace capability from read to write. The writable workspace is a new
 detached worktree at the evaluated commit, never the worktree passed through `--cwd`. `.git`
 remains denied, command network remains disabled, and temp files are redirected into the private
@@ -380,7 +395,8 @@ reported as `patch.status = "unavailable"` but does not skip or override verifie
 cleanup always attempts both Git deregistration and filesystem removal; a cleanup failure is
 reported to the foreground stderr without replacing the completed case result.
 
-The agent sandbox does not extend to verifier execution, including its preflight invocations. The
+For legacy schema-v2 suites, the agent sandbox does not extend to verifier execution, including its
+preflight invocations. The
 verifier is evaluator-trusted and may read or change user-accessible files, use the network, and
 execute code from a control worktree or code written by the agent with the foreground user's
 authority when it invokes repository tests. Its `PATH` starts with the same capsule command overlay,
@@ -486,6 +502,9 @@ ordinary capsule-backed patch runs and
 legacy preflighted patch runs, plus
 [`schemas/agent-eval-result-v5.schema.json`](../schemas/agent-eval-result-v5.schema.json) for
 schema-v3 capability-bound patch runs. Result contracts v1-v4 retain their original meanings.
+The v5 schema also accepts the optional CLI-only `artifact` locator
+`{"type":"eval-result","eval_run_id":"…"}`. The persisted `0600` result omits that transport
+field; both forms otherwise share the same v5 contract, and neither form contains a storage path.
 
 Eval results default to the ordinary seven-day run TTL. Override storage or retention with:
 

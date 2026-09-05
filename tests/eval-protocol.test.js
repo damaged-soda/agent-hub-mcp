@@ -426,6 +426,23 @@ describe("eval protocol", () => {
       .toBe(WORKSPACE_PATCH_SCHEMA);
   });
 
+  it("allows the opaque CLI artifact locator in the result v5 schema", async () => {
+    const schema = JSON.parse(await fsp.readFile(
+      new URL("../schemas/agent-eval-result-v5.schema.json", import.meta.url),
+      "utf8",
+    ));
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).not.toContain("artifact");
+    expect(schema.properties.artifact).toMatchObject({
+      additionalProperties: false,
+      required: ["type", "eval_run_id"],
+      properties: {
+        type: { const: "eval-result" },
+        eval_run_id: { type: "string", format: "uuid" },
+      },
+    });
+  });
+
   it("accepts only a clean descendant worktree as the known-good workspace", async () => {
     const subject = await cleanWorkspaceSnapshot(root);
     const knownGoodRoot = `${root}-known-good`;

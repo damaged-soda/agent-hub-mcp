@@ -35,7 +35,9 @@ It also returns the selectable model catalog for each adapter. Use
 | `agenthub agents --cwd "$PWD"` | Discover adapters and models in the caller's workspace context. |
 | `agenthub dispatch …` / `agenthub wait RUN_ID` | Run long work without a resident daemon. |
 | `agenthub eval runtime install/status [--runtime ID]` | Provision or inspect a pinned content-addressed Python capsule for patch Eval. |
-| `agenthub eval run --agent codex --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST] --cwd "$PWD" --suite FILE` | Run one interactive suite against a clean repository commit. |
+| `agenthub eval toolchain manifest --directory ABSOLUTE_DIR (--json JSON \| --json-file FILE)` | Compute and write a generic capsule manifest after the evaluator assembles its tool tree. |
+| `agenthub eval toolchain status --toolchain ABSOLUTE_MANIFEST` | Validate a sealed generic capsule without exposing its command paths. |
+| `agenthub eval run --agent codex --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST \| --toolchain ABSOLUTE_MANIFEST] --cwd "$PWD" --suite FILE` | Run one interactive suite against a clean repository commit. |
 | `agenthub review status/set/dispatch …` | Inspect, change, and use the requester-specific PR review route. |
 | `agenthub discussion dispatch …` / `agenthub discussion wait ID` | Run a durable Discussion through an on-demand detached coordinator. |
 | `agenthub discussion list --status failed --since 7d` | Find retained Discussions without resuming them. |
@@ -202,11 +204,11 @@ AGENT_HUB_FORWARD_ENV=FOO_TOKEN,BAR_PROFILE agenthub dispatch …
 
 `command.json` records only selected environment key names after redacting sensitive-looking keys;
 it does not record environment values. Internal execution profiles may pin an absolute agent
-executable and hand the runner a validated post-birth environment overlay, including a PATH prefix
-(for example, an Eval runtime command directory) and private temp paths. The birth shell applies the
-overlay only after namespace rebinding and unsets every handoff key before the agent CLI starts. The
-declared capability directories remain in the internal request/profile metadata, but composed PATH
-and environment values are never persisted.
+executable. Legacy `workspace-write/v1` may also hand the runner a validated post-birth PATH/temp
+overlay; the birth shell applies it only after namespace rebinding and unsets every handoff key
+before the agent CLI starts. The `workspace-write/v2` command PATH is instead injected only into
+sandbox children, never the Codex parent. Declared capability directories remain in internal
+request/profile metadata, but composed PATH and environment values are never persisted.
 
 For unattended Claude requests, run `claude setup-token` interactively and save its one-line output
 to a private file without putting the token in shell startup files. Set
@@ -336,10 +338,15 @@ common directory. Its absolute
 `eval-toolchain-capsule/v1` manifest must map every required command name to a contained executable,
 match the current platform/architecture and content digest, contain no hardlinked regular files,
 and be permission-bit sealed: remove write bits from the manifest directory, manifest, and complete
-root tree. Agent Hub does not build or install this artifact. Inspect it without exposing paths,
-then run the suite with `--toolchain` instead of `--runtime`:
+root tree. First assemble the `toolchain/` tree, then let Agent Hub compute its exact manifest before
+sealing it. This command validates and hashes existing files; it does not find, install, or copy
+them:
 
 ```sh
+agenthub eval toolchain manifest \
+  --directory /absolute/capsule \
+  --json '{"toolchain_id":"repo-tools","root":"toolchain","commands":{"git":"bin/git","node":"bin/node","python3":"bin/python3"}}'
+chmod -R a-w /absolute/capsule
 agenthub eval toolchain status --toolchain /absolute/capsule/manifest.json
 AGENT_HUB_EVAL_DIR=/tmp/agent-hub-evals \
 agenthub eval run --agent codex --cwd "$PWD" \

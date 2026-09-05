@@ -4,6 +4,10 @@ For an individual repository navigation or patch evaluation, run the interactive
 clean target worktree root:
 
 ```sh
+agenthub eval toolchain manifest \
+  --directory /absolute/path/to/toolchain \
+  --json '{"toolchain_id":"repo-tools","root":"root","commands":{"git":"bin/git","node":"bin/node","python3":"bin/python3"}}'
+chmod -R a-w /absolute/path/to/toolchain
 agenthub eval toolchain status --toolchain /absolute/path/to/toolchain/manifest.json
 agenthub eval run --agent codex --cwd "$PWD" \
   --suite /absolute/path/to/evals.json \
@@ -49,6 +53,9 @@ manifest, and full capsule tree; regular files must not be hard-linked. `eval to
 validates the same seal and reports the public identity without exposing local paths. There is
 deliberately no toolchain install command, host discovery, download,
 copy, or fallback. The evaluator owns capsule construction and distribution.
+After assembling the root, use `eval toolchain manifest` to compute the exact digest and write the
+manifest before sealing. Its JSON input accepts `toolchain_id`, optional `platform`/`arch`, `root`,
+and `commands`; it hashes existing files but never provisions them.
 
 The schema-v3 `PATH` contains only the capsule command overlay, and the task gets a deterministic
 HOME/temp and scrubbed language/VCS startup environment with network disabled. A smoke should
