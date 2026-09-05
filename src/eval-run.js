@@ -10,6 +10,9 @@ import {
 } from "./runs.js";
 import { runCommand } from "./adapter-utils.js";
 import {
+  preparePatchExport, openPatchExport, captureEvalPatch, finishPatchExport,
+} from "./eval-patch-export.js";
+import {
   BIRTH_SHELL,
   buildBirthLaunch,
   pathResolvedShebangName,
@@ -106,6 +109,9 @@ export async function runEval(input, io, internal = {}) {
     suite.schema_version === CAPABILITY_PATCH_EVAL_SUITE_SCHEMA_VERSION;
   const patchEval = capabilityPatchEval ||
     suite.schema_version === PATCH_EVAL_SUITE_SCHEMA_VERSION;
+  if (input.patch_output !== undefined && !capabilityPatchEval) {
+    throw evalError("invalid_eval_request", "--patch-output requires Eval suite schema v3");
+  }
   const verifierPreflightEnabled =
     suite.verifier_preflight === WORKSPACE_PATCH_VERIFIER_PREFLIGHT ||
     suite.verifier_preflight === WORKSPACE_PATCH_CAPABILITY_VERIFIER_PREFLIGHT;
@@ -136,6 +142,10 @@ export async function runEval(input, io, internal = {}) {
     requestedProfile,
     capabilityPatchEval ? [subject.git_common_dir] : [],
   );
+  const patchOutput = await preparePatchExport(input.patch_output, [
+    subject.root, subject.git_common_dir, ...agent.runtime_read_paths,
+    agent.eval_toolchain?.root,
+  ]);
   let capabilityPreflight = null;
   if (capabilityPatchEval) {
     io.stderr("\nValidating the declared toolchain in the final child capability profile.\n");
@@ -183,6 +193,7 @@ export async function runEval(input, io, internal = {}) {
   }
 
   const evalRunId = crypto.randomUUID();
+  await openPatchExport(patchOutput);
   const createdAt = new Date();
   const caseResults = [];
   for (const item of suite.cases) {
@@ -201,6 +212,7 @@ export async function runEval(input, io, internal = {}) {
         env: internal.env ?? process.env,
         timeoutMs,
         capabilityPatchEval,
+        patchOutput,
       };
       caseResults.push(item.answer_schema === WORKSPACE_PATCH_SCHEMA
         ? await runPatchCase(runInput)
@@ -296,6 +308,7 @@ export async function runEval(input, io, internal = {}) {
     expires_at: evalExpiresAt(completedAt, internal.env ?? process.env),
   };
   const resultPath = await writeEvalResult(result, internal.env ?? process.env);
+  await finishPatchExport(patchOutput, result);
   return {
     ...result,
     artifact: capabilityPatchEval
@@ -951,6 +964,7 @@ async function runPatchCase({
   env,
   timeoutMs,
   capabilityPatchEval = false,
+  patchOutput = null,
 }) {
   const disposable = await createDisposableWorktree(subject);
   const scratchPath = path.join(disposable.root, "scratch");
@@ -1074,7 +1088,11 @@ async function runPatchCase({
         metrics: await patchEvalMetrics(accepted.run_ref, snapshot, disposable.workspace),
       });
     }
+    const exported = await captureEvalPatch(patchOutput, {
+      cwd: disposable.workspace, caseId: item.id, runRef: accepted.run_ref,
+    });
     const metrics = await patchEvalMetrics(accepted.run_ref, snapshot, disposable.workspace);
+    if (exported) exported.metrics_patch_digest = metrics.patch?.patch_digest ?? null;
     if (!await verifierUnchanged(expected)) {
       return baseCaseResult(item, expected, accepted.run_ref, {
         status: "invalid",

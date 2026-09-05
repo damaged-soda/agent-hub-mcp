@@ -46,7 +46,7 @@ Usage:
   agenthub eval runtime status [--runtime ID]
   agenthub eval toolchain manifest --directory ABSOLUTE_DIR (--json JSON | --json-file FILE)
   agenthub eval toolchain status --toolchain ABSOLUTE_MANIFEST
-  agenthub eval run --agent ID --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST | --toolchain ABSOLUTE_MANIFEST] [--cwd DIR] [--suite FILE] [--timeout-ms MS]
+  agenthub eval run --agent ID --model ID --effort LEVEL [--runtime ID_OR_ABSOLUTE_MANIFEST | --toolchain ABSOLUTE_MANIFEST] [--cwd DIR] [--suite FILE] [--timeout-ms MS] [--patch-output NEW_ABSOLUTE_DIR]
   agenthub discussion dispatch (--json JSON | --json-file FILE)
   agenthub discussion list [--status STATUS[,STATUS]] [--since 7d] [--cwd DIR] [--limit N]
   agenthub discussion query DISCUSSION_ID [--after-sequence N] [--limit N]
@@ -144,7 +144,7 @@ async function executeEval(args, io) {
   const parsed = parseArgs(
     args,
     new Set([
-      "agent", "cwd", "suite", "model", "effort", "runtime", "toolchain", "timeout-ms",
+      "agent", "cwd", "suite", "model", "effort", "runtime", "toolchain", "timeout-ms", "patch-output",
     ]),
   );
   rejectPositionals(parsed);
@@ -157,6 +157,7 @@ async function executeEval(args, io) {
   if (parsed.options.suite !== undefined) input.suite_path = parsed.options.suite;
   if (parsed.options.runtime !== undefined) input.runtime = parsed.options.runtime;
   if (parsed.options.toolchain !== undefined) input.toolchain = parsed.options.toolchain;
+  if (parsed.options["patch-output"] !== undefined) input.patch_output = parsed.options["patch-output"];
   setOptionalNumber(input, "timeout_ms", parsed.options["timeout-ms"], { positive: true });
   try {
     return await runEval(input, io);

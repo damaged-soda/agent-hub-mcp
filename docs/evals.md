@@ -323,6 +323,46 @@ with `unsafe_eval_oracle` rather than asking again: once oracle material is pres
 child capability, reprompting cannot revoke that readability. No agent run or Eval artifact is
 created.
 
+## Optional evaluator-owned patch export
+
+Schema-v3 runs may explicitly pass `--patch-output /absolute/new-directory` to retain
+the model's patch for subsequent integration experiments. The directory must not exist,
+its parent must exist, and lexical/resolved paths must not overlap the subject, Git common
+directory, or child-readable runtime/toolchain capabilities. The supervisor creates it
+only after every preflight passes. It is never exposed to the model or verifier sandbox.
+
+Export requires Git with [`--attr-source`](https://git-scm.com/docs/git/2.43.4#Documentation/git.txt---attr-sourcelttree-ishgt) support (validated here with Git 2.50.1). A private Git index/config reads the
+subject's object store through alternates; an empty attributes tree disables clean filters,
+text encodings, and EOL rewriting during capture. Neither the original index nor its configuration
+is modified. The temporary capture metadata is removed after capture.
+The patch transforms subject Git blobs into the submitted raw bytes. For repositories using
+attribute-based worktree conversion, replay to the subject index and materialize its raw blobs;
+a normal checkout or filtered `git add` can transform those bytes again.
+
+For each completed model run, the supervisor captures the patch **before** invoking its
+verifier. Export includes tracked edits, deletions and mode changes plus non-ignored untracked
+files, including binary content and symbolic links. It does not stage files or run Git clean
+filters. Ignored build output and empty directories are excluded; repositories with submodules
+and untracked nested repositories are rejected. Capture is bounded to 16 MiB and 1000 changed files;
+an unsupported file type or incomplete capture fails the case explicitly. Timeouts and failed
+model runs are not exported. A completed model's patch may still fail its verifier: export is
+evidence of the submitted change, not an assertion of correctness.
+
+Each patch has a random relative filename, with a SHA-256 byte digest. A final
+`manifest.json` (`kind: agent-eval-patch-export/v1`) binds those files to the Eval ID, subject
+commit, suite digest, case ID, agent run reference, original metrics patch digest, and final case
+status. The export digest covers the replayable patch bytes; the existing metrics digest also
+includes its legacy untracked-file hash representation and is not interchangeable. The manifest
+contains no verifier/control identity, oracle output, or absolute path. Do not consume an
+interrupted export without its final manifest; verify file digests before replaying patches.
+
+Export directories are private (0700), files are private (0600), existing destinations are never
+reused, and destination replacement is checked before writes. As with capsule seals, this is not
+protection against arbitrary concurrent same-user filesystem races. The evaluator owns retention
+and deletion of exported source content; exports are outside Eval TTL cleanup. Eval result schema
+v5, child isolation, grading, and the default no-export behavior are unchanged. Cross-run merging,
+comparison, and repair scoring remain evaluator-owned.
+
 ## Isolation contract
 
 The `workspace-readonly/v1` profile is fail-closed:

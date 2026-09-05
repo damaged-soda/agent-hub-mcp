@@ -416,6 +416,35 @@ process.exitCode = await main(process.argv.slice(2), io);
     }
   }, 60000);
 
+  it("exports the model patch before hidden verifier mutations without exposing its destination", async () => {
+    await writeCapabilityPatchSuite();
+    const toolchain = await createCapabilityToolchain();
+    const knownGood = await createKnownGoodControl("private-control");
+    const verifier = await writeVerifier("export-verifier",
+      "#!/bin/sh\n" +
+      "printf 'oracle-only\\n' > hidden-verifier.txt\n" +
+      "found=0\nwhile IFS= read -r line; do\n" +
+      'case "$line" in *\'"changed"\'*) found=1 ;; esac\ndone < src/app.js\n' +
+      '[ "$found" -eq 1 ]\n');
+    const destination = path.join(root, "private-patches");
+    const result = await invokeCapabilityEval([verifier, knownGood], toolchain.manifest,
+      undefined, ["--patch-output", destination]);
+    expect(result.summary.pass).toBe(1);
+    const manifest = JSON.parse(await fsp.readFile(path.join(destination, "manifest.json"), "utf8"));
+    expect(manifest.eval_run_id).toBe(result.eval_run_id);
+    expect(manifest.subject_commit).toBe(result.subject.commit);
+    expect(manifest.patches).toHaveLength(1);
+    expect(manifest.patches[0].metrics_patch_digest).toBe(result.cases[0].metrics.patch.patch_digest);
+    const patch = await fsp.readFile(path.join(destination, manifest.patches[0].file), "utf8");
+    expect(patch).toContain('return "changed"');
+    expect(patch).not.toContain("hidden-verifier");
+    expect(JSON.stringify(result)).not.toContain(destination);
+    const runs = await allText(runDir);
+    expect(runs).not.toContain(destination);
+    expect(runs).not.toContain("private-patches");
+    expect((await git(workspace, "status", "--porcelain")).stdout).toBe("");
+  }, 60000);
+
   it("rejects a suite-v3 capsule missing a declared command before answers or dispatch", async () => {
     await writeCapabilityPatchSuite();
     const toolchain = await createCapabilityToolchain({ omit: ["node"] });
@@ -1330,7 +1359,7 @@ process.exitCode = await main(process.argv.slice(2), io);
     return { directory: capsuleDirectory, root: toolchainRoot, manifest };
   }
 
-  async function invokeCapabilityEval(answers, toolchain, suite = undefined) {
+  async function invokeCapabilityEval(answers, toolchain, suite = undefined, extraArgs = []) {
     const args = [
       env.AGENT_HUB_TEST_HELPER,
       "eval",
@@ -1349,6 +1378,7 @@ process.exitCode = await main(process.argv.slice(2), io);
       "10000",
     ];
     if (suite !== undefined) args.push("--suite", suite);
+    args.push(...extraArgs);
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       args,

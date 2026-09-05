@@ -81,6 +81,17 @@ Do not aggregate result v5 with older patch results as if they shared the same v
 V5 omits the subject `cwd` and returns only an opaque `eval_run_id` artifact reference, so public
 and persisted Eval results contain no private absolute path.
 
+To retain actual model patches for evaluator-owned integration, schema v3 accepts
+`--patch-output /absolute/new-directory` (existing parent, new destination outside the subject,
+Git common directory, and all child-readable runtime/toolchain paths). After preflights pass,
+the supervisor privately captures completed model patches before verifier injection, including
+non-ignored untracked files and binary changes. A final `agent-eval-patch-export/v1` manifest binds
+relative patch files and byte digests to the Eval/subject/suite/case/run and final case status.
+Verify those digests before replay; a failed grade is still a failed change. No manifest means an
+interrupted, unusable export. Capture failures fail the case. Exports contain source content, are
+not subject to Eval TTL cleanup, and remain evaluator-owned. No export path or oracle/control
+material enters the child or result schema v5. Agent Hub still does not merge or compare runs.
+
 Standards and external suite paths stay outside child prompts and artifacts. Do not create an
 answer file or work around `unsupported_isolation`; Eval requires Codex CLI 0.151.0 or newer.
 Verifier and known-good lexical/real paths must stay outside the subject and all child-readable
