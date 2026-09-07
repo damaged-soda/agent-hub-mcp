@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "material": "agent-session",
+  "version": "1",
+  "programs": [
+    {
+      "name": "serve",
+      "role": "host",
+      "entry": "serve.py"
+    }
+  ],
+  "streams": []
+}

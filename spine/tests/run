@@ -1,0 +1,8 @@
+#!/bin/sh
+# 开发期测试入口：需要 nats-server 与 spine 检出（SPINE_REPO 或同级目录）。
+set -eu
+cd "$(dirname "$0")/.."
+command -v nats-server >/dev/null || { echo "nats-server not on PATH" >&2; exit 1; }
+PY="${SPINE_PYTHON:-python3.12}"
+command -v "$PY" >/dev/null || { echo "$PY not on PATH" >&2; exit 1; }
+exec "$PY" -m unittest discover -s tests -t . -v "$@"
