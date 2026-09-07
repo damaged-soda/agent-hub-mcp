@@ -1,6 +1,6 @@
 """agent-session 质料装配的整体故事：真实骨架 + 合成 session server。
 
-需要 spine 检出（环境变量 SPINE_REPO，或同级目录 ../spine）。
+需要 spine 检出（环境变量 SPINE_REPO，默认 ~/work/personal/spine）。
 真实 agent-session 由 PATH 前置的合成体顶替：只替换业务本体，装配
 （argv、宿主 HOME、PATH、信号）全走正式路径。
 """

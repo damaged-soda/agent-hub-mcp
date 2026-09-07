@@ -3,7 +3,7 @@
 session server。
 
 会话解析与投影的权威是 Agent Hub（meta 域仓 agent-hub-mcp，经 npm run
-install:local 安装到 homebrew PATH）；本仓只持个人域接线——与旧
+install:local 安装到 homebrew PATH）；本目录只持个人域接线——与旧
 cockpit-agent-session 包装脚本同构（纯迁移）：宿主 HOME（provider 原生会话
 库按它定位）、homebrew PATH、回环 8088。消费者：spine-session 页的同源
 转发与 spine-agent 的 collect，均在本机。无对外地址，不自述 endpoints。
