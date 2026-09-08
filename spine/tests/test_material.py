@@ -152,7 +152,7 @@ class BuildTest(unittest.TestCase):
         return repo
 
     def test_build_refuses_inputs_and_foreign_dirs(self):
-        """输出目录只能是自己建的：仓根、src 之内、包住仓的目录、别人的非空目录都拒绝。"""
+        """输出目录只能是自己建的：仓根、src 之内、包住仓的目录、别人的非空目录与普通文件都拒绝。"""
         base = Path(tempfile.mkdtemp(prefix="spine-as-guard-")).resolve()
         self.addCleanup(shutil.rmtree, base, True)
         repo = self.fixture_repo(base)
@@ -162,7 +162,10 @@ class BuildTest(unittest.TestCase):
         weird = base / "weird"  # 唯一条目的名字只有换行：按文本判空会误判为空
         weird.mkdir()
         (weird / "\n").write_text("x")
-        for target in (repo, repo / "src", repo / "src" / "stage", base, foreign, weird):
+        plain = base / "plain.txt"  # 普通文件：find 对它没有输出，不能当成空目录
+        plain.write_text("keep")
+        for target in (repo, repo / "src", repo / "src" / "stage", base, foreign, weird,
+                       plain, repo / "package.json"):
             result = subprocess.run([str(repo / "spine" / "build"), str(target)],
                                     capture_output=True, text=True, timeout=60)
             self.assertNotEqual(result.returncode, 0, target)
@@ -170,6 +173,9 @@ class BuildTest(unittest.TestCase):
         self.assertTrue((repo / "src" / "session-cli.js").is_file())
         self.assertTrue((foreign / "keep.txt").is_file())
         self.assertTrue((weird / "\n").is_file())
+        self.assertEqual(plain.read_text(), "keep")
+        self.assertEqual((repo / "package.json").read_text(),
+                         '{"dependencies": {"left-pad": "1.0.0"}}')
         # 自己建的目录带标记，可以反复重建
         out = build(base / "stage")
         self.assertTrue((out / ".spine-stage").is_file())

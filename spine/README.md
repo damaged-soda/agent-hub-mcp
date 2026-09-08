@@ -28,7 +28,8 @@ files 白名单外）。
     --nats nats://100.109.38.77:4222 --node host=macmini
 ```
 
-默认参数即当前接线。build 打的是检出的工作树，发布前确认它在想发的提交上。
+默认参数即当前接线。build 打的是检出的工作树，发布前确认它在想发的提交上；同一输出目录
+不支持并发 build，rm 与 mv 之间有窗口，已知残余。
 
 测试：`spine/tests/run`（需要 Python 3.12、nats-server、spine 检出与已自举的运行时，
 默认 `~/work/personal/spine` 与 `~/.spine/runtime`，`SPINE_REPO` / `SPINE_RUNTIME`
