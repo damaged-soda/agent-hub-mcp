@@ -1,0 +1,25 @@
+#!/bin/sh
+# spine/build：把 Agent Hub 的 session server 暂存成一份可 publish 的质料目录。
+# 包内容 = 本检出的 src、package.json、package-lock.json、按 lockfile 安装的生产依赖，
+# 加 serve.py 与 material.json。摘要覆盖真实代码：升级 = 合 PR → build → publish；
+# 同一检出重复 build 得到同一摘要，publish 幂等。
+set -eu
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+OUT="${1:-$HERE/stage}"
+RUNTIME="${SPINE_RUNTIME:-$HOME/.spine/runtime}"
+# 用 spine 钉版本运行时自带的 node 与 npm 解析依赖：与节点上跑它的是同一个 node。
+[ -x "$RUNTIME/node/bin/node" ] || {
+    echo "node not found at $RUNTIME/node/bin: run spine-bootstrap first" >&2
+    exit 1
+}
+export PATH="$RUNTIME/node/bin:$PATH"
+
+rm -rf "$OUT"
+mkdir -p "$OUT"
+cp -R "$REPO/src" "$OUT/src"
+cp "$REPO/package.json" "$REPO/package-lock.json" "$OUT/"
+cp "$HERE/serve.py" "$HERE/material.json" "$OUT/"
+(cd "$OUT" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error)
+echo "$OUT"

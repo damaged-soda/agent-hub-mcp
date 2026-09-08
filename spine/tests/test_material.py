@@ -1,8 +1,9 @@
-"""agent-session 质料装配的整体故事：真实骨架 + 合成 session server。
+"""agent-session 质料装配的整体故事：真实骨架 + 真实 build + 合成 node。
 
-需要 spine 检出（环境变量 SPINE_REPO，默认 ~/work/personal/spine）。
-真实 agent-session 由 PATH 前置的合成体顶替：只替换业务本体，装配
-（argv、宿主 HOME、PATH、信号）全走正式路径。
+需要 spine 检出（环境变量 SPINE_REPO，默认 ~/work/personal/spine）与已自举的
+spine 运行时（SPINE_RUNTIME，默认 ~/.spine/runtime；build 用它的 npm 解析依赖）。
+包由正式的 build 脚本暂存；PATH 前置的合成 node 顶替真实 node，只替换业务本体，
+装配（argv、安装目录、宿主 HOME、信号）全走正式路径。
 """
 import argparse
 import importlib.util
@@ -11,6 +12,8 @@ import os
 import pwd
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 import urllib.request
@@ -31,6 +34,13 @@ def load_rig():
     return module
 
 
+def build(out):
+    """经正式 build 脚本暂存一份包目录。"""
+    subprocess.run([str(MATERIAL / "build"), str(out)], check=True,
+                   capture_output=True, text=True, timeout=300)
+    return Path(out)
+
+
 def free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -43,9 +53,8 @@ class AgentSessionStoryTest(unittest.TestCase):
         base = Path(tempfile.mkdtemp(prefix="spine-as-"))
         stub_bin = base / "bin"
         stub_bin.mkdir()
-        shutil.copy(MATERIAL / "tests" / "fixtures" / "agent-session",
-                    stub_bin / "agent-session")
-        (stub_bin / "agent-session").chmod(0o755)
+        shutil.copy(MATERIAL / "tests" / "fixtures" / "node", stub_bin / "node")
+        (stub_bin / "node").chmod(0o755)
         self.record_path = stub_bin / "record.json"
         self.saved_path = os.environ["PATH"]
         os.environ["PATH"] = "%s%s%s" % (stub_bin, os.pathsep, self.saved_path)
@@ -61,11 +70,7 @@ class AgentSessionStoryTest(unittest.TestCase):
         self.addCleanup(cleanup)
 
     def stage(self):
-        stage = self.base / "stage"
-        stage.mkdir(exist_ok=True)
-        for name in ("material.json", "serve.py"):
-            shutil.copy(MATERIAL / name, stage / name)
-        return stage
+        return build(self.base / "stage")
 
     def test_assembly_story(self):
         rig = self.rig
@@ -82,13 +87,20 @@ class AgentSessionStoryTest(unittest.TestCase):
         record = rig.wait(
             lambda: json.loads(self.record_path.read_text())
             if self.record_path.exists() else None, message="server not invoked")
-        # 装配 = 旧 cockpit-agent-session 包装脚本的纯迁移
-        self.assertEqual(record["argv"], [
+        # server 从包内启动：入口在节点安装目录下，工作目录就是安装目录
+        entry = Path(record["argv"][0])
+        install = (self.base / "rig" / "install").resolve()  # macOS 的 /var 是 /private/var 的别名
+        self.assertEqual(entry.parents[1].parent, install, entry)
+        self.assertEqual(entry.relative_to(entry.parents[1]),
+                         Path("src") / "session-cli.js")
+        self.assertEqual(Path(record["cwd"]), entry.parents[1])
+        self.assertTrue((entry.parents[1] / "node_modules" / "zod").is_dir(),
+                        "production dependencies missing from the package")
+        self.assertEqual(record["argv"][1:], [
             "serve", "--host", "127.0.0.1", "--port", str(port),
             "--public-origin", "http://origin.test",
             "--base-path", "/agent-session"])
         self.assertEqual(record["home"], pwd.getpwuid(os.getuid()).pw_dir)
-        self.assertIn("/opt/homebrew/bin", record["path"])
         # 服务在指定回环端口应答
         with urllib.request.urlopen(
                 "http://127.0.0.1:%d/agent-session/healthz" % port,
@@ -102,6 +114,26 @@ class AgentSessionStoryTest(unittest.TestCase):
         rig.wait(lambda: "agent-session"
                  not in rig.statuses()["rig"].get("materials", {}),
                  message="withdraw did not recycle")
+
+
+class BuildTest(unittest.TestCase):
+    """build 的产物是一份确定性的 spine 包：同一检出两次暂存摘要相同，且在包上限之内。"""
+
+    def test_build_is_deterministic_and_fits(self):
+        sys.path.insert(0, str(SPINE))
+        from spine.package import build as package_build
+        base = Path(tempfile.mkdtemp(prefix="spine-as-build-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        first, _ = package_build(build(base / "one"))
+        second, sha = package_build(build(base / "two"))
+        self.assertEqual(package_build(build(base / "one"))[1], sha)
+        self.assertEqual(len(first), len(second))
+        for name in ("src/session-cli.js", "src/session-server.js", "serve.py",
+                     "material.json", "package-lock.json",
+                     "node_modules/@modelcontextprotocol/sdk/package.json"):
+            self.assertTrue((base / "one" / name).is_file(), name)
+        self.assertFalse((base / "one" / "node_modules" / "vitest").exists(),
+                         "dev dependencies leaked into the package")
 
 
 class ServeArgvTest(unittest.TestCase):
@@ -121,12 +153,14 @@ class ServeArgvTest(unittest.TestCase):
 
     def test_default_omits_public_origin(self):
         self.assertEqual(self.argv(), [
-            "agent-session", "serve", "--host", "127.0.0.1", "--port", "8088",
+            "node", str(MATERIAL / "src" / "session-cli.js"), "serve",
+            "--host", "127.0.0.1", "--port", "8088",
             "--base-path", "/agent-session"])
 
     def test_explicit_public_origin_passes_through(self):
         self.assertEqual(self.argv(public_origin="https://origin.test"), [
-            "agent-session", "serve", "--host", "127.0.0.1", "--port", "8088",
+            "node", str(MATERIAL / "src" / "session-cli.js"), "serve",
+            "--host", "127.0.0.1", "--port", "8088",
             "--public-origin", "https://origin.test",
             "--base-path", "/agent-session"])
 
