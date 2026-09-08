@@ -162,6 +162,51 @@ cat child.md`;
     }).map((item) => item.path)).toEqual(["/work/other/local.md"]);
   });
 
+  it("keeps identical commands in distinct workdirs and inherits missing overrides", () => {
+    const input = ["/a", "/b", "/a", null].map((workdir) =>
+      `tools.exec_command(${JSON.stringify({ cmd: "cat file.md", workdir })})`).join(";");
+    expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: input })
+      .map((item) => item.path)).toEqual(["/a/file.md", "/b/file.md", "/session/file.md"]);
+  });
+
+  it.each([
+    ['', ["/absolute.md", "/session/file.md"]],
+    ['workdir: `/other`', ["/absolute.md", "/other/file.md"]],
+    ['workdir: directory', ["/absolute.md"]],
+    ['workdir: "relative"', ["/absolute.md"]],
+    ['workdir: "/wrong", workdir: directory', ["/absolute.md"]],
+  ])("resolves literal directories and leaves unknown overrides unresolved: %s", (directory, paths) => {
+    const input = `tools.exec_command({cmd: "cat file.md /absolute.md", ${directory}})`;
+    expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: input })
+      .map((item) => item.path)).toEqual(paths);
+  });
+
+  it("uses the call directory for Skills and tracks literal and dynamic shell cd", () => {
+    const cmd = "cat skills/demo/SKILL.md; cd $DIR && cat unknown.md; cd /known && cat file.md";
+    for (const input of [{ cmd, workdir: "/other" }, `tools.exec_command(${JSON.stringify({ cmd, workdir: "/other" })})`]) {
+      expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: input })
+        .map((item) => item.path)).toEqual(["/known/file.md", "/other/skills/demo/SKILL.md"]);
+    }
+  });
+
+  it.each([
+    'tools.exec_command({cmd: "cat false.md", ...options})',
+    'tools.exec_command({cmd: "cat false.md", [key]: directory})',
+    'tools.exec_command({cmd: "cat false.md", get workdir() { return "/other"; }})',
+    'tools.exec_command({cmd: "cat false.md" + suffix})',
+    'tools.exec_command({cmd: "cat false.md",',
+    '// tools.exec_command({cmd: "cat false.md"})',
+    'const example = \'tools.exec_command({cmd: "cat false.md"})\';',
+  ])("skips ambiguous parameters and non-call text: %s", (input) => {
+    expect(extractResourceAccesses({ tool_name: "exec", arguments: input, cwd: "/session" })).toEqual([]);
+  });
+
+  it("skips oversized wrapper source without parsing a truncated command", () => {
+    expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session",
+      arguments: 'tools.exec_command({cmd: "cat false.md"});' + ' '.repeat(256 * 1024),
+    })).toEqual([]);
+  });
+
   it("projects a Skill tool argument as a bare skill identifier, never a cwd path", () => {
     const skillRow = (name) => ({
       operation: "read", path: name, resource_kind: "skill",
