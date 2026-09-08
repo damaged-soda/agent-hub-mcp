@@ -89,7 +89,10 @@ export function extractResourceAccesses(input = {}) {
     // An unknown override cannot fall back to the session cwd, including in add().
     // Shell parsing may still recover an absolute path after a literal `cd /path`.
     const addCommandPath = (valuePath, evidence, base) => {
-      if (cwd === null && !path.posix.isAbsolute(valuePath)) return;
+      // With an initial cwd, a still-relative shell operand signals a lost directory
+      // (e.g. dynamic cd). Keep legacy relative output only when no cwd was supplied.
+      const unresolvedShellPath = base === null && cwd !== undefined;
+      if ((cwd === null || unresolvedShellPath) && !path.posix.isAbsolute(valuePath)) return;
       if (!patchPaths.has(valuePath)) add(valuePath, "read", evidence, "high-confidence", base);
     };
     for (const valuePath of explicitSkillPaths(command)) {

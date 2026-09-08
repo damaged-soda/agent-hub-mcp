@@ -220,6 +220,17 @@ cat child.md`;
       ]);
   });
 
+  it("drops unresolved shell operands after dynamic cd without rebasing them", () => {
+    const command = "cd $DYNAMIC_DIR && cat relative.md /absolute/file.md; cd /known && cat known.md";
+    for (const argumentsValue of [{ cmd: command, workdir: "/other" },
+      `tools.exec_command({cmd: ${JSON.stringify(command)}, workdir: "/other"})`]) {
+      expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: argumentsValue })
+        .map((item) => item.path)).toEqual(["/absolute/file.md", "/known/known.md"]);
+    }
+    expect(extractResourceAccesses({ tool_name: "exec_command", arguments: { cmd: "cat relative.md" } })
+      .map((item) => item.path)).toEqual(["relative.md"]);
+  });
+
   it.each([
     'tools.exec_command({cmd: "cat false.md", ...options})',
     'tools.exec_command({...options, cmd: "cat false.md"})',
