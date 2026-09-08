@@ -4,6 +4,7 @@
 真实 agent-session 由 PATH 前置的合成体顶替：只替换业务本体，装配
 （argv、宿主 HOME、PATH、信号）全走正式路径。
 """
+import argparse
 import importlib.util
 import json
 import os
@@ -101,6 +102,33 @@ class AgentSessionStoryTest(unittest.TestCase):
         rig.wait(lambda: "agent-session"
                  not in rig.statuses()["rig"].get("materials", {}),
                  message="withdraw did not recycle")
+
+
+class ServeArgvTest(unittest.TestCase):
+    """旧驾驶舱域名退役后 public-origin 缺省不透传：只有装配显式给出才进 argv。"""
+
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location(
+            "serve_material", MATERIAL / "serve.py")
+        self.serve = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.serve)
+
+    def argv(self, **overrides):
+        args = dict(host="127.0.0.1", port="8088", public_origin=None,
+                    base_path="/agent-session")
+        args.update(overrides)
+        return self.serve.server_argv(argparse.Namespace(**args))
+
+    def test_default_omits_public_origin(self):
+        self.assertEqual(self.argv(), [
+            "agent-session", "serve", "--host", "127.0.0.1", "--port", "8088",
+            "--base-path", "/agent-session"])
+
+    def test_explicit_public_origin_passes_through(self):
+        self.assertEqual(self.argv(public_origin="https://origin.test"), [
+            "agent-session", "serve", "--host", "127.0.0.1", "--port", "8088",
+            "--public-origin", "https://origin.test",
+            "--base-path", "/agent-session"])
 
 
 if __name__ == "__main__":

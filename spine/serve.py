@@ -6,13 +6,23 @@ session server。
 install:local 安装到 homebrew PATH）；本目录只持个人域接线——与旧
 cockpit-agent-session 包装脚本同构（纯迁移）：宿主 HOME（provider 原生会话
 库按它定位）、homebrew PATH、回环 8088。消费者：spine-session 页的同源
-转发与 spine-agent 的 collect，均在本机。无对外地址，不自述 endpoints。
+转发与 spine-agent 的 collect，均在本机。无对外地址，不自述 endpoints；
+旧驾驶舱域名已退役，缺省不设 public-origin，服务只认回环 Host/Origin。
 --nats 收下不用（心跳由骨架代发）。
 """
 import argparse
 import os
 import pwd
 import sys
+
+
+def server_argv(args):
+    """装配 session server 的 argv：public-origin 仅在装配显式给出时透传。"""
+    argv = ["agent-session", "serve", "--host", args.host, "--port", args.port]
+    if args.public_origin:
+        argv += ["--public-origin", args.public_origin]
+    argv += ["--base-path", args.base_path]
+    return argv
 
 
 def main():
@@ -22,8 +32,8 @@ def main():
     parser.add_argument("--host", default="127.0.0.1",
                         help="只绑回环；跨机消费走 spine-session 的同源转发")
     parser.add_argument("--port", default="8088")
-    parser.add_argument("--public-origin", default="https://cockpit.tail54dd1c.ts.net",
-                        help="沿用旧接线；旧驾驶舱域名退役时随 publish 换参数")
+    parser.add_argument("--public-origin", default=None,
+                        help="可信反代的精确 HTTPS Origin；缺省不设，只认回环 Host/Origin")
     parser.add_argument("--base-path", default="/agent-session")
     args = parser.parse_args()
     # 骨架把 HOME 指到质料状态目录；session server 按宿主家目录读各 provider
@@ -33,13 +43,8 @@ def main():
     # 前置会在测试里压过 PATH 顶替的合成体
     os.environ["PATH"] = (os.environ.get("PATH", "")
                           + ":/opt/homebrew/bin:/usr/local/bin")
-    os.execvp("agent-session", [
-        "agent-session", "serve",
-        "--host", args.host,
-        "--port", args.port,
-        "--public-origin", args.public_origin,
-        "--base-path", args.base_path,
-    ])
+    argv = server_argv(args)
+    os.execvp(argv[0], argv)
 
 
 if __name__ == "__main__":
