@@ -11,6 +11,8 @@ const MAX_EMBEDDED_COMMAND_CHARS = 256 * 1024;
 const MAX_SHELL_WRAPPER_DEPTH = 4;
 const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const HEREDOC_START_RE = /(^|[^<])<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
+const SKILL_TOOL_NAMES = new Set(["Skill"]);
+const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function extractResourceAccesses(input = {}) {
   const toolName = String(input.tool_name ?? "");
@@ -28,7 +30,7 @@ export function extractResourceAccesses(input = {}) {
     if (!normalized || !["read", "write"].includes(operation)) return;
     const key = `${operation}\0${normalized}`;
     const priority = { "shell-explicit-operand": 1, "skill-path-literal": 2,
-      "patch-header": 3, "structured-path": 4 };
+      "patch-header": 3, "structured-path": 4, "skill-tool-argument": 5 };
     const previous = accesses.get(key);
     if (previous && priority[previous.evidence] >= priority[evidence]) return;
     accesses.set(key, {
@@ -37,6 +39,20 @@ export function extractResourceAccesses(input = {}) {
       resource_kind: path.posix.basename(normalized) === "SKILL.md" ? "skill" : "file",
       evidence,
       coverage,
+    });
+  }
+
+  // A Skill tool call names the skill instead of a path: keep the bare identifier so
+  // metadata still says which Skill ran. Never resolved against cwd, never checked on disk;
+  // free-text skill args are content and stay out.
+  const skillName = typeof record.skill === "string" ? record.skill : "";
+  if (SKILL_TOOL_NAMES.has(toolName) && SKILL_NAME_RE.test(skillName)) {
+    accesses.set(`read\0${skillName}`, {
+      operation: "read",
+      path: skillName,
+      resource_kind: "skill",
+      evidence: "skill-tool-argument",
+      coverage: "exact",
     });
   }
 

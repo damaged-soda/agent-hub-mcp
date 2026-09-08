@@ -226,6 +226,11 @@ describe("provider conformance fixtures", () => {
       tool_kind: "shell",
       arguments: { command: "git status --short" },
     });
+    expect(events.find((event) => event.data.tool_name === "Skill").data).toMatchObject({
+      tool_kind: "other",
+      resource_accesses: [{ operation: "read", path: "feature-dev:feature-dev",
+        resource_kind: "skill", evidence: "skill-tool-argument", coverage: "exact" }],
+    });
     expect(events.at(-1).data.status).toBe("completed");
   });
 
@@ -304,6 +309,9 @@ describe("provider conformance fixtures", () => {
     expect(serialized).not.toContain("/private/plugin");
     expect(message.data.content_bytes).toBeGreaterThan(0);
     expect(tool.data.argument_bytes).toBeGreaterThan(0);
+    expect(events.find((event) => event.data.tool_name === "Skill").data.resource_accesses)
+      .toEqual([{ operation: "read", path: "feature-dev:feature-dev", resource_kind: "skill",
+        evidence: "skill-tool-argument", coverage: "exact" }]);
     expect(context.data.plugins).toEqual([{ name: "feature-dev", source: "marketplace" }]);
     expect(context.data.mcp_servers).toEqual([{ name: "docs", status: "connected" }]);
     expect(events.at(-1).data.canonical_usage).toMatchObject({

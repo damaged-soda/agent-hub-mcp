@@ -161,4 +161,37 @@ cat child.md`;
       cwd: "/work/session",
     }).map((item) => item.path)).toEqual(["/work/other/local.md"]);
   });
+
+  it("projects a Skill tool argument as a bare skill identifier, never a cwd path", () => {
+    const skillRow = (name) => ({
+      operation: "read", path: name, resource_kind: "skill",
+      evidence: "skill-tool-argument", coverage: "exact",
+    });
+    expect(extractResourceAccesses({
+      tool_name: "Skill",
+      arguments: { skill: "agent-hub", args: "Private free text" },
+      cwd: "/workspace/example",
+    })).toEqual([skillRow("agent-hub")]);
+    expect(extractResourceAccesses({
+      tool_name: "Skill", arguments: { skill: "feature-dev:feature-dev" },
+    })).toEqual([skillRow("feature-dev:feature-dev")]);
+    expect(extractResourceAccesses({
+      tool_name: "Skill", arguments: '{"skill":"agent-hub"}',
+    })).toEqual([skillRow("agent-hub")]);
+    // A colliding lower-priority shell operand never overwrites the skill row.
+    expect(extractResourceAccesses({
+      tool_name: "Skill", arguments: { skill: "agent-hub", cmd: "cat agent-hub" },
+    })).toEqual([skillRow("agent-hub")]);
+  });
+
+  it("rejects Skill names that are missing, non-string, path-like, or malformed", () => {
+    for (const skill of [undefined, "", "   ", 42, ["agent-hub"], { name: "x" },
+      "docs/agent-hub", "..", ".hidden", "-flag", "a b", "a\\b", "x".repeat(129)]) {
+      expect(extractResourceAccesses({ tool_name: "Skill", arguments: { skill } })).toEqual([]);
+    }
+    expect(extractResourceAccesses({ tool_name: "skill", arguments: { skill: "agent-hub" } }))
+      .toEqual([]);
+    expect(extractResourceAccesses({ tool_name: "Read", arguments: { skill: "agent-hub" } }))
+      .toEqual([]);
+  });
 });
