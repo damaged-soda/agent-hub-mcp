@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parse } from "acorn";
 
 const PATH_KEYS = ["file_path", "path", "target_path", "destination", "filename"];
 const PATH_ARRAY_KEYS = ["files", "referenced_image_paths"];
@@ -20,9 +21,7 @@ export function extractResourceAccesses(input = {}) {
   const argumentsValue = input.arguments ?? null;
   const record = argumentObject(argumentsValue);
   const rawInput = typeof argumentsValue === "string" ? argumentsValue : null;
-  const effectiveCwd = typeof record.workdir === "string" && path.posix.isAbsolute(record.workdir)
-    ? record.workdir
-    : input.cwd;
+  const effectiveCwd = commandCwd(record, input.cwd);
   const accesses = new Map();
 
   function add(rawPath, operation, evidence, coverage = "exact", cwd = effectiveCwd) {
@@ -81,15 +80,24 @@ export function extractResourceAccesses(input = {}) {
 
   const commandSources = [];
   for (const key of ["cmd", "command", "code"]) {
-    if (typeof record[key] === "string") commandSources.push(record[key]);
-  }
-  if (rawInput) commandSources.push(...embeddedCommandStrings(rawInput));
-  for (const command of distinct(commandSources)) {
-    for (const valuePath of explicitSkillPaths(command)) {
-      if (!patchPaths.has(valuePath)) add(valuePath, "read", "skill-path-literal", "high-confidence");
+    if (typeof record[key] === "string") {
+      commandSources.push({ command: record[key], cwd: effectiveCwd });
     }
-    for (const valuePath of shellReadPaths(command, effectiveCwd)) {
-      if (!patchPaths.has(valuePath)) add(valuePath, "read", "shell-explicit-operand", "high-confidence");
+  }
+  if (rawInput) commandSources.push(...embeddedCommands(rawInput, input.cwd));
+  for (const { command, cwd } of commandSources) {
+    // An unknown override cannot fall back to the session cwd, including in add().
+    // Shell parsing may still recover an absolute path after a literal `cd /path`.
+    const addCommandPath = (valuePath, evidence, base) => {
+      if (cwd === null && !path.posix.isAbsolute(valuePath)) return;
+      if (!patchPaths.has(valuePath)) add(valuePath, "read", evidence, "high-confidence", base);
+    };
+    for (const valuePath of explicitSkillPaths(command)) {
+      addCommandPath(valuePath, "skill-path-literal", cwd);
+    }
+    for (const valuePath of shellReadPaths(command, cwd)) {
+      // shellReadPaths already resolves each operand against the shell's active cwd.
+      addCommandPath(valuePath, "shell-explicit-operand", null);
     }
   }
 
@@ -302,24 +310,61 @@ function argumentObject(value) {
   }
 }
 
-function embeddedCommandStrings(value) {
-  if (typeof value !== "string") return [];
-  const strings = [];
-  const pattern = /(?:["']?(?:cmd|command)["']?)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
-  for (const match of value.matchAll(pattern)) {
-    const decoded = decodeJsString(match[1]);
-    if (decoded) strings.push(decoded.slice(0, MAX_EMBEDDED_COMMAND_CHARS));
-  }
-  return strings;
+function commandCwd(record, fallback) {
+  if (record.workdir == null) return fallback;
+  return typeof record.workdir === "string" && path.posix.isAbsolute(record.workdir) &&
+    isLiteralFileOperand(record.workdir) ? record.workdir : null;
 }
 
-function decodeJsString(value) {
-  if (value.startsWith('"')) {
-    try { return JSON.parse(value); } catch { return null; }
+function embeddedCommands(value, cwd) {
+  if (typeof value !== "string" || value.length > MAX_EMBEDDED_COMMAND_CHARS) return [];
+  let tree;
+  try {
+    tree = parse(value, { ecmaVersion: "latest", sourceType: "module", allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true });
+  } catch {
+    return [];
   }
-  const body = value.slice(1, -1);
-  return body.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t")
-    .replace(/\\(['`\\])/g, "$1");
+  const commands = [];
+  const pending = [tree];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    const callee = node.type === "CallExpression" ? node.callee : null;
+    if (callee?.type === "MemberExpression" && !callee.computed &&
+        callee.object.type === "Identifier" && callee.object.name === "tools" &&
+        callee.property.name === "exec_command") {
+      const argument = node.arguments.length === 1 ? node.arguments[0] : null;
+      const properties = argument?.type === "ObjectExpression" ? argument.properties : null;
+      // Spreads, computed keys and accessors can replace cmd/workdir. Do not guess.
+      if (properties?.every((property) => property.type === "Property" &&
+          !property.computed && !property.method && property.kind === "init")) {
+        const fields = new Map(properties.map((property) => [
+          property.key.name ?? property.key.value, property.value,
+        ]));
+        const command = literalJsString(fields.get("cmd"));
+        const directory = fields.get("workdir");
+        const inheritsCwd = !directory || (directory.type === "Literal" && directory.value === null);
+        const workdir = literalJsString(directory);
+        const effectiveCwd = inheritsCwd ? cwd :
+          workdir === null ? null : commandCwd({ workdir }, cwd);
+        if (command !== null) commands.push({ command, cwd: effectiveCwd });
+      }
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) pending.push(item);
+      } else if (child?.type) pending.push(child);
+    }
+  }
+  return commands;
+}
+
+function literalJsString(node) {
+  if (node?.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0].value.cooked;
+  }
+  return null;
 }
 
 function shellTokens(value) {

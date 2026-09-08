@@ -287,14 +287,14 @@ describe("native transcript projections", () => {
       } },
       { type: "response_item", timestamp: "2026-08-26T10:00:01Z", payload: {
         type: "custom_tool_call", call_id: "call-read", name: "exec",
-        input: String.raw`const r = await tools.exec_command({"cmd":"sed -n '1,40p' docs/guide.md","workdir":"/workspace/example"});`,
+        input: String.raw`const r = await tools.exec_command({"cmd":"sed -n '1,40p' docs/guide.md","workdir":"/workspace/other"});`,
       } },
     ];
     const events = projectNativeTranscript("codex", records);
     const call = events.find((event) => event.kind === "tool-call");
     expect(call.data.resource_accesses).toEqual([{
       operation: "read",
-      path: "/workspace/example/docs/guide.md",
+      path: "/workspace/other/docs/guide.md",
       resource_kind: "file",
       evidence: "shell-explicit-operand",
       coverage: "high-confidence",
