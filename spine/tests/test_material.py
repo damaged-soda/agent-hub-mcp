@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -35,9 +36,12 @@ def load_rig():
 
 
 def build(out):
-    """经正式 build 脚本暂存一份包目录。"""
-    subprocess.run([str(MATERIAL / "build"), str(out)], check=True,
-                   capture_output=True, text=True, timeout=300)
+    """经正式 build 脚本暂存一份包目录；失败时把 npm 的输出带进断言。"""
+    result = subprocess.run([str(MATERIAL / "build"), str(out)],
+                            capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise AssertionError("build failed (rc=%d):\n%s%s"
+                             % (result.returncode, result.stdout, result.stderr))
     return Path(out)
 
 
@@ -134,6 +138,69 @@ class BuildTest(unittest.TestCase):
             self.assertTrue((base / "one" / name).is_file(), name)
         self.assertFalse((base / "one" / "node_modules" / "vitest").exists(),
                          "dev dependencies leaked into the package")
+
+    def test_build_refuses_inputs_and_foreign_dirs(self):
+        """输出目录只能是自己建的：仓根、src 之内、包住仓的目录、别人的非空目录都拒绝。"""
+        base = Path(tempfile.mkdtemp(prefix="spine-as-guard-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        repo = MATERIAL.parent
+        foreign = base / "foreign"
+        foreign.mkdir()
+        (foreign / "keep.txt").write_text("x")
+        for target in (repo, repo / "src", repo / "src" / "stage", repo.parent, foreign):
+            result = subprocess.run([str(MATERIAL / "build"), str(target)],
+                                    capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(result.returncode, 0, target)
+            self.assertIn("refusing", result.stderr, target)
+        self.assertTrue((repo / "src" / "session-cli.js").is_file())
+        self.assertTrue((foreign / "keep.txt").is_file())
+        # 自己建的目录带标记，可以反复重建
+        out = build(base / "stage")
+        self.assertTrue((out / ".spine-stage").is_file())
+        build(out)
+
+
+class RealNodeSmokeTest(unittest.TestCase):
+    """用 spine 运行时的真实 node 从包目录起 server：生产依赖齐全、入口可达。"""
+
+    def test_packaged_server_answers_healthz(self):
+        runtime = Path(os.environ.get("SPINE_RUNTIME",
+                                      Path.home() / ".spine" / "runtime"))
+        node = runtime / "node" / "bin" / "node"
+        self.assertTrue(node.is_file(), "spine runtime without node at %s" % node)
+        base = Path(tempfile.mkdtemp(prefix="spine-as-smoke-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        stage = build(base / "stage")
+        home = base / "home"  # 不读宿主的 provider 会话库
+        home.mkdir()
+        port = free_port()
+        proc = subprocess.Popen(
+            [str(node), "src/session-cli.js", "serve", "--host", "127.0.0.1",
+             "--port", str(port), "--base-path", "/agent-session"],
+            cwd=stage, env={"PATH": os.environ["PATH"], "HOME": str(home)},
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, text=True)
+        try:
+            status = None
+            deadline = time.monotonic() + 15
+            while status is None and time.monotonic() < deadline and proc.poll() is None:
+                try:
+                    with urllib.request.urlopen(
+                            "http://127.0.0.1:%d/agent-session/healthz" % port,
+                            timeout=1) as response:
+                        status = response.status
+                except Exception:
+                    time.sleep(0.2)
+            detail = proc.stderr.read() if proc.poll() is not None else "no answer"
+            self.assertEqual(status, 200, detail)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            proc.stderr.close()
 
 
 class ServeArgvTest(unittest.TestCase):
