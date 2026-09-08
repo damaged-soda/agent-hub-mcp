@@ -78,12 +78,8 @@ headers, explicit `SKILL.md` literals, and bounded adapters for literal operands
 Known `sh/bash/zsh/dash/ksh -c` launchers are unwrapped with bounded depth before applying the same
 literal-operand rules. Variables, globs, directory-wide searches, and indirect process I/O remain
 unknown rather than being guessed.
-Codex `functions.exec` wrappers are parsed statically (up to 262,144 source characters): each
-literal `tools.exec_command({...})` binds its command to that call's absolute `workdir`,
-or inherits the session cwd when the override is absent or null. Dynamic or relative
-directory overrides leave relative accesses unknown; absolute operands remain extractable.
-Spreads, computed keys, accessors, nonliteral commands, and invalid or oversized wrapper
-source are conservatively skipped. No JavaScript or shell is executed to resolve them.
+Codex wrappers are statically parsed (up to 262,144 source characters); each literal
+`tools.exec_command({...})` uses its own `workdir`. Unknown directories are never guessed.
 A `Skill` tool call whose structured `skill` argument is a bare identifier
 (`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, no path separators) yields one `read` row with
 `resource_kind: "skill"`, `evidence: "skill-tool-argument"`, `coverage: "exact"`; its `path` is

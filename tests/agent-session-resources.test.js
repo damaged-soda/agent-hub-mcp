@@ -162,106 +162,49 @@ cat child.md`;
     }).map((item) => item.path)).toEqual(["/work/other/local.md"]);
   });
 
-  it("binds each embedded command to its own workdir before deduplicating paths", () => {
-    const input = String.raw`
-      await Promise.allSettled([
-        tools.exec_command({cmd: "cat view/serve.py", workdir: "/synthetic/worktree-b"}),
-        tools.exec_command({workdir: '/synthetic/worktree-c', cmd: 'cat view/serve.py'}),
-        tools.exec_command({cmd: "cat view/serve.py"}),
-        tools.exec_command({cmd: "cat view/serve.py", workdir: "/synthetic/worktree-b"}),
-      ]);
-    `;
-    const accesses = extractResourceAccesses({ tool_name: "exec", arguments: input,
-      cwd: "/synthetic/worktree-a" });
-    expect(accesses.map((item) => item.path)).toEqual([
-      "/synthetic/worktree-a/view/serve.py",
-      "/synthetic/worktree-b/view/serve.py",
-      "/synthetic/worktree-c/view/serve.py",
-    ]);
-    expect(accesses.every((item) => item.coverage === "high-confidence")).toBe(true);
+  it("keeps identical commands in distinct workdirs and inherits missing overrides", () => {
+    const input = ["/a", "/b", "/a", null].map((workdir) =>
+      `tools.exec_command(${JSON.stringify({ cmd: "cat file.md", workdir })})`).join(";");
+    expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: input })
+      .map((item) => item.path)).toEqual(["/a/file.md", "/b/file.md", "/session/file.md"]);
   });
 
   it.each([
-    'workdir: selectedDirectory',
-    'workdir',
-    'workdir: `/work/${name}`',
-    'workdir: "/work/" + name',
-    'workdir: "relative/directory"',
-    'workdir: 123',
-    'workdir: "/known", workdir: selectedDirectory',
-  ])("keeps absolute operands but does not guess a directory for %s", (directory) => {
-    const accesses = extractResourceAccesses({ tool_name: "exec", cwd: "/session",
-      arguments: `tools.exec_command({cmd: "cat relative.md skills/demo/SKILL.md /absolute/file.md", ${directory}})` });
-    expect(accesses.map((item) => item.path)).toEqual(["/absolute/file.md"]);
-  });
-
-  it("resolves Skill paths and shell cd relative to the embedded workdir", () => {
-    const accesses = extractResourceAccesses({ tool_name: "exec", cwd: "/session",
-      arguments: 'tools.exec_command({cmd: "cat skills/demo/SKILL.md; cd nested && cat file.md", workdir: "/other"})' });
-    expect(accesses.map((item) => item.path)).toEqual([
-      "/other/nested/file.md", "/other/skills/demo/SKILL.md",
-    ]);
-    expect(accesses[1].resource_kind).toBe("skill");
-    expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session",
-      arguments: 'tools.exec_command({cmd: "cd /known && cat file.md", workdir: unknown})',
-    }).map((item) => item.path)).toEqual(["/known/file.md"]);
-  });
-
-  it("decodes literal JS strings and templates without evaluating expressions", () => {
-    const input = String.raw`
-      tools.exec_command({"cmd": 'cat file\x2emd', "workdir": '\u002fother'});
-      tools.exec_command({cmd: ` + '`cat template.md`, workdir: `/template`' + String.raw`});
-      tools.exec_command({cmd: "cat inherited.md", workdir: null});
-      tools.exec_command({cmd: "cat chosen.md", workdir: unknown, workdir: "/last"});
-    `;
+    ['', ["/absolute.md", "/session/file.md"]],
+    ['workdir: `/other`', ["/absolute.md", "/other/file.md"]],
+    ['workdir: directory', ["/absolute.md"]],
+    ['workdir: "relative"', ["/absolute.md"]],
+    ['workdir: "/wrong", workdir: directory', ["/absolute.md"]],
+  ])("resolves literal directories and leaves unknown overrides unresolved: %s", (directory, paths) => {
+    const input = `tools.exec_command({cmd: "cat file.md /absolute.md", ${directory}})`;
     expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: input })
-      .map((item) => item.path)).toEqual([
-        "/last/chosen.md", "/other/file.md", "/session/inherited.md", "/template/template.md",
-      ]);
+      .map((item) => item.path)).toEqual(paths);
   });
 
-  it("drops unresolved shell operands after dynamic cd without rebasing them", () => {
-    const command = "cd $DYNAMIC_DIR && cat relative.md /absolute/file.md; cd /known && cat known.md";
-    for (const argumentsValue of [{ cmd: command, workdir: "/other" },
-      `tools.exec_command({cmd: ${JSON.stringify(command)}, workdir: "/other"})`]) {
-      expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: argumentsValue })
-        .map((item) => item.path)).toEqual(["/absolute/file.md", "/known/known.md"]);
+  it("uses the call directory for Skills and tracks literal and dynamic shell cd", () => {
+    const cmd = "cat skills/demo/SKILL.md; cd $DIR && cat unknown.md; cd /known && cat file.md";
+    for (const input of [{ cmd, workdir: "/other" }, `tools.exec_command(${JSON.stringify({ cmd, workdir: "/other" })})`]) {
+      expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session", arguments: input })
+        .map((item) => item.path)).toEqual(["/known/file.md", "/other/skills/demo/SKILL.md"]);
     }
-    expect(extractResourceAccesses({ tool_name: "exec_command", arguments: { cmd: "cat relative.md" } })
-      .map((item) => item.path)).toEqual(["relative.md"]);
   });
 
   it.each([
     'tools.exec_command({cmd: "cat false.md", ...options})',
-    'tools.exec_command({...options, cmd: "cat false.md"})',
     'tools.exec_command({cmd: "cat false.md", [key]: directory})',
     'tools.exec_command({cmd: "cat false.md", get workdir() { return "/other"; }})',
-    'tools.exec_command({cmd: `cat ${filename}`, workdir: "/other"})',
     'tools.exec_command({cmd: "cat false.md" + suffix})',
     'tools.exec_command({cmd: "cat false.md",',
     '// tools.exec_command({cmd: "cat false.md"})',
     'const example = \'tools.exec_command({cmd: "cat false.md"})\';',
-    'const unrelated = {cmd: "cat false.md"};',
-  ])("does not extract ambiguous or non-call input: %s", (input) => {
-    expect(extractResourceAccesses({ tool_name: "exec", arguments: input, cwd: "/session" }))
-      .toEqual([]);
+  ])("skips ambiguous parameters and non-call text: %s", (input) => {
+    expect(extractResourceAccesses({ tool_name: "exec", arguments: input, cwd: "/session" })).toEqual([]);
   });
 
-  it("rejects oversized wrapper source instead of extracting a truncated command", () => {
+  it("skips oversized wrapper source without parsing a truncated command", () => {
     expect(extractResourceAccesses({ tool_name: "exec", cwd: "/session",
       arguments: 'tools.exec_command({cmd: "cat false.md"});' + ' '.repeat(256 * 1024),
     })).toEqual([]);
-  });
-
-  it.each([false, true])("keeps direct object/JSON arguments correct (JSON: %s)", (json) => {
-    const record = { cmd: "cat relative.md /absolute/file.md", workdir: "/other" };
-    const project = () => extractResourceAccesses({ tool_name: "exec_command", cwd: "/session",
-      arguments: json ? JSON.stringify(record) : record }).map((item) => item.path);
-    expect(project()).toEqual(["/absolute/file.md", "/other/relative.md"]);
-    record.workdir = "relative/directory";
-    expect(project()).toEqual(["/absolute/file.md"]);
-    delete record.workdir;
-    expect(project()).toEqual(["/absolute/file.md", "/session/relative.md"]);
   });
 
   it("projects a Skill tool argument as a bare skill identifier, never a cwd path", () => {

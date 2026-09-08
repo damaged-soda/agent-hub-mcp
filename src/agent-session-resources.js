@@ -21,7 +21,7 @@ export function extractResourceAccesses(input = {}) {
   const argumentsValue = input.arguments ?? null;
   const record = argumentObject(argumentsValue);
   const rawInput = typeof argumentsValue === "string" ? argumentsValue : null;
-  const effectiveCwd = commandCwd(record, input.cwd);
+  const effectiveCwd = commandCwd(record.workdir, input.cwd);
   const accesses = new Map();
 
   function add(rawPath, operation, evidence, coverage = "exact", cwd = effectiveCwd) {
@@ -86,13 +86,9 @@ export function extractResourceAccesses(input = {}) {
   }
   if (rawInput) commandSources.push(...embeddedCommands(rawInput, input.cwd));
   for (const { command, cwd } of commandSources) {
-    // An unknown override cannot fall back to the session cwd, including in add().
-    // Shell parsing may still recover an absolute path after a literal `cd /path`.
     const addCommandPath = (valuePath, evidence, base) => {
-      // With an initial cwd, a still-relative shell operand signals a lost directory
-      // (e.g. dynamic cd). Keep legacy relative output only when no cwd was supplied.
-      const unresolvedShellPath = base === null && cwd !== undefined;
-      if ((cwd === null || unresolvedShellPath) && !path.posix.isAbsolute(valuePath)) return;
+      // Unknown workdir/dynamic cd must not regain the session cwd in add().
+      if (base === null && cwd !== undefined && !path.posix.isAbsolute(valuePath)) return;
       if (!patchPaths.has(valuePath)) add(valuePath, "read", evidence, "high-confidence", base);
     };
     for (const valuePath of explicitSkillPaths(command)) {
@@ -313,18 +309,17 @@ function argumentObject(value) {
   }
 }
 
-function commandCwd(record, fallback) {
-  if (record.workdir == null) return fallback;
-  return typeof record.workdir === "string" && path.posix.isAbsolute(record.workdir) &&
-    isLiteralFileOperand(record.workdir) ? record.workdir : null;
+function commandCwd(workdir, fallback) {
+  if (workdir == null) return fallback;
+  return typeof workdir === "string" && path.posix.isAbsolute(workdir) &&
+    isLiteralFileOperand(workdir) ? workdir : null;
 }
 
 function embeddedCommands(value, cwd) {
   if (typeof value !== "string" || value.length > MAX_EMBEDDED_COMMAND_CHARS) return [];
   let tree;
   try {
-    tree = parse(value, { ecmaVersion: "latest", sourceType: "module", allowAwaitOutsideFunction: true,
-      allowReturnOutsideFunction: true });
+    tree = parse(value, { ecmaVersion: "latest", sourceType: "module", allowReturnOutsideFunction: true });
   } catch {
     return [];
   }
@@ -349,7 +344,7 @@ function embeddedCommands(value, cwd) {
         const inheritsCwd = !directory || (directory.type === "Literal" && directory.value === null);
         const workdir = literalJsString(directory);
         const effectiveCwd = inheritsCwd ? cwd :
-          workdir === null ? null : commandCwd({ workdir }, cwd);
+          workdir === null ? null : commandCwd(workdir, cwd);
         if (command !== null) commands.push({ command, cwd: effectiveCwd });
       }
     }
