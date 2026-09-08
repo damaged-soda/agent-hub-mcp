@@ -4,3 +4,4 @@ coverage/
 __pycache__/
 *.pyc
 spine/stage/
+spine/.spine-build.*/

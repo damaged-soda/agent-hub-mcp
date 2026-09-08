@@ -3,7 +3,8 @@
 `serve` 程序 exec 成包内的 `node src/session-cli.js serve`（回环 8088），由 personal
 域的 spine 骨架看护（唯一保活者）。包由 [`build`](build) 暂存：本检出的 `src`、
 `package.json`、`package-lock.json`、按 lockfile 装的生产依赖，加 `serve.py` 与
-`material.json`。包摘要覆盖 Agent Hub 的真实代码：升级 = 合 PR → build → publish，
+`material.json`，在旁边的临时目录建好后整目录换到位，失败不碰既有产物。包摘要覆盖
+Agent Hub 的真实代码：升级 = 合 PR → build → publish，
 节点按摘要变化停旧起新；同一检出重复 build 得到同一摘要，publish 幂等。node 来自
 spine 钉版本的运行时（Node 24），build 也用它自带的 npm 解析依赖。
 `npm run install:local` 只服务 `agenthub` / `agent-session` 两个 CLI，不再是 server 的

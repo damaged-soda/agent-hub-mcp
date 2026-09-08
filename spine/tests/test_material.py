@@ -139,25 +139,57 @@ class BuildTest(unittest.TestCase):
         self.assertFalse((base / "one" / "node_modules" / "vitest").exists(),
                          "dev dependencies leaked into the package")
 
+    def fixture_repo(self, base):
+        """一次性最小仓：真实 build 脚本 + 假的构建输入。守卫若回归，删到的只是它。"""
+        repo = base / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "session-cli.js").write_text("// fixture\n")
+        (repo / "package.json").write_text('{"dependencies": {"left-pad": "1.0.0"}}')
+        (repo / "package-lock.json").write_text("{}")  # 与 package.json 不同步：npm ci 必败
+        (repo / "spine").mkdir()
+        for name in ("build", "serve.py", "material.json"):
+            shutil.copy(MATERIAL / name, repo / "spine" / name)
+        return repo
+
     def test_build_refuses_inputs_and_foreign_dirs(self):
         """输出目录只能是自己建的：仓根、src 之内、包住仓的目录、别人的非空目录都拒绝。"""
-        base = Path(tempfile.mkdtemp(prefix="spine-as-guard-"))
+        base = Path(tempfile.mkdtemp(prefix="spine-as-guard-")).resolve()
         self.addCleanup(shutil.rmtree, base, True)
-        repo = MATERIAL.parent
+        repo = self.fixture_repo(base)
         foreign = base / "foreign"
         foreign.mkdir()
         (foreign / "keep.txt").write_text("x")
-        for target in (repo, repo / "src", repo / "src" / "stage", repo.parent, foreign):
-            result = subprocess.run([str(MATERIAL / "build"), str(target)],
+        weird = base / "weird"  # 唯一条目的名字只有换行：按文本判空会误判为空
+        weird.mkdir()
+        (weird / "\n").write_text("x")
+        for target in (repo, repo / "src", repo / "src" / "stage", base, foreign, weird):
+            result = subprocess.run([str(repo / "spine" / "build"), str(target)],
                                     capture_output=True, text=True, timeout=60)
             self.assertNotEqual(result.returncode, 0, target)
             self.assertIn("refusing", result.stderr, target)
         self.assertTrue((repo / "src" / "session-cli.js").is_file())
         self.assertTrue((foreign / "keep.txt").is_file())
+        self.assertTrue((weird / "\n").is_file())
         # 自己建的目录带标记，可以反复重建
         out = build(base / "stage")
         self.assertTrue((out / ".spine-stage").is_file())
         build(out)
+
+    def test_failed_build_keeps_previous_product(self):
+        """失败只清自己的临时目录：既有产物原样保留，也不留半成品。"""
+        base = Path(tempfile.mkdtemp(prefix="spine-as-fail-")).resolve()
+        self.addCleanup(shutil.rmtree, base, True)
+        stage = build(base / "stage")
+        self.assertTrue((stage / "node_modules" / "zod").is_dir())
+        repo = self.fixture_repo(base)
+        result = subprocess.run([str(repo / "spine" / "build"), str(stage)],
+                                capture_output=True, text=True, timeout=120)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((stage / "node_modules" / "zod").is_dir(),
+                        "failed build destroyed the previous product")
+        self.assertTrue((stage / "serve.py").is_file())
+        self.assertEqual([p.name for p in base.iterdir()
+                          if p.name.startswith(".spine-build.")], [])
 
 
 class RealNodeSmokeTest(unittest.TestCase):

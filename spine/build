@@ -20,10 +20,17 @@ esac
 case "$REPO/" in
 "$OUT/"*) echo "refusing: $OUT contains the repository" >&2; exit 1 ;;
 esac
-if [ -e "$OUT" ] && [ ! -f "$OUT/$MARK" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then
+
+replaceable() {
+    # 不存在、带本脚本的标记、或确认为空才可替换；判空不看文件名文本，查不了一律不删。
+    [ ! -e "$1" ] && return 0
+    [ -f "$1/$MARK" ] && return 0
+    [ -z "$(find "$1" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null || echo x)" ]
+}
+replaceable "$OUT" || {
     echo "refusing to replace $OUT: not created by spine/build (no $MARK marker)" >&2
     exit 1
-fi
+}
 # 用 spine 钉版本运行时自带的 node 与 npm 解析依赖：与节点上跑它的是同一个 node。
 [ -x "$RUNTIME/node/bin/node" ] || {
     echo "node not found at $RUNTIME/node/bin: run spine-bootstrap first" >&2
@@ -31,12 +38,18 @@ fi
 }
 export PATH="$RUNTIME/node/bin:$PATH"
 
+# 先在旁边的临时目录里建好，成功后整目录换到位：失败只清自己的临时目录，不碰既有产物。
+WORK="$(mktemp -d "$(dirname "$OUT")/.spine-build.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+: >"$WORK/$MARK"
+cp -R "$REPO/src" "$WORK/src"
+cp "$REPO/package.json" "$REPO/package-lock.json" "$WORK/"
+cp "$HERE/serve.py" "$HERE/material.json" "$WORK/"
+(cd "$WORK" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error)
+replaceable "$OUT" || {
+    echo "refusing to replace $OUT: changed during the build" >&2
+    exit 1
+}
 rm -rf "$OUT"
-mkdir -p "$OUT"
-: >"$OUT/$MARK"  # 先打标记：中途失败留下的半成品，下次也能被替换
-trap 'code=$?; [ "$code" -eq 0 ] || rm -rf "$OUT"; exit "$code"' EXIT
-cp -R "$REPO/src" "$OUT/src"
-cp "$REPO/package.json" "$REPO/package-lock.json" "$OUT/"
-cp "$HERE/serve.py" "$HERE/material.json" "$OUT/"
-(cd "$OUT" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error)
+mv "$WORK" "$OUT"
 echo "$OUT"
