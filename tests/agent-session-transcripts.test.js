@@ -24,6 +24,13 @@ describe("native transcript projections", () => {
     expect(events.find((event) => event.kind === "tool-call").data.arguments).toEqual({
       command: "git status --short",
     });
+    expect(events.find((event) => event.data.tool_name === "Skill").data).toMatchObject({
+      tool_kind: "other",
+      resource_accesses: [{
+        operation: "read", path: "agent-hub", resource_kind: "skill",
+        evidence: "skill-tool-argument", coverage: "exact",
+      }],
+    });
     const modelCalls = events.filter((event) => event.kind === "model-call");
     expect(modelCalls).toHaveLength(1);
     expect(modelCalls[0].data).toMatchObject({
@@ -241,6 +248,15 @@ describe("native transcript projections", () => {
         expect(serialized).not.toContain(secret);
       }
       expect(events.some((event) => event.data.content_bytes > 0)).toBe(true);
+      if (provider === "claude") {
+        // The Skill identifier survives metadata; its free-text args do not.
+        const skill = events.find((event) => event.data.tool_name === "Skill");
+        expect(skill.data.argument_bytes).toBeGreaterThan(0);
+        expect(skill.data.resource_accesses).toEqual([{
+          operation: "read", path: "agent-hub", resource_kind: "skill",
+          evidence: "skill-tool-argument", coverage: "exact",
+        }]);
+      }
       if (["codex", "kimi"].includes(provider)) {
         expect(events.some((event) => event.data.system_instruction_bytes > 0)).toBe(true);
       }

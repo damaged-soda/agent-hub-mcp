@@ -11,6 +11,8 @@ const MAX_EMBEDDED_COMMAND_CHARS = 256 * 1024;
 const MAX_SHELL_WRAPPER_DEPTH = 4;
 const SHELL_WRAPPERS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const HEREDOC_START_RE = /(^|[^<])<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g;
+const SKILL_TOOL_NAMES = new Set(["Skill"]);
+const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function extractResourceAccesses(input = {}) {
   const toolName = String(input.tool_name ?? "");
@@ -38,6 +40,22 @@ export function extractResourceAccesses(input = {}) {
       evidence,
       coverage,
     });
+  }
+
+  // A Skill tool call names the skill instead of a path: keep the bare identifier so
+  // metadata still says which Skill ran. Never resolved against cwd, never checked on disk.
+  // Skill input carries no paths, so the generic adapters are skipped entirely: free-text
+  // skill args are content and must not be scanned even when arguments arrive as a string.
+  if (SKILL_TOOL_NAMES.has(toolName)) {
+    const skillName = typeof record.skill === "string" ? record.skill : "";
+    if (!SKILL_NAME_RE.test(skillName)) return [];
+    return [{
+      operation: "read",
+      path: skillName,
+      resource_kind: "skill",
+      evidence: "skill-tool-argument",
+      coverage: "exact",
+    }];
   }
 
   const toolKind = classifyTool(toolName);

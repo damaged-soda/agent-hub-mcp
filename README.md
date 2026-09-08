@@ -84,6 +84,8 @@ references fail instead of drifting to a similar event.
 Metadata omits command and message bodies but may retain normalized resource paths derived from
 explicit file operands so the exact read/write step remains auditable. Shell writes are not inferred;
 only structured write tools and patch headers currently produce write accesses.
+Skill invocations surface as a `skill` resource row carrying the bare skill identifier, so metadata
+keeps which Skill ran without its arguments.
 
 `serve` hosts the same read-only JSON contract for Cockpit. It rejects non-loopback binds, foreign
 browser origins, and mutating HTTP methods; every response is `no-store`. Its root returns a

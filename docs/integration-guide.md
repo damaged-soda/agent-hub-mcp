@@ -101,6 +101,8 @@ must not substitute a similar event.
 Metadata can retain normalized resource paths extracted from explicit file operands while omitting
 the command body itself. Current shell adapters cover reads only; write accesses come from structured
 write tools and patch headers.
+A `Skill` tool call is projected as a `skill` resource row whose path is the bare skill identifier,
+so the invoked Skill stays visible in metadata while its arguments do not.
 
 The loopback server exposes the same contract:
 
