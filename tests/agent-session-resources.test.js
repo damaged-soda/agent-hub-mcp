@@ -178,10 +178,20 @@ cat child.md`;
     expect(extractResourceAccesses({
       tool_name: "Skill", arguments: '{"skill":"agent-hub"}',
     })).toEqual([skillRow("agent-hub")]);
-    // A colliding lower-priority shell operand never overwrites the skill row.
+    // Skill input is never scanned by the generic adapters: neither object nor string-JSON
+    // free text can smuggle a path row into metadata.
     expect(extractResourceAccesses({
       tool_name: "Skill", arguments: { skill: "agent-hub", cmd: "cat agent-hub" },
     })).toEqual([skillRow("agent-hub")]);
+    expect(extractResourceAccesses({
+      tool_name: "Skill",
+      arguments: JSON.stringify({ skill: "agent-hub", args: "cmd: 'cat /Private/SKILL.md'" }),
+      cwd: "/workspace/example",
+    })).toEqual([skillRow("agent-hub")]);
+    expect(extractResourceAccesses({
+      tool_name: "Skill",
+      arguments: JSON.stringify({ skill: "docs/agent-hub", args: "cat /Private/SKILL.md" }),
+    })).toEqual([]);
   });
 
   it("rejects Skill names that are missing, non-string, path-like, or malformed", () => {

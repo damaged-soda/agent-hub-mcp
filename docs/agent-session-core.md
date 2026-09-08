@@ -81,7 +81,8 @@ unknown rather than being guessed.
 A `Skill` tool call whose structured `skill` argument is a bare identifier
 (`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, no path separators) yields one `read` row with
 `resource_kind: "skill"`, `evidence: "skill-tool-argument"`, `coverage: "exact"`; its `path` is
-the identifier verbatim, never resolved against cwd, and free-text skill `args` are not projected.
+the identifier verbatim, never resolved against cwd. Skill input is not passed through the generic
+adapters at all, so free-text skill `args` are never scanned or projected, even as string JSON.
 The access stays on the exact tool-call sequence so an inspector can audit which step touched it.
 Shell write commands are intentionally outside this bounded adapter set; writes are currently
 reported only from structured write tools and patch headers.

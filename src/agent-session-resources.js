@@ -30,7 +30,7 @@ export function extractResourceAccesses(input = {}) {
     if (!normalized || !["read", "write"].includes(operation)) return;
     const key = `${operation}\0${normalized}`;
     const priority = { "shell-explicit-operand": 1, "skill-path-literal": 2,
-      "patch-header": 3, "structured-path": 4, "skill-tool-argument": 5 };
+      "patch-header": 3, "structured-path": 4 };
     const previous = accesses.get(key);
     if (previous && priority[previous.evidence] >= priority[evidence]) return;
     accesses.set(key, {
@@ -43,17 +43,19 @@ export function extractResourceAccesses(input = {}) {
   }
 
   // A Skill tool call names the skill instead of a path: keep the bare identifier so
-  // metadata still says which Skill ran. Never resolved against cwd, never checked on disk;
-  // free-text skill args are content and stay out.
-  const skillName = typeof record.skill === "string" ? record.skill : "";
-  if (SKILL_TOOL_NAMES.has(toolName) && SKILL_NAME_RE.test(skillName)) {
-    accesses.set(`read\0${skillName}`, {
+  // metadata still says which Skill ran. Never resolved against cwd, never checked on disk.
+  // Skill input carries no paths, so the generic adapters are skipped entirely: free-text
+  // skill args are content and must not be scanned even when arguments arrive as a string.
+  if (SKILL_TOOL_NAMES.has(toolName)) {
+    const skillName = typeof record.skill === "string" ? record.skill : "";
+    if (!SKILL_NAME_RE.test(skillName)) return [];
+    return [{
       operation: "read",
       path: skillName,
       resource_kind: "skill",
       evidence: "skill-tool-argument",
       coverage: "exact",
-    });
+    }];
   }
 
   const toolKind = classifyTool(toolName);
