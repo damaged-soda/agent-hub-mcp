@@ -165,25 +165,21 @@ Adapter 出现在列表中的条件：
 探测并行执行，按 `cwd` + adapter 配置与 credential-source identity 缓存 30 秒；单个命令限时分别为 Claude Code 30 秒、
 Codex/Kimi Code 5 秒、OpenCode 10 秒，输出限 8 MiB。模型探测失败只会得到空 `models` 和
 `model_discovery.status: "unavailable"`，并保留有界的
-命令诊断；不会改变 adapter 自身的 `available` 状态。Review 路由把这种状态与“成功探测但
-model 不存在”分开报告。
+命令诊断；不会改变 adapter 自身的 `available` 状态。Review 路由不消费这份目录。
 
 ### review routing
 
-PR review 是 CLI-only 的窄控制面，不扩张普通 dispatch 或 MCP schema：
+Review 路由以配置为权威：
 
-- `review status` 把内建默认值、用户覆盖和 Agent 模型目录投影成一份状态。目录按
-  `cwd` 与非 secret 配置身份写入跨进程私有缓存：5 分钟内直接读取；5 分钟至 24 小时
-  立即返回旧值并启动 detached 单飞刷新；无缓存或超过 24 小时时才同步发现。刷新失败
-  保留上一份目录并退避 60 秒，状态通过顶层 `catalog_cache` 显式报告；
-- `review set` 只接受三个已知 requester、不同于 requester 的在线 reviewer，以及 reviewer
-  当前 live 目录内的精确 model ID；写回采用进程锁和原子 rename，并用现场目录回填缓存；
-- `review dispatch` 在每次派发前重新读取配置、静态校验 reviewer ID，并把保存的 model
-  直接交给普通 `dispatch_to_agent`；它不读取或刷新模型目录。目标 CLI 是 model 是否仍可用的
-  权威，失效时由已创建 run 的终态错误报告，且不做 fallback。响应仍是普通 run ref；
-  reviewer 进程继承 review depth 标记，任何嵌套 review dispatch 在派发前直接拒绝。
-  Runner 注入 `AGENT_HUB_REVIEW_DEPTH`，但 `command.json` 只记录
-  环境键名，不记录环境值。
+- `review status` 每次读内建默认值与用户覆盖，只返回 requester、reviewer、model、source。
+  不探测 CLI 或模型、不解析 model 别名、不创建或刷新缓存；
+- `review set` 静态校验已知 requester/reviewer、禁止自评、model 非空；以锁和原子 rename
+  保存覆盖，不要求 reviewer 在线或 model 出现在目录内；
+- `review dispatch` 重新读配置，把保存的 reviewer/model 直接交给普通派发路径。
+  实际运行失败由目标 CLI 和 run 终态报告，不做 fallback。review depth 标记仍禁止嵌套派发；
+- 已发布的 session 服务复用 `reviewStatus()`，在 base path 下提供只读
+  `/api/review-routing`，沿用 Host/Origin 校验与 no-store，HTTP 不提供写配置或派发入口。
+  额度页可直接消费这份包内实现，无需执行宿主 npm link 的 CLI。
 
 内建默认值保持原有交叉审习惯：Codex → Claude Code `default`；Claude Code、Kimi Code →
 Codex `gpt-5.6-sol`。OpenCode 可作为 reviewer，但在机器级指令发现链接入前不作为
@@ -192,15 +188,7 @@ requester。文件只存与默认值不同的覆盖，位于
 `AGENT_HUB_REVIEW_CONFIG` 覆盖）；它是用户偏好状态，不是 run artifact。配置损坏会在派发前
 fail loud；reviewer CLI 不可用时普通 dispatch 同步报错，model 被目标 CLI 拒绝时由已创建 run
 的终态错误报告。两者都不自动回退，也不允许 self-review。
-Cockpit 只能经
-`review status/set` 消费这份单写者状态。
-
-目录缓存默认位于 `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog/`，可由
-`AGENT_HUB_CATALOG_CACHE_DIR` 覆盖。cache key 是 `cwd` 与已知配置、credential-source
-identity（Claude 包含 setup-token 文件路径，不含 token 内容）的 SHA-256；
-文件只保存已经对外返回的规范化 catalog、观测时间和有界刷新错误，不保存 key 原文、环境值、
-credential 或 provider 原始响应。目录为 `0700`、文件为 `0600`，更新使用原子 rename。
-缓存只改变 status 的等待语义；set 的 live 校验承担路由写入边界，dispatch 不依赖 catalog。
+消费方经 `review status` 或只读 HTTP 接口读取有效配置；写入统一由 `review set` 完成。
 
 ### repository eval
 

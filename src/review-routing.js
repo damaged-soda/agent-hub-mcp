@@ -2,12 +2,8 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { allAdapters } from "./adapters.js";
-import {
-  loadAgentCatalogForStatus,
-  storeAgentCatalog,
-} from "./agent-catalog-cache.js";
 import { atomicWriteJson, nowIso, readJsonIfExists, withStateLock } from "./fs-store.js";
-import { dispatchToAgent, listAgents } from "./runs.js";
+import { dispatchToAgent } from "./runs.js";
 import {
   assertReviewDispatchAllowed,
   createReviewContext,
@@ -36,12 +32,9 @@ export function getReviewConfigPath(env = process.env) {
 
 export async function reviewStatus(input = {}, internal = {}) {
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
-  const cwd = await resolveReviewCwd(input.cwd);
-  const [catalogResult, config] = await Promise.all([
-    statusCatalog(cwd, internal),
-    readReviewConfig(configPath),
-  ]);
-  return buildStatus(config, catalogResult.catalog, catalogResult.cache);
+  // Kept as a config query: no provider processes, model discovery, or cache writes.
+  const config = await readReviewConfig(configPath);
+  return buildStatus(config);
 }
 
 export async function setReviewRoute(input, internal = {}) {
@@ -55,9 +48,6 @@ export async function setReviewRoute(input, internal = {}) {
   }
 
   const configPath = internal.configPath ?? getReviewConfigPath(internal.env);
-  const cwd = await resolveReviewCwd(input.cwd);
-  const catalog = await liveCatalog(cwd, internal);
-  assertAvailableRoute(reviewer, model, catalog);
 
   let updated;
   await fsp.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
@@ -78,8 +68,7 @@ export async function setReviewRoute(input, internal = {}) {
     updated = { routes };
   });
 
-  await cacheLiveCatalog(cwd, catalog, internal);
-  return buildStatus(updated, catalog);
+  return buildStatus(updated);
 }
 
 export async function dispatchReview(input, internal = {}) {
@@ -92,8 +81,7 @@ export async function dispatchReview(input, internal = {}) {
   const config = await readReviewConfig(configPath);
   const route = effectiveRoute(requester, config);
   assertReviewer(route.reviewer);
-  // Catalog validation belongs to review set/status. Dispatch uses the saved
-  // route directly so one review does not probe every installed provider.
+  // The target CLI validates the saved model when the review actually runs.
   const reviewContext = createReviewContext({
     requester,
     reviewer: route.reviewer,
@@ -143,50 +131,16 @@ async function readReviewConfig(configPath) {
   return { routes };
 }
 
-function buildStatus(config, catalog, cache = null) {
-  const available = new Map((catalog.agents ?? []).map((agent) => [agent.agent_id, agent]));
-  const unavailable = new Map(
-    (catalog.unavailable_agents ?? []).map((agent) => [agent.agent_id, agent]),
-  );
-  const routes = Object.keys(DEFAULT_REVIEW_ROUTES).map((requester) => {
-    const route = effectiveRoute(requester, config);
-    const agent = available.get(route.reviewer);
-    const unavailableAgent = unavailable.get(route.reviewer);
-    const model = agent?.models?.find((item) => item.id === route.model);
-    const discoveryUnavailable = agent?.model_discovery?.status === "unavailable";
-    const error = !agent
-      ? "reviewer-unavailable"
-      : discoveryUnavailable
-        ? "model-discovery-unavailable"
-        : !model
-          ? "model-unavailable"
-          : null;
-    const status = {
-      requester,
-      reviewer: route.reviewer,
-      model: route.model,
-      resolved_model: model?.resolved_id ?? model?.id ?? null,
-      source: config.routes[requester] ? "override" : "default",
-      available: error === null,
-      error,
-    };
-    if (discoveryUnavailable && typeof agent.model_discovery.reason === "string") {
-      status.error_detail = agent.model_discovery.reason;
-    } else if (!agent && typeof unavailableAgent?.unavailable_reason === "string" &&
-        unavailableAgent.unavailable_reason.trim()) {
-      status.error_detail = unavailableAgent.unavailable_reason.trim();
-    }
-    return status;
-  });
-  const status = {
+function buildStatus(config) {
+  return {
     api_version: REVIEW_CONFIG_VERSION,
     kind: REVIEW_CONFIG_KIND,
-    routes,
-    agents: catalog.agents ?? [],
-    unavailable_agents: catalog.unavailable_agents ?? [],
+    routes: Object.keys(DEFAULT_REVIEW_ROUTES).map((requester) => ({
+      requester,
+      ...effectiveRoute(requester, config),
+      source: config.routes[requester] ? "override" : "default",
+    })),
   };
-  if (cache) status.catalog_cache = cache;
-  return status;
 }
 
 async function resolveReviewCwd(value) {
@@ -194,59 +148,8 @@ async function resolveReviewCwd(value) {
   return (await validateRequestPaths(value)).cwd;
 }
 
-function liveCatalog(cwd, internal) {
-  if (internal.listAgents) return internal.listAgents({ cwd });
-  return listAgents({ cwd }, { env: internal.env ?? process.env });
-}
-
-async function statusCatalog(cwd, internal) {
-  if (internal.catalogCache === false) {
-    return { catalog: await liveCatalog(cwd, internal), cache: null };
-  }
-  return loadAgentCatalogForStatus({
-    ...(internal.catalogCache ?? {}),
-    cwd,
-    env: internal.env ?? process.env,
-    load_catalog: () => liveCatalog(cwd, internal),
-  });
-}
-
-async function cacheLiveCatalog(cwd, catalog, internal) {
-  if (internal.catalogCache === false) return;
-  await storeAgentCatalog(cwd, catalog, {
-    ...(internal.catalogCache ?? {}),
-    env: internal.env ?? process.env,
-  }).catch(() => undefined);
-}
-
 function effectiveRoute(requester, config) {
   return config.routes[requester] ?? DEFAULT_REVIEW_ROUTES[requester];
-}
-
-function assertAvailableRoute(reviewer, model, catalog) {
-  const agent = (catalog.agents ?? []).find((item) => item.agent_id === reviewer);
-  if (!agent) {
-    const unavailableAgent = (catalog.unavailable_agents ?? [])
-      .find((item) => item.agent_id === reviewer);
-    const reason = unavailableAgent?.unavailable_reason;
-    throw reviewRouteError(
-      `reviewer is unavailable: ${reviewer}${
-        typeof reason === "string" && reason.trim() ? `: ${reason.trim()}` : ""
-      }`,
-    );
-  }
-  if (agent.model_discovery?.status === "unavailable") {
-    const reason = agent.model_discovery.reason;
-    throw reviewRouteError(
-      `model discovery is unavailable for ${reviewer}${
-        typeof reason === "string" && reason.trim() ? `: ${reason.trim()}` : ""
-      }`,
-      "review_model_discovery_failed",
-    );
-  }
-  if (!(agent.models ?? []).some((item) => item.id === model)) {
-    throw reviewRouteError(`model is unavailable for ${reviewer}: ${model}`);
-  }
 }
 
 function assertRequester(requester, errorFactory = reviewRouteError) {

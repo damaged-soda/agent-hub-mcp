@@ -1,4 +1,5 @@
 import http from "node:http";
+import { reviewStatus } from "./review-routing.js";
 import { discoverNativeSessions, inspectNativeSession } from "./agent-session-sources.js";
 
 const LOOPBACK_BIND_HOSTS = new Set(["127.0.0.1", "::1"]);
@@ -67,9 +68,10 @@ async function handleRequest(request, response, options) {
       data: {
         read_only: true,
         profiles: ["metadata", "inspect"],
-        features: ["session-search"],
+        features: ["session-search", "review-routing"],
         endpoints: {
           health: "healthz",
+          review: "api/review-routing",
           sessions: "api/sessions",
           inspect: "api/sessions/{provider}/{native_session_id}",
         },
@@ -83,6 +85,14 @@ async function handleRequest(request, response, options) {
       kind: "agent-session-health",
       status: "ok",
     }, request.method);
+    return;
+  }
+  if (routedPath.pathname === "/api/review-routing") {
+    const document = await reviewStatus({}, {
+      configPath: options.reviewConfigPath,
+      env: options.env,
+    });
+    sendJson(response, 200, document, request.method);
     return;
   }
   if (routedPath.pathname === "/api/sessions") {
@@ -235,6 +245,7 @@ function routePath(pathname, basePath) {
 }
 
 function statusForError(error) {
+  if (error?.code === "review_config_invalid") return 500;
   const message = String(error?.message ?? "");
   if (/^Unknown .*native_session_id/.test(message)) return 404;
   if (/^Ambiguous .*native_session_id/.test(message)) return 409;

@@ -201,7 +201,7 @@ class BuildTest(unittest.TestCase):
 class RealNodeSmokeTest(unittest.TestCase):
     """用 spine 运行时的真实 node 从包目录起 server：生产依赖齐全、入口可达。"""
 
-    def test_packaged_server_answers_healthz(self):
+    def test_packaged_server_answers_health_and_review_config_without_providers(self):
         runtime = Path(os.environ.get("SPINE_RUNTIME",
                                       Path.home() / ".spine" / "runtime"))
         node = runtime / "node" / "bin" / "node"
@@ -215,7 +215,7 @@ class RealNodeSmokeTest(unittest.TestCase):
         proc = subprocess.Popen(
             [str(node), "src/session-cli.js", "serve", "--host", "127.0.0.1",
              "--port", str(port), "--base-path", "/agent-session"],
-            cwd=stage, env={"PATH": os.environ["PATH"], "HOME": str(home)},
+            cwd=stage, env={"PATH": "/missing", "HOME": str(home)},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE, text=True)
         try:
@@ -231,6 +231,20 @@ class RealNodeSmokeTest(unittest.TestCase):
                     time.sleep(0.2)
             detail = proc.stderr.read() if proc.poll() is not None else "no answer"
             self.assertEqual(status, 200, detail)
+            url = "http://127.0.0.1:%d/agent-session/api/review-routing" % port
+            with urllib.request.urlopen(url, timeout=2) as response:
+                document = json.load(response)
+            self.assertEqual(document["routes"][0], {
+                "requester": "codex", "reviewer": "claude-code",
+                "model": "default", "source": "default"})
+            config = home / ".config" / "agent-hub-mcp" / "review-routing.json"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"version": 1, "routes": {
+                "codex": {"reviewer": "opencode", "model": "future/model"}}}))
+            with urllib.request.urlopen(url, timeout=2) as response:
+                document = json.load(response)
+            self.assertEqual(document["routes"][0]["model"], "future/model")
+            self.assertFalse((home / ".cache").exists())
         finally:
             proc.terminate()
             try:

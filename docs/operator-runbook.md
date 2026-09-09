@@ -115,23 +115,21 @@ The routed review workflow is a policy step after the current process creates or
 explicit user-requested Agent Hub operation. Reviewing an existing PR or diff is direct work. When a
 user names another agent, use ordinary dispatch to that agent; the selected agent reviews directly.
 
-Each initiating CLI has one effective reviewer/model pair. Inspect all routes and the effective model
-catalog from a representative workspace:
+Each initiating CLI has one effective reviewer/model pair. Read the configured routes:
 
 ```sh
-agenthub review status --cwd "$PWD"
+agenthub review status
 ```
 
-The first status call discovers every local CLI. Later processes read the private catalog cache:
-entries are fresh for five minutes, then served stale for up to 24 hours while one detached worker
-refreshes them. Inspect the top-level `catalog_cache` field to distinguish `fresh`, `stale`,
-`refreshed`, and `uncached`; a failed refresh keeps the last catalog and waits 60 seconds before
-retrying. `review set` bypasses the display cache and validates live. `review dispatch` reads the
-saved route without consulting or refreshing the catalog. Treat `routes[].available` as a status
-snapshot rather than a dispatch gate.
+Status reads the routing file plus defaults without provider discovery, availability checks,
+model alias resolution, or cache state. `review set` checks configuration structure and rejects
+self-review, but accepts a model without probing its provider. Execution failures are reported by
+the actual review run. `--cwd` is still accepted by status/set for CLI compatibility.
 
-Change a route through the validated CLI; Cockpit's Agent page calls this same command rather than
-writing the file directly:
+The packaged service exposes the same read-only result at `/agent-session/api/review-routing`
+under the production base path. Changes to the configuration appear on the next request.
+
+Change a route through the CLI:
 
 ```sh
 agenthub review set --requester codex --reviewer kimi-code \
@@ -185,7 +183,6 @@ endpoint, and API remain below the same canonical prefix.
 | `AGENT_HUB_CWD_ALLOWLIST` | unset | Path-delimited allowlist for request `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | unset | Comma-separated extra environment variable names to forward to the agent CLI. |
 | `AGENT_HUB_REVIEW_CONFIG` | `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json` | Moves the versioned requester → reviewer/model override file. |
-| `AGENT_HUB_CATALOG_CACHE_DIR` | `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog` | Moves the private cross-process catalog cache used by `review status`. |
 | `AGENT_HUB_CLAUDE_MODEL` | unset | Default `--model` for Claude runs when the request omits `metadata.claude.model`. Without it, the Claude CLI falls back to the locally saved default model. |
 | `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` | unset | Absolute owner-only (`0600`) `claude setup-token` file used only by Claude model discovery and run processes. |
 | `AGENT_HUB_CODEX_MODEL` | unset | Default `--model` for Codex runs when the request omits `metadata.codex.model`. |
@@ -416,10 +413,8 @@ The dispatch command exits after its detached Discussion worker accepts the requ
 | `codex` appears under `unavailable_agents` | `codex --version` failed. | Fix PATH or Codex CLI installation. |
 | `kimi-code` appears under `unavailable_agents` | `kimi --version` failed. | Fix PATH or Kimi Code CLI installation. |
 | `opencode` appears under `unavailable_agents` | Version probing failed or `opencode run` lacks one of the required non-interactive flags. | Install/update OpenCode and run `opencode auth login`. |
-| `review status` reports `model-discovery-unavailable` | A provider CLI could not produce its model catalog, often because its state/log directory is outside the caller's sandbox. | Inspect `error_detail`, then run `agenthub agents --cwd "$PWD"` in a context where the provider's state directory is writable. |
 | A Claude run fails with `claude_oauth_token_file_invalid`, or model discovery reports the corresponding file error | The configured setup-token path is missing, noncanonical/symlinked, not a current-user regular file with exact mode `0600`, or does not contain exactly one valid token line. | Repair or atomically replace the file. Configured token-file mode is fail-closed; unset `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` only when deliberately returning to normal Claude login. |
 | `nested_review_forbidden` | The current process is already an Agent Hub-selected reviewer. | Review directly in the current session; do not invoke `agenthub review dispatch` again. |
-| `review status` reports stale `catalog_cache` repeatedly | Detached model discovery is failing or the cache root is not writable. | Inspect `catalog_cache.last_refresh_error`, run `agenthub agents --cwd "$PWD"`, and verify `AGENT_HUB_CATALOG_CACHE_DIR` permissions. |
 | `eval runtime status` reports `missing` / `runtime_capsule_missing` | The selected catalog runtime has not been installed in this capsule store. | Run `agenthub eval runtime install --runtime ID`, then inspect status again; do not point Eval at a host Python or widen its read profile. |
 | Eval rejects a capsule digest, platform, architecture, or contained path | The installed object or custom manifest is damaged, incompatible, or violates capsule containment. | Reinstall the pinned catalog ID or repair the separately provisioned custom capsule; `eval run` deliberately has no host fallback. |
 | `eval toolchain status` reports `missing`, `unsupported`, or `invalid` | The absolute generic manifest is absent, malformed, for another platform/architecture, outside containment rules, or disagrees with its tree digest. | Repair or re-provision the evaluator-owned capsule. Do not point schema v3 at a host executable or add host directories to the profile. |

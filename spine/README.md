@@ -7,6 +7,9 @@
 Agent Hub 的真实代码：升级 = 合 PR → build → publish，
 节点按摘要变化停旧起新；同一检出重复 build 得到同一摘要，publish 幂等。node 来自
 spine 钉版本的运行时（Node 24），build 也用它自带的 npm 解析依赖。
+包内服务另提供只读路由配置接口 `GET /agent-session/api/review-routing`，复用
+`reviewStatus()` 读取配置与默认值，不探测 reviewer 或模型，也不写缓存；额度页直接
+调用此接口，源码与依赖随本包一起发布。
 `npm run install:local` 只服务 `agenthub` / `agent-session` 两个 CLI，不再是 server 的
 部署路径。本目录是本仓里唯一的 personal 域部署内容，不进 npm 包（package.json
 files 白名单外）。
