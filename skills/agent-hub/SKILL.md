@@ -1,6 +1,6 @@
 ---
 name: agent-hub
-description: Dispatch explicitly selected local Claude Code, Codex, Kimi Code, and OpenCode CLI processes through the daemon-free agenthub CLI; run Agent Hub evaluations, session inspection, reference resolution, routed review, and durable Discussion workflows. Use only when the user explicitly requests Agent Hub, selects a named external coding-agent CLI or provider, invokes an Agent Hub-specific workflow, or the post-PR policy requires routed cross-review. Agent Hub is a supplementary cross-provider perspective, not a replacement for a host's native subagent or multi-agent mechanism; generic subagent, delegation, parallelization, and unspecified-agent requests are outside this Skill's scope.
+description: Use agenthub for explicitly selected external coding agents, evaluations, session inspection, routed review, and Discussions. Inspect Review routing, discover candidate agents/models on demand, and switch a user-selected reviewer/model（查看评审路由、探测可选模型、切换 Review 配置）. Use when the user requests Agent Hub, selects a named external coding-agent CLI/provider, asks to manage Review routing, or post-PR policy requires cross-review. Supplementary cross-provider work only; generic subagent, delegation, parallelization, and unspecified-agent requests belong to the host's native agents.
 ---
 
 # Agent Hub
@@ -17,6 +17,9 @@ login and Keychain context; do not start the HTTP daemon for ordinary collaborat
 
 Read only the reference for the requested workflow:
 
+- Inspecting Review routes, probing candidate agents/models, or changing a reviewer/model
+  (for example, “看看 review 能选哪些模型” or “把 Codex 的评审切到 …”):
+  [references/review-routing.md](references/review-routing.md). These requests do not dispatch a review.
 - A post-PR machine-routed cross-review, immediately after this process successfully creates or
   updates a PR, or an explicit request to use Agent Hub's configured review route:
   [references/reviews.md](references/reviews.md).

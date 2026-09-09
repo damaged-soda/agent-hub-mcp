@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Hub CLI"
-  short_description: "Supplementary cross-provider agent dispatch"
-  default_prompt: "Use $agent-hub for an explicitly requested dispatch, or for the machine-routed cross-review immediately after creating or updating a PR."
+  short_description: "Agent dispatch and on-demand Review route management"
+  default_prompt: "Use $agent-hub to inspect Review routing, discover candidate models, or apply my selected route; dispatch a review only when requested or required by post-PR policy."
