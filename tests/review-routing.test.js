@@ -13,28 +13,11 @@ import { REVIEW_DEPTH_ENV } from "../src/review-context.js";
 describe("review routing", () => {
   let root;
   let configPath;
-  let catalog;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "agenthub-review-test-"));
     configPath = path.join(root, "config", "review-routing.json");
-    catalog = {
-      agents: [
-        { agent_id: "codex", title: "Codex", models: [
-          { id: "gpt-5.6-sol", display_name: "GPT-5.6-Sol" },
-        ] },
-        { agent_id: "claude-code", title: "Claude Code", models: [
-          { id: "default", display_name: "Default", resolved_id: "claude-opus-5[1m]" },
-        ] },
-        { agent_id: "kimi-code", title: "Kimi Code", models: [
-          { id: "kimi-code/k3", display_name: "K3", resolved_id: "k3" },
-        ] },
-        { agent_id: "opencode", title: "OpenCode", models: [
-          { id: "opencode/big-pickle", display_name: "Big Pickle" },
-        ] },
-      ],
-      unavailable_agents: [],
-    };
+
   });
 
   afterEach(async () => {
@@ -48,21 +31,18 @@ describe("review routing", () => {
       requester: "codex",
       reviewer: "claude-code",
       model: "default",
-      resolved_model: "claude-opus-5[1m]",
       source: "default",
-      available: true,
-      error: null,
     });
     await expect(fsp.access(configPath)).rejects.toThrow();
   });
 
-  it("persists a validated Kimi K3 override and dispatches through it", async () => {
+  it("persists a Kimi K3 override and dispatches through it", async () => {
     const updated = await setReviewRoute({
       requester: "codex", reviewer: "kimi-code", model: "kimi-code/k3", cwd: root,
     }, internal());
     expect(updated.routes.find((route) => route.requester === "codex")).toMatchObject({
-      reviewer: "kimi-code", model: "kimi-code/k3", resolved_model: "k3",
-      source: "override", available: true,
+      reviewer: "kimi-code", model: "kimi-code/k3",
+      source: "override",
     });
     const dispatch = vi.fn(async () => ({ status: "accepted" }));
     await expect(dispatchReview({
@@ -129,12 +109,12 @@ describe("review routing", () => {
     expect(JSON.parse(await fsp.readFile(configPath, "utf8")).routes).toEqual({});
   });
 
-  it("rejects self review, unknown models, and malformed persisted state", async () => {
+  it("rejects self review, empty models, unknown agents, and malformed persisted state", async () => {
     await expect(setReviewRoute({
       requester: "codex", reviewer: "codex", model: "gpt-5.6-sol", cwd: root,
     }, internal())).rejects.toMatchObject({ code: "review_route_invalid" });
     await expect(setReviewRoute({
-      requester: "codex", reviewer: "kimi-code", model: "missing", cwd: root,
+      requester: "codex", reviewer: "kimi-code", model: "", cwd: root,
     }, internal())).rejects.toMatchObject({ code: "review_route_invalid" });
     await expect(setReviewRoute({
       requester: "codex", reviewer: "missing-agent", model: "model", cwd: root,
@@ -162,59 +142,8 @@ describe("review routing", () => {
     });
   });
 
-  it("reports an unavailable reviewer in status without gating dispatch", async () => {
-    await setReviewRoute({
-      requester: "codex", reviewer: "kimi-code", model: "kimi-code/k3", cwd: root,
-    }, internal());
-    const unavailableAgent = catalog.agents.find((agent) => agent.agent_id === "kimi-code");
-    catalog.agents = catalog.agents.filter((agent) => agent.agent_id !== "kimi-code");
-    catalog.unavailable_agents = [{
-      ...unavailableAgent,
-      available: false,
-      unavailable_reason: "Timed out after 5000ms",
-    }];
-    const route = (await reviewStatus({}, internal())).routes.find(
-      (item) => item.requester === "codex",
-    );
-    expect(route).toMatchObject({
-      available: false,
-      error: "reviewer-unavailable",
-      error_detail: "Timed out after 5000ms",
-    });
-    const dispatch = vi.fn(async () => ({ status: "accepted" }));
-    await expect(dispatchReview({
-      requester: "codex", cwd: root, prompt: "Review",
-    }, internal({ dispatch }))).resolves.toEqual({ status: "accepted" });
-    expect(dispatch.mock.calls[0][0]).toMatchObject({
-      agent_id: "kimi-code",
-      metadata: { model: "kimi-code/k3" },
-    });
-  });
-
-  it("reports model discovery failure in status without gating dispatch", async () => {
-    catalog.agents.find((agent) => agent.agent_id === "codex").model_discovery = {
-      status: "unavailable",
-      source: "codex-models",
-      reason: "sandbox denied provider state directory",
-    };
-    const status = await reviewStatus({}, internal());
-    expect(status.routes.find((route) => route.requester === "claude-code")).toMatchObject({
-      available: false,
-      error: "model-discovery-unavailable",
-      error_detail: "sandbox denied provider state directory",
-    });
-    const dispatch = vi.fn(async () => ({ status: "accepted" }));
-    await expect(dispatchReview({
-      requester: "claude-code", cwd: root, prompt: "Review",
-    }, internal({ dispatch }))).resolves.toEqual({ status: "accepted" });
-    expect(dispatch.mock.calls[0][0]).toMatchObject({
-      agent_id: "codex",
-      metadata: { model: "gpt-5.6-sol" },
-    });
-  });
-
   it("rejects nested review dispatch before reading the route", async () => {
-    const listAgents = vi.fn(async () => catalog);
+    const listAgents = vi.fn(() => { throw new Error("must not probe providers"); });
     await expect(dispatchReview({
       requester: "codex", cwd: root, prompt: "Review",
     }, internal({
@@ -224,41 +153,21 @@ describe("review routing", () => {
     expect(listAgents).not.toHaveBeenCalled();
   });
 
-  it("caches status, keeps set live, and leaves the cache untouched during dispatch", async () => {
-    const listAgents = vi.fn(async () => catalog);
-    const cacheRoot = path.join(root, "catalog-cache");
-    const cachedInternal = {
-      configPath,
-      listAgents,
-      env: { HOME: root, PATH: "/test/bin" },
-      catalogCache: {
-        cache_root: cacheRoot,
-        now: () => Date.parse("2026-08-29T00:00:00.000Z"),
-      },
-    };
-
-    const first = await reviewStatus({ cwd: root }, cachedInternal);
-    const second = await reviewStatus({ cwd: root }, cachedInternal);
-    expect(first.catalog_cache.status).toBe("refreshed");
-    expect(second.catalog_cache.status).toBe("fresh");
-    expect(listAgents).toHaveBeenCalledTimes(1);
-
+  it("reads and sets effective routes with no provider probes or cache state", async () => {
+    const listAgents = vi.fn(() => { throw new Error("must not probe providers"); });
+    const options = internal({ listAgents, env: { HOME: root, PATH: "/missing" } });
+    const initial = await reviewStatus({ cwd: root }, options);
+    expect(Object.keys(initial).sort()).toEqual(["api_version", "kind", "routes"]);
+    expect(await fsp.readdir(root)).toEqual([]);
     await setReviewRoute({
-      requester: "codex", reviewer: "kimi-code", model: "kimi-code/k3", cwd: root,
-    }, cachedInternal);
-    expect(listAgents).toHaveBeenCalledTimes(2);
-
-    const dispatch = vi.fn(async () => ({ status: "accepted" }));
-    await dispatchReview({ requester: "codex", cwd: root, prompt: "Review" }, {
-      ...cachedInternal,
-      dispatch,
+      requester: "codex", reviewer: "opencode", model: "future/model", cwd: root,
+    }, options);
+    const status = await reviewStatus({ cwd: root }, options);
+    expect(status.routes.find((route) => route.requester === "codex")).toEqual({
+      requester: "codex", reviewer: "opencode", model: "future/model", source: "override",
     });
-    expect(listAgents).toHaveBeenCalledTimes(2);
-
-    const afterDispatch = await reviewStatus({ cwd: root }, cachedInternal);
-    expect(afterDispatch.agents).toHaveLength(catalog.agents.length);
-    expect(afterDispatch.catalog_cache.observed_at).toBe(second.catalog_cache.observed_at);
-    expect(listAgents).toHaveBeenCalledTimes(2);
+    expect(await fsp.readdir(root)).toEqual(["config"]);
+    expect(listAgents).not.toHaveBeenCalled();
   });
 
   it("resolves the config path from the explicit override or XDG config home", () => {
@@ -272,8 +181,6 @@ describe("review routing", () => {
     return {
       configPath,
       env: { [REVIEW_DEPTH_ENV]: "" },
-      listAgents: async () => catalog,
-      catalogCache: false,
       ...extra,
     };
   }

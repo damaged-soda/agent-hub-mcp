@@ -34,7 +34,6 @@ describe("agenthub CLI", () => {
       AGENT_HUB_RUN_DIR: path.join(root, "runs"),
       AGENT_HUB_DISCUSSION_DIR: path.join(root, "discussions"),
       AGENT_HUB_REVIEW_CONFIG: path.join(root, "config", "review-routing.json"),
-      AGENT_HUB_CATALOG_CACHE_DIR: path.join(root, "catalog-cache"),
       AGENT_HUB_CWD_ALLOWLIST: workspace,
       CLAUDE_CONFIG_DIR: claudeConfigDir,
     };
@@ -616,6 +615,19 @@ try {
     expect(JSON.stringify(records)).not.toContain("stack");
   });
 
+  it("reads and sets review config without any installed provider commands", async () => {
+    const configEnv = { ...env, HOME: root, XDG_CACHE_HOME: path.join(root, "cache"), PATH: "/missing" };
+    const initial = await runCli(["review", "status", "--cwd", workspace], configEnv);
+    expect(Object.keys(initial).sort()).toEqual(["api_version", "kind", "routes"]);
+    const updated = await runCli([
+      "review", "set", "--requester", "codex", "--reviewer", "opencode",
+      "--model", "future/model", "--cwd", workspace,
+    ], configEnv);
+    expect(updated.routes[0].model).toBe("future/model");
+    expect((await runCli(["review", "status"], configEnv)).routes).toEqual(updated.routes);
+    await expect(fsp.access(path.join(root, "cache"))).rejects.toThrow();
+  });
+
   it("persists a review route and dispatches it without model discovery", async () => {
     const invocationLog = path.join(root, "claude-invocations.jsonl");
     const reviewEnv = {
@@ -647,6 +659,8 @@ try {
       model: "haiku",
       source: "override",
     });
+
+    await expect(fsp.access(invocationLog)).rejects.toThrow();
 
     await fsp.writeFile(invocationLog, "");
     const accepted = await runCli([

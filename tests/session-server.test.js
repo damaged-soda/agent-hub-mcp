@@ -70,9 +70,10 @@ describe("agent session server", () => {
       data: {
         read_only: true,
         profiles: ["metadata", "inspect"],
-        features: ["session-search"],
+        features: ["session-search", "review-routing"],
         endpoints: {
           health: "healthz",
+          review: "api/review-routing",
           sessions: "api/sessions",
           inspect: "api/sessions/{provider}/{native_session_id}",
         },
@@ -87,6 +88,39 @@ describe("agent session server", () => {
     expect((await fetch(`${baseUrl}/index.html`)).status).toBe(404);
     expect((await fetch(`${baseUrl}/app.js`)).status).toBe(404);
     expect((await fetch(`${baseUrl}/style.css`)).status).toBe(404);
+  });
+
+  it("serves current review config without providers and never accepts writes", async () => {
+    const reviewConfigPath = path.join(tempRoot, "review-routing.json");
+    const reviewServer = await startSessionServer({
+      host: "127.0.0.1", port: 0, roots, reviewConfigPath,
+      env: { HOME: tempRoot, PATH: "/missing" }, basePath: "/agent-session",
+    });
+    const url = `http://127.0.0.1:${reviewServer.address().port}/agent-session/api/review-routing`;
+    try {
+      const initial = await fetch(url);
+      expect(initial.headers.get("cache-control")).toBe("no-store");
+      expect((await initial.json()).routes[0]).toEqual({
+        requester: "codex", reviewer: "claude-code", model: "default", source: "default",
+      });
+      await fsp.writeFile(reviewConfigPath, JSON.stringify({ version: 1, routes: {
+        codex: { reviewer: "opencode", model: "future/model" },
+      } }));
+      expect((await (await fetch(url)).json()).routes[0]).toEqual({
+        requester: "codex", reviewer: "opencode", model: "future/model", source: "override",
+      });
+      const head = await fetch(url, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      expect((await fetch(url, { method: "POST" })).status).toBe(405);
+      expect(await requestStatus(url, { Host: "evil.example" })).toBe(403);
+      await fsp.writeFile(reviewConfigPath, "invalid JSON");
+      expect((await fetch(url)).status).toBe(500);
+      expect((await fetch(url.replace("api/review-routing", "healthz"))).status).toBe(200);
+    } finally {
+      await new Promise((resolve) => reviewServer.close(resolve));
+      await fsp.rm(reviewConfigPath, { force: true });
+    }
   });
 
   it("searches the whole native directory behind a bounded page", async () => {

@@ -216,27 +216,28 @@ agenthub review dispatch --requester codex --cwd "$PWD" \
   --prompt "Review the current PR and report actionable findings with severity."
 ```
 
-`review set` accepts only a reviewer and model present in the live `agents` catalog, rejects
-self-review, and atomically stores overrides in
-`${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. With no override, Codex uses
-Claude Code's `default` model alias; inspect `review status` field `resolved_model` for the concrete
-model selected by the current Claude Code catalog. Claude Code and Kimi Code use Codex
-`gpt-5.6-sol`. `review dispatch` reads the configured route and hands its reviewer and model directly
-to the ordinary detached-run path without performing model-catalog discovery. The target CLI is
-authoritative if a saved model has since disappeared: dispatch still returns the ordinary run
-response, and `wait` reports any resulting provider failure. Agent Hub never silently falls back.
+`review status` reads the routing file and merges the built-in defaults. Its JSON contains
+`api_version`, `kind: "agent-review-config"`, and `routes`; each route contains `requester`,
+`reviewer`, the configured `model`, and `source` (`default` or `override`). It performs no CLI
+availability checks, model discovery, or cache refresh, and does not resolve model aliases.
+The former `agents`, `unavailable_agents`, `catalog_cache`, and route availability fields are
+no longer returned. `--cwd` remains accepted for CLI compatibility but does not affect configuration.
+
+`review set` validates known requester/reviewer IDs, rejects self-review and empty model strings,
+and atomically stores overrides in `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`.
+It does not require the reviewer to be installed or the model to appear in a catalog. With no
+override, Codex uses Claude Code's `default` alias; Claude Code and Kimi Code use Codex `gpt-5.6-sol`.
+`review dispatch` passes the saved reviewer/model to the ordinary detached-run path. The target
+CLI reports execution failures; Agent Hub never silently falls back.
 The command wraps the request in the versioned reviewer-control prompt so the selected reviewer
 performs the review directly and does not dispatch another review; the original request remains
 embedded verbatim. This routed command is not a default for a review request merely because a PR,
 diff, or change is mentioned.
 
-`review status` keeps its normalized Agent/model catalog in a private cross-process cache under
-`${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. A catalog is fresh for five minutes;
-for the next 24 hours status returns it immediately and starts one detached refresh. The first
-request and catalogs older than 24 hours still discover synchronously. Refresh failure preserves
-the last catalog and is surfaced in `catalog_cache`. `review set` always uses live discovery;
-`review dispatch` neither reads this display cache nor triggers model discovery. A route's
-`available` field is therefore a status snapshot, not a dispatch gate.
+The packaged service exposes the same config query at `GET /agent-session/api/review-routing`
+with the production base path (or `/api/review-routing` without a base path). It reads the file on
+every request and uses the existing no-store, Host/Origin, and read-only HTTP rules. Quota consumers
+can use this endpoint without executing a global npm-linked CLI or packaging another Agent Hub copy.
 
 Every CLI invocation inherits the caller's login, environment, and macOS Keychain context. The dispatch command exits after creating a detached runner; later `query`, `wait`, and `cancel` commands reopen the same private on-disk state, so no Agent Hub daemon has to remain alive.
 
@@ -364,7 +365,6 @@ The caller chooses the host and complete participant roster before dispatch. The
 | `AGENT_HUB_CWD_ALLOWLIST` | Optional path-delimited allowlist for `cwd` and adapter `add_dirs`. |
 | `AGENT_HUB_FORWARD_ENV` | Comma-separated extra environment variable names forwarded to the agent CLI. |
 | `AGENT_HUB_REVIEW_CONFIG` | Override the review-routing JSON path; defaults to `${XDG_CONFIG_HOME:-~/.config}/agent-hub-mcp/review-routing.json`. |
-| `AGENT_HUB_CATALOG_CACHE_DIR` | Override the private cross-process Agent catalog cache root; defaults to `${XDG_CACHE_HOME:-~/.cache}/agent-hub-mcp/agent-catalog`. |
 | `AGENT_HUB_CLAUDE_MODEL` | Default `--model` for Claude runs when `metadata.claude.model` is not provided; keeps runs independent of the locally saved Claude Code default model. |
 | `AGENT_HUB_CLAUDE_OAUTH_TOKEN_FILE` | Absolute path to an owner-only (`0600`) `claude setup-token` file. Only Claude model discovery and run processes receive the bearer; actual runs inject it after cwd namespace rebinding. |
 | `AGENT_HUB_CODEX_MODEL` | Default `--model` for Codex runs when `metadata.codex.model` is not provided. |
