@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
-"""agent-session 服务质料：spine 是唯一保活者，本程序 exec 成 Agent Hub 的
+"""agent-session 服务质料：spine 是唯一保活者，本程序 exec 成包内的 Agent Hub
 session server。
 
-会话解析与投影的权威是 Agent Hub（meta 域仓 agent-hub-mcp，经 npm run
-install:local 安装到 homebrew PATH）；本目录只持个人域接线——与旧
-cockpit-agent-session 包装脚本同构（纯迁移）：宿主 HOME（provider 原生会话
-库按它定位）、homebrew PATH、回环 8088。消费者：spine-session 页的同源
-转发与 spine-agent 的 collect，均在本机。无对外地址，不自述 endpoints；
-旧驾驶舱域名已退役，缺省不设 public-origin，服务只认回环 Host/Origin。
---nats 收下不用（心跳由骨架代发）。
+包由 spine/build 暂存：本仓 src、package.json、package-lock.json、生产依赖，加本文件
+与 material.json。摘要覆盖 Agent Hub 的真实代码，升级 = 合 PR → build → publish，
+节点按摘要变化停旧起新。node 来自 spine 钉版本的运行时，已在程序 PATH 前置。
+个人域接线：宿主 HOME（provider 原生会话库按它定位）、回环 8088。消费者：
+spine-session 页的同源转发与 spine-agent 的 collect，均在本机。无对外地址，
+不自述 endpoints；旧驾驶舱域名已退役，缺省不设 public-origin，服务只认回环
+Host/Origin。--nats 收下不用（心跳由骨架代发）。
 """
 import argparse
 import os
 import pwd
 import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent  # 安装目录：包内 src 与 node_modules 都在这里
 
 
 def server_argv(args):
     """装配 session server 的 argv：public-origin 仅在装配显式给出时透传。"""
-    argv = ["agent-session", "serve", "--host", args.host, "--port", args.port]
+    argv = ["node", str(HERE / "src" / "session-cli.js"), "serve",
+            "--host", args.host, "--port", args.port]
     if args.public_origin:
         argv += ["--public-origin", args.public_origin]
     argv += ["--base-path", args.base_path]
@@ -39,10 +43,6 @@ def main():
     # 骨架把 HOME 指到质料状态目录；session server 按宿主家目录读各 provider
     # 的原生会话库（~/.claude、~/.codex …）
     os.environ["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
-    # homebrew 追加而非前置：节点 PATH 本来没有它，追加即可解析；
-    # 前置会在测试里压过 PATH 顶替的合成体
-    os.environ["PATH"] = (os.environ.get("PATH", "")
-                          + ":/opt/homebrew/bin:/usr/local/bin")
     argv = server_argv(args)
     os.execvp(argv[0], argv)
 

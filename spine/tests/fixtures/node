@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""合成 agent-session：按真实 wrapper 的调用形态起 HTTP 并落档案。"""
+"""合成 node：顶替 PATH 上的 node，按 session-cli 的调用形态起 HTTP 并落档案。"""
 import json
 import os
 import signal
@@ -9,10 +9,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 argv = sys.argv[1:]
-assert argv[0] == "serve", argv
-options = dict(zip(argv[1::2], argv[2::2]))
+assert argv[1] == "serve", argv
+options = dict(zip(argv[2::2], argv[3::2]))
 record = {"argv": argv, "home": os.environ.get("HOME"),
-          "path": os.environ.get("PATH", "")}
+          "path": os.environ.get("PATH", ""), "cwd": os.getcwd()}
 # 档案落在 stub 自己旁边：HOME 已被 wrapper 还原成宿主家目录，不往那儿写
 Path(__file__).resolve().with_name("record.json").write_text(json.dumps(record))
 
