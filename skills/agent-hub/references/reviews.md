@@ -1,5 +1,8 @@
 # Routed post-PR review
 
+For configuration lookup, model discovery, or switching a saved route, use
+[review-routing.md](review-routing.md); those actions do not dispatch a review.
+
 Use this workflow only in one of these two cases:
 
 1. This process has just successfully created or materially updated a PR and the machine review
@@ -21,8 +24,8 @@ agenthub review dispatch \
 agenthub wait RUN_ID
 ```
 
-Use the current CLI's stable ID as `--requester`: `codex`, `claude-code`, or `kimi-code`. Cockpit may
-change the route between reviews; `review dispatch` reads it at dispatch time and passes the saved
+Use the current CLI's stable ID as `--requester`: `codex`, `claude-code`, or `kimi-code`. Saved routes
+may change between reviews; `review dispatch` reads them at dispatch time and passes the saved
 reviewer/model directly to the ordinary run path without querying the model catalog. If the reviewer
 CLI is unavailable, report the synchronous dispatch error. If that CLI rejects a saved model after
 the run is created, inspect the run's terminal error. Do not choose a fallback. Use
