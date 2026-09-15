@@ -2,6 +2,7 @@
   "schema": 2,
   "material": "agent-session",
   "version": "2",
+  "package": ["src", "package.json", "package-lock.json", "node_modules", "serve.py"],
   "units": [
     {
       "kind": "service",
