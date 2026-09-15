@@ -17,7 +17,7 @@ files 白名单外）。
 - 宿主 HOME 还原（provider 原生会话库按它定位）；PATH 原样沿用骨架给的。
 - `--public-origin` 缺省不设：旧驾驶舱域名已于 2026-09-08 退役，服务只认回环
   Host/Origin（消费者全在本机不受影响）。将来若有可信反代域名，随 publish 用
-  `--program-arg serve=--public-origin --program-arg serve=https://…` 传入，
+  `--unit-arg serve=--public-origin --unit-arg serve=https://…` 传入，
   否则经反代的请求会被 Host/Origin 校验 403。
 - 回环内部服务不自述 endpoints。宿主依赖无必需项，不声明 `requires`：OpenCode
   provider 经 `sqlite3` 命令行读库，缺失时该 provider 局部降级（汇总带 source_errors

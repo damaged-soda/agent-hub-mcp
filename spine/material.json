@@ -1,9 +1,11 @@
 {
-  "schema": 1,
+  "schema": 2,
   "material": "agent-session",
   "version": "2",
-  "programs": [
+  "package": ["src", "package.json", "package-lock.json", "node_modules", "serve.py"],
+  "units": [
     {
+      "kind": "service",
       "name": "serve",
       "role": "host",
       "entry": "serve.py"

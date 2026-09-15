@@ -81,11 +81,11 @@ class AgentSessionStoryTest(unittest.TestCase):
         port = free_port()
         rig.spine_ok(
             "publish", str(self.stage()), "--node", "host=rig",
-            "--program-arg", "serve=--port", "--program-arg", "serve=%d" % port,
-            "--program-arg", "serve=--public-origin",
-            "--program-arg", "serve=http://origin.test")
+            "--unit-arg", "serve=--port", "--unit-arg", "serve=%d" % port,
+            "--unit-arg", "serve=--public-origin",
+            "--unit-arg", "serve=http://origin.test")
         rig.wait(lambda: (rig.statuses()["rig"]["materials"]
-                          .get("agent-session", {}).get("programs", {})
+                          .get("agent-session", {}).get("units", {})
                           .get("serve") or {}).get("state") == "running",
                  message="serve not running")
         record = rig.wait(
